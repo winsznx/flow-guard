@@ -1,0 +1,38 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hexagon outer frame - light green/lemon gradient -->
+  <path
+    d="M16 3L6 7L6 13L16 29L26 13L26 7L16 3Z"
+    stroke="url(#faviconGradient)"
+    strokeWidth="1.2"
+    fill="none"
+  />
+  
+  <!-- Flowing arrow loop - black -->
+  <path
+    d="M16 11 C 13 11, 11 13, 11 16 C 11 19, 13 21, 16 21 C 19 21, 21 19, 21 16 C 21 13, 19 11, 16 11"
+    stroke="#000000"
+    strokeWidth="2.5"
+    fill="none"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  />
+  
+  <!-- Arrow head - black -->
+  <path
+    d="M18.5 13.5 L 16 16 L 13.5 13.5"
+    stroke="#000000"
+    strokeWidth="2.5"
+    fill="none"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  />
+  
+  <defs>
+    <!-- Light green/lemon gradient for hexagon -->
+    <linearGradient id="faviconGradient" x1="6" y1="3" x2="26" y2="29" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#a7f3d0" />
+      <stop offset="50%" stopColor="#d1fae5" />
+      <stop offset="100%" stopColor="#fef3c7" />
+    </linearGradient>
+  </defs>
+</svg>
