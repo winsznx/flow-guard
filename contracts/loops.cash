@@ -1,0 +1,31 @@
+// Loop Module for Recurring Unlocks
+// Implements periodic unlock windows using Layla CHIPs Loops
+
+pragma cashscript ^0.8.0;
+
+library Loop {
+    // Check if it's time to unlock for a given cycle
+    function isUnlockTime(int cycleNumber, int cycleDuration) returns (bool) {
+        // Get current block time
+        int currentTime = tx.time;
+        
+        // Calculate expected unlock time for this cycle
+        int unlockTime = cycleNumber * cycleDuration;
+        
+        // Check if current time >= unlock time
+        return currentTime >= unlockTime;
+    }
+    
+    // Get current cycle number based on time
+    function getCurrentCycle(int cycleDuration) returns (int) {
+        int currentTime = tx.time;
+        return currentTime / cycleDuration;
+    }
+    
+    // Check if cycle has passed
+    function hasCyclePassed(int cycleNumber, int cycleDuration) returns (bool) {
+        int currentCycle = getCurrentCycle(cycleDuration);
+        return currentCycle > cycleNumber;
+    }
+}
+
