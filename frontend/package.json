@@ -10,7 +10,9 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@bitauth/libauth": "^3.0.0",
     "lucide-react": "^0.553.0",
+    "mainnet-js": "^2.7.31",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
@@ -28,6 +30,7 @@
     "eslint-plugin-react-refresh": "^0.4.4",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.0.0",
-    "vite": "^5.0.0"
+    "vite": "^5.0.0",
+    "vite-plugin-node-polyfills": "^0.24.0"
   }
 }
