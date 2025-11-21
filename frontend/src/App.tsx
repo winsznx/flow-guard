@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import { Header } from './components/layout/Header';
 import { Footer } from './components/layout/Footer';
+import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { WalletModal } from './components/ui/WalletModal';
 import { useWallet } from './hooks/useWallet';
@@ -24,14 +25,15 @@ function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/" element={<Home />} />
-          <Route path="/docs" element={<DocsPage />} />
 
-          {/* Protected routes - require wallet connection */}
+          {/* Protected routes with dashboard layout */}
           <Route
             path="/vaults"
             element={
               <ProtectedRoute>
-                <VaultsPage />
+                <DashboardLayout>
+                  <VaultsPage />
+                </DashboardLayout>
               </ProtectedRoute>
             }
           />
@@ -39,7 +41,9 @@ function App() {
             path="/vaults/create"
             element={
               <ProtectedRoute>
-                <CreateVaultPage />
+                <DashboardLayout>
+                  <CreateVaultPage />
+                </DashboardLayout>
               </ProtectedRoute>
             }
           />
@@ -47,7 +51,9 @@ function App() {
             path="/vaults/:id"
             element={
               <ProtectedRoute>
-                <VaultDetailPage />
+                <DashboardLayout>
+                  <VaultDetailPage />
+                </DashboardLayout>
               </ProtectedRoute>
             }
           />
@@ -55,7 +61,9 @@ function App() {
             path="/vaults/:id/proposals/create"
             element={
               <ProtectedRoute>
-                <CreateProposalPage />
+                <DashboardLayout>
+                  <CreateProposalPage />
+                </DashboardLayout>
               </ProtectedRoute>
             }
           />
@@ -63,8 +71,20 @@ function App() {
             path="/proposals"
             element={
               <ProtectedRoute>
-                <ProposalsPage />
+                <DashboardLayout>
+                  <ProposalsPage />
+                </DashboardLayout>
               </ProtectedRoute>
+            }
+          />
+
+          {/* Docs page with dashboard layout */}
+          <Route
+            path="/docs"
+            element={
+              <DashboardLayout>
+                <DocsPage />
+              </DashboardLayout>
             }
           />
         </Routes>
