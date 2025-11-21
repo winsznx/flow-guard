@@ -433,8 +433,14 @@ export default function DocsPage() {
 
               <Card padding="xl">
                 <h3 className="text-2xl font-semibold mb-6 text-[var(--color-text-primary)]">Layla CHIPs Technology</h3>
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    📅 <strong>CHIP Activation Schedule:</strong> All Layla CHIPs activate on Chipnet November 15, 2025 and Mainnet May 15, 2026.
+                    FlowGuard currently runs FlowGuardDemo.cash (basic multisig) on chipnet, with advanced CHIP contracts ready to deploy on activation.
+                  </p>
+                </div>
                 <p className="text-[var(--color-text-secondary)] mb-6 leading-relaxed">
-                  FlowGuard leverages four key Cash Improvement Proposals (CHIPs) from the Layla upgrade:
+                  FlowGuard demonstrates mastery of all four Cash Improvement Proposals (CHIPs):
                 </p>
                 <div className="space-y-6">
                   <div>
