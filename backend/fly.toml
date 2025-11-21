@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for flow-guard on 2025-11-21T00:17:34Z
+# fly.toml app configuration file generated for flow-guard on 2025-11-21T05:43:36Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -9,7 +9,7 @@ primary_region = 'jnb'
 [build]
 
 [http_service]
-  internal_port = 3000
+  internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
