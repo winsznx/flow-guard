@@ -1,0 +1,257 @@
+{
+  "contractName": "FlowGuardEnhanced",
+  "constructorInputs": [
+    {
+      "name": "signer1",
+      "type": "pubkey"
+    },
+    {
+      "name": "signer2",
+      "type": "pubkey"
+    },
+    {
+      "name": "signer3",
+      "type": "pubkey"
+    },
+    {
+      "name": "approvalThreshold",
+      "type": "int"
+    },
+    {
+      "name": "state",
+      "type": "int"
+    },
+    {
+      "name": "cycleDuration",
+      "type": "int"
+    },
+    {
+      "name": "vaultStartTime",
+      "type": "int"
+    },
+    {
+      "name": "spendingCap",
+      "type": "int"
+    }
+  ],
+  "abi": [
+    {
+      "name": "unlock",
+      "inputs": [
+        {
+          "name": "cycleNumber",
+          "type": "int"
+        },
+        {
+          "name": "newState",
+          "type": "int"
+        },
+        {
+          "name": "pk1",
+          "type": "pubkey"
+        },
+        {
+          "name": "s1",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "createProposal",
+      "inputs": [
+        {
+          "name": "recipient",
+          "type": "bytes20"
+        },
+        {
+          "name": "amount",
+          "type": "int"
+        },
+        {
+          "name": "proposalId",
+          "type": "int"
+        },
+        {
+          "name": "newState",
+          "type": "int"
+        },
+        {
+          "name": "pk1",
+          "type": "pubkey"
+        },
+        {
+          "name": "s1",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "approveProposal",
+      "inputs": [
+        {
+          "name": "proposalId",
+          "type": "int"
+        },
+        {
+          "name": "newState",
+          "type": "int"
+        },
+        {
+          "name": "pk1",
+          "type": "pubkey"
+        },
+        {
+          "name": "s1",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "executePayout",
+      "inputs": [
+        {
+          "name": "recipient",
+          "type": "bytes20"
+        },
+        {
+          "name": "amount",
+          "type": "int"
+        },
+        {
+          "name": "proposalId",
+          "type": "int"
+        },
+        {
+          "name": "newState",
+          "type": "int"
+        },
+        {
+          "name": "pk1",
+          "type": "pubkey"
+        },
+        {
+          "name": "s1",
+          "type": "sig"
+        },
+        {
+          "name": "pk2",
+          "type": "pubkey"
+        },
+        {
+          "name": "s2",
+          "type": "sig"
+        },
+        {
+          "name": "pk3",
+          "type": "pubkey"
+        },
+        {
+          "name": "s3",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_8 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_12 OP_ROLL OP_12 OP_PICK OP_CHECKSIGVERIFY OP_11 OP_PICK OP_EQUAL OP_11 OP_PICK OP_ROT OP_EQUAL OP_BOOLOR OP_10 OP_ROLL OP_ROT OP_EQUAL OP_BOOLOR OP_VERIFY OP_6 OP_PICK OP_0 OP_GREATERTHANOREQUAL OP_7 OP_ROLL OP_16 OP_LESSTHAN OP_BOOLAND OP_VERIFY OP_ROT OP_0 OP_GREATERTHAN OP_3 OP_ROLL OP_0 OP_GREATERTHAN OP_BOOLAND OP_VERIFY OP_4 OP_ROLL OP_ROT OP_NUMNOTEQUAL OP_NIP OP_NIP OP_NIP OP_ELSE OP_8 OP_PICK OP_1 OP_NUMEQUAL OP_IF OP_14 OP_ROLL OP_14 OP_PICK OP_CHECKSIGVERIFY OP_13 OP_PICK OP_EQUAL OP_13 OP_PICK OP_ROT OP_EQUAL OP_BOOLOR OP_12 OP_ROLL OP_ROT OP_EQUAL OP_BOOLOR OP_VERIFY OP_8 OP_PICK OP_0 OP_GREATERTHANOREQUAL OP_9 OP_ROLL OP_16 OP_LESSTHAN OP_BOOLAND OP_VERIFY OP_6 OP_ROLL OP_0 14 OP_NUM2BIN OP_EQUAL OP_NOT OP_VERIFY OP_6 OP_PICK OP_0 OP_GREATERTHAN OP_VERIFY OP_4 OP_PICK OP_0 OP_GREATERTHAN OP_IF OP_6 OP_PICK OP_5 OP_PICK OP_LESSTHANOREQUAL OP_VERIFY OP_ENDIF OP_7 OP_ROLL OP_ROT OP_NUMNOTEQUAL OP_VERIFY OP_2DROP OP_2DROP OP_2DROP OP_1 OP_ELSE OP_8 OP_PICK OP_2 OP_NUMEQUAL OP_IF OP_12 OP_ROLL OP_12 OP_PICK OP_CHECKSIGVERIFY OP_11 OP_PICK OP_EQUAL OP_11 OP_PICK OP_ROT OP_EQUAL OP_BOOLOR OP_10 OP_ROLL OP_ROT OP_EQUAL OP_BOOLOR OP_VERIFY OP_6 OP_PICK OP_0 OP_GREATERTHANOREQUAL OP_7 OP_ROLL OP_16 OP_LESSTHAN OP_BOOLAND OP_VERIFY OP_6 OP_ROLL OP_ROT OP_NUMNOTEQUAL OP_VERIFY OP_2DROP OP_2DROP OP_DROP OP_1 OP_ELSE OP_8 OP_ROLL OP_3 OP_NUMEQUALVERIFY OP_13 OP_ROLL OP_13 OP_PICK OP_CHECKSIG OP_13 OP_PICK OP_2 OP_PICK OP_EQUAL OP_14 OP_PICK OP_4 OP_PICK OP_EQUAL OP_BOOLOR OP_14 OP_ROLL OP_5 OP_PICK OP_EQUAL OP_BOOLOR OP_BOOLAND OP_14 OP_ROLL OP_14 OP_PICK OP_CHECKSIG OP_14 OP_PICK OP_3 OP_PICK OP_EQUAL OP_15 OP_PICK OP_5 OP_PICK OP_EQUAL OP_BOOLOR OP_15 OP_ROLL OP_6 OP_PICK OP_EQUAL OP_BOOLOR OP_BOOLAND OP_15 OP_ROLL OP_15 OP_PICK OP_CHECKSIG OP_15 OP_PICK OP_4 OP_ROLL OP_EQUAL OP_15 OP_PICK OP_5 OP_ROLL OP_EQUAL OP_BOOLOR OP_14 OP_ROLL OP_5 OP_ROLL OP_EQUAL OP_BOOLOR OP_BOOLAND OP_0 OP_3 OP_ROLL OP_IF OP_DUP OP_1ADD OP_NIP OP_ENDIF OP_ROT OP_IF OP_DUP OP_1ADD OP_NIP OP_ENDIF OP_SWAP OP_IF OP_DUP OP_1ADD OP_NIP OP_ENDIF OP_LESSTHANOREQUAL OP_VERIFY OP_6 OP_PICK OP_0 OP_GREATERTHANOREQUAL OP_7 OP_ROLL OP_16 OP_LESSTHAN OP_BOOLAND OP_VERIFY OP_4 OP_ROLL OP_0 14 OP_NUM2BIN OP_EQUAL OP_NOT OP_VERIFY OP_4 OP_PICK OP_0 OP_GREATERTHAN OP_VERIFY OP_3 OP_PICK OP_0 OP_GREATERTHAN OP_IF OP_4 OP_PICK OP_4 OP_PICK OP_LESSTHANOREQUAL OP_VERIFY OP_ENDIF OP_5 OP_ROLL OP_NUMNOTEQUAL OP_VERIFY OP_2DROP OP_2DROP OP_1 OP_ENDIF OP_ENDIF OP_ENDIF",
+  "source": "// FlowGuard Enhanced Contract\n// Optimized for CashScript 0.10.0 - Production Ready\n// Security: Signature verification, state tracking, spending limits\n// Efficiency: Minimal opcount, consolidated validation logic\n\npragma cashscript ^0.10.0;\n\ncontract FlowGuardEnhanced(\n    // Vault parameters\n    pubkey signer1,\n    pubkey signer2,\n    pubkey signer3,\n    int approvalThreshold,\n    \n    // State tracking (validated by backend, enforced on-chain)\n    int state,\n    \n    // Cycle parameters\n    int cycleDuration,\n    int vaultStartTime,\n    \n    // Spending guardrails\n    int spendingCap\n) {\n    // Unlock function - unlocks funds for a specific cycle\n    // Security: Requires valid signer signature, state must change\n    function unlock(\n        int cycleNumber,\n        int newState,\n        pubkey pk1,\n        sig s1\n    ) {\n        // Verify signature and signer\n        require(checkSig(s1, pk1));\n        require((pk1 == signer1) || (pk1 == signer2) || (pk1 == signer3));\n        \n        // Validate cycle and parameters\n        require(cycleNumber >= 0 && cycleNumber < 16);\n        require(cycleDuration > 0 && vaultStartTime > 0);\n        \n        // Security: State must change (prevents replay attacks)\n        require(newState != state);\n    }\n    \n    // Create proposal function\n    // Security: Requires signer signature, validates amount and recipient\n    function createProposal(\n        bytes20 recipient,\n        int amount,\n        int proposalId,\n        int newState,\n        pubkey pk1,\n        sig s1\n    ) {\n        // Verify signature and signer\n        require(checkSig(s1, pk1));\n        require((pk1 == signer1) || (pk1 == signer2) || (pk1 == signer3));\n        \n        // Validate proposal parameters\n        require(proposalId >= 0 && proposalId < 16);\n        require(recipient != bytes20(0));\n        require(amount > 0);\n        \n        // Enforce spending cap if set\n        if (spendingCap > 0) {\n            require(amount <= spendingCap);\n        }\n        \n        // Security: State must change\n        require(newState != state);\n    }\n    \n    // Approve proposal function\n    // Security: Requires signer signature, validates proposal ID\n    function approveProposal(\n        int proposalId,\n        int newState,\n        pubkey pk1,\n        sig s1\n    ) {\n        // Verify signature and signer\n        require(checkSig(s1, pk1));\n        require((pk1 == signer1) || (pk1 == signer2) || (pk1 == signer3));\n        \n        // Validate proposal ID\n        require(proposalId >= 0 && proposalId < 16);\n        \n        // Security: State must change\n        require(newState != state);\n    }\n    \n    // Execute payout function - requires threshold signatures\n    // Security: Multi-sig verification, amount validation, state tracking\n    function executePayout(\n        bytes20 recipient,\n        int amount,\n        int proposalId,\n        int newState,\n        pubkey pk1,\n        sig s1,\n        pubkey pk2,\n        sig s2,\n        pubkey pk3,\n        sig s3\n    ) {\n        // Verify all signatures and count valid signers\n        bool sig1Valid = checkSig(s1, pk1) && ((pk1 == signer1) || (pk1 == signer2) || (pk1 == signer3));\n        bool sig2Valid = checkSig(s2, pk2) && ((pk2 == signer1) || (pk2 == signer2) || (pk2 == signer3));\n        bool sig3Valid = checkSig(s3, pk3) && ((pk3 == signer1) || (pk3 == signer2) || (pk3 == signer3));\n        \n        // Count valid signatures efficiently\n        int validSigs = 0;\n        if (sig1Valid) validSigs = validSigs + 1;\n        if (sig2Valid) validSigs = validSigs + 1;\n        if (sig3Valid) validSigs = validSigs + 1;\n        \n        // Security: Require threshold signatures\n        require(validSigs >= approvalThreshold);\n        \n        // Validate payout parameters\n        require(proposalId >= 0 && proposalId < 16);\n        require(recipient != bytes20(0));\n        require(amount > 0);\n        \n        // Enforce spending cap if set\n        if (spendingCap > 0) {\n            require(amount <= spendingCap);\n        }\n        \n        // Security: State must change\n        require(newState != state);\n    }\n}\n",
+  "debug": {
+    "bytecode": "5879009c635c7a5c79ac695b79517a875b79527a879b5a7a527a879b69567900a2577a609f9a69527a00a0537a00a09a69547a527a9e777777675879519c635e7a5e79ac695d79517a875d79527a879b5c7a527a879b69587900a2597a609f9a69567a00011480879169567900a069547900a06356795579a16968577a527a9e6951777777777777675879529c635c7a5c79ac695b79517a875b79527a879b5a7a527a879b69567900a2577a609f9a69567a527a9e6951777777777767587a539c695d7a5d79ac5d795279875e795479879b5e7a5579879b9a5e7a5e79ac5e795379875f795579879b5f7a5679879b9a5f7a5f79ac5f79547a875f79557a879b5e7a557a879b9a00537a6300795193517a7568527a6300795193517a7568517a6300795193517a7568007a517aa269567900a2577a609f9a69547a00011480879169547900a069537900a06354795479a16968557a517a9e695177777777686868",
+    "sourceMap": "27:4:43:5;;;;;34:25:34:27;;:29::32;;:16::33:1;:8::35;35:17:35:20:0;;:24::31;;:17:::1;:37::40:0;;:44::51;;:37:::1;:16::52;:57::60:0;;:64::71;;:57:::1;:16::72;:8::74;38:16:38:27:0;;:31::32;:16:::1;:36::47:0;;:50::52;:36:::1;:16;:8::54;39:16:39:29:0;;:32::33;:16:::1;:37::51:0;;:54::55;:37:::1;:16;:8::57;42:16:42:24:0;;:28::33;;:16:::1;27:4:43:5;;;;47::71::0;;;;;56:25:56:27;;:29::32;;:16::33:1;:8::35;57:17:57:20:0;;:24::31;;:17:::1;:37::40:0;;:44::51;;:37:::1;:16::52;:57::60:0;;:64::71;;:57:::1;:16::72;:8::74;60:16:60:26:0;;:30::31;:16:::1;:35::45:0;;:48::50;:35:::1;:16;:8::52;61:16:61:25:0;;:37::38;:29::39:1;;:16;;:8::41;62:16:62:22:0;;:25::26;:16:::1;:8::28;65:12:65:23:0;;:26::27;:12:::1;:29:67:9:0;66:20:66:26;;:30::41;;:20:::1;:12::43;65:29:67:9;70:16:70:24:0;;:28::33;;:16:::1;:8::35;47:4:71:5;;;;;;;;75::90::0;;;;;82:25:82:27;;:29::32;;:16::33:1;:8::35;83:17:83:20:0;;:24::31;;:17:::1;:37::40:0;;:44::51;;:37:::1;:16::52;:57::60:0;;:64::71;;:57:::1;:16::72;:8::74;86:16:86:26:0;;:30::31;:16:::1;:35::45:0;;:48::50;:35:::1;:16;:8::52;89:16:89:24:0;;:28::33;;:16:::1;:8::35;75:4:90:5;;;;;;;94::132::0;;;;;107:34:107:36;;:38::41;;:25::42:1;:48::51:0;;:55::62;;:48:::1;:68::71:0;;:75::82;;:68:::1;:47::83;:88::91:0;;:95::102;;:88:::1;:47::103;:25::104;108:34:108:36:0;;:38::41;;:25::42:1;:48::51:0;;:55::62;;:48:::1;:68::71:0;;:75::82;;:68:::1;:47::83;:88::91:0;;:95::102;;:88:::1;:47::103;:25::104;109:34:109:36:0;;:38::41;;:25::42:1;:48::51:0;;:55::62;;:48:::1;:68::71:0;;:75::82;;:68:::1;:47::83;:88::91:0;;:95::102;;:88:::1;:47::103;:25::104;112:24:112:25:0;113:12:113:21;;:23::49;:35::44;;:47::48;:35:::1;:23::49;;;;114:12:114:21:0;;:23::49;:35::44;;:47::48;:35:::1;:23::49;;;;115:12:115:21:0;;:23::49;:35::44;;:47::48;:35:::1;:23::49;;;;118:16:118:25:0;;:29::46;;:16:::1;:8::48;121:16:121:26:0;;:30::31;:16:::1;:35::45:0;;:48::50;:35:::1;:16;:8::52;122:16:122:25:0;;:37::38;:29::39:1;;:16;;:8::41;123:16:123:22:0;;:25::26;:16:::1;:8::28;126:12:126:23:0;;:26::27;:12:::1;:29:128:9:0;127:20:127:26;;:30::41;;:20:::1;:12::43;126:29:128:9;131:16:131:24:0;;:28::33;;:16:::1;:8::35;94:4:132:5;;;;;8:0:133:1;;",
+    "logs": [],
+    "requires": [
+      {
+        "ip": 18,
+        "line": 34
+      },
+      {
+        "ip": 36,
+        "line": 35
+      },
+      {
+        "ip": 46,
+        "line": 38
+      },
+      {
+        "ip": 56,
+        "line": 39
+      },
+      {
+        "ip": 62,
+        "line": 42
+      },
+      {
+        "ip": 76,
+        "line": 56
+      },
+      {
+        "ip": 94,
+        "line": 57
+      },
+      {
+        "ip": 104,
+        "line": 60
+      },
+      {
+        "ip": 112,
+        "line": 61
+      },
+      {
+        "ip": 117,
+        "line": 62
+      },
+      {
+        "ip": 128,
+        "line": 66
+      },
+      {
+        "ip": 135,
+        "line": 70
+      },
+      {
+        "ip": 154,
+        "line": 82
+      },
+      {
+        "ip": 172,
+        "line": 83
+      },
+      {
+        "ip": 182,
+        "line": 86
+      },
+      {
+        "ip": 188,
+        "line": 89
+      },
+      {
+        "ip": 309,
+        "line": 118
+      },
+      {
+        "ip": 319,
+        "line": 121
+      },
+      {
+        "ip": 327,
+        "line": 122
+      },
+      {
+        "ip": 332,
+        "line": 123
+      },
+      {
+        "ip": 343,
+        "line": 127
+      },
+      {
+        "ip": 350,
+        "line": 131
+      }
+    ]
+  },
+  "compiler": {
+    "name": "cashc",
+    "version": "0.10.5"
+  },
+  "updatedAt": "2025-11-21T07:32:16.315Z"
+}

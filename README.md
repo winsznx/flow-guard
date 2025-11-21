@@ -219,9 +219,12 @@ VITE_API_URL=http://localhost:3001/api  # Development
 ## 📖 Documentation
 
 - [**User Documentation**](./frontend/src/pages/DocsPage.tsx) - Guides for creating vaults, proposals, and managing treasuries
-- [**Deployment Guide**](./DEPLOYMENT.md) - Deploy backend and frontend
+- [**Deployment Guide**](./docs/DEPLOYMENT.md) - Deploy contracts and services to chipnet
+- [**Next Steps**](./docs/NEXT_STEPS.md) - Post-deployment testing and usage guide
+- [**Testing Guide**](./docs/TESTING.md) - How to test contract functions
 - [**API Reference**](./docs/API.md) - Backend API endpoints
-- [**Contract Status**](./contracts/CONTRACT_STATUS.md) - Smart contract implementation status
+- [**Architecture**](./docs/ARCHITECTURE.md) - System design and architecture
+- [**Product Requirements**](./docs/PRD.md) - Product requirements and roadmap
 
 ## 🤝 Use Cases
 

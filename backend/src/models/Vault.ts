@@ -16,6 +16,7 @@ export interface Vault {
   balance?: number; // Current on-chain balance in satoshis
   createdAt: Date;
   updatedAt: Date;
+  startTime?: Date; // Vault start time for cycle calculations
 }
 
 export interface CreateVaultDto {

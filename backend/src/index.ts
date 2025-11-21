@@ -4,7 +4,9 @@ import dotenv from 'dotenv';
 import vaultsRouter from './api/vaults';
 import proposalsRouter from './api/proposals';
 import cyclesRouter from './api/cycles';
+import deploymentRouter from './api/deployment';
 import { startBlockchainMonitor, stopBlockchainMonitor } from './services/blockchain-monitor';
+import { startCycleUnlockScheduler, stopCycleUnlockScheduler } from './services/cycle-unlock-scheduler';
 
 dotenv.config();
 
@@ -32,6 +34,7 @@ app.get('/health', (req, res) => {
 app.use('/api/vaults', vaultsRouter);
 app.use('/api/proposals', proposalsRouter);
 app.use('/api', cyclesRouter);
+app.use('/api/deployment', deploymentRouter);
 
 app.get('/api', (req, res) => {
   res.json({ message: 'FlowGuard API', version: '0.1.0', network: 'chipnet' });
@@ -44,18 +47,24 @@ app.listen(PORT, () => {
   // Start blockchain monitoring (check every 30 seconds)
   console.log('🔗 Starting blockchain monitor...');
   startBlockchainMonitor(30000);
+
+  // Start cycle unlock scheduler (check every 1 minute)
+  console.log('⏰ Starting cycle unlock scheduler...');
+  startCycleUnlockScheduler(60000);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM signal received: closing HTTP server');
   stopBlockchainMonitor();
+  stopCycleUnlockScheduler();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT signal received: closing HTTP server');
   stopBlockchainMonitor();
+  stopCycleUnlockScheduler();
   process.exit(0);
 });
 

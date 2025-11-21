@@ -8,7 +8,13 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "jest",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "deploy:chipnet": "node src/scripts/simple-deploy.mjs",
+    "verify:contract": "node src/scripts/verify-contract.mjs",
+    "check:funding": "node src/scripts/check-funding.mjs",
+    "register:vault": "node src/scripts/register-vault.mjs",
+    "deploy:chipnet:legacy": "NODE_OPTIONS='--no-warnings --experimental-loader ./node_modules/tsx/dist/esm/index.mjs' node --loader tsx/esm src/scripts/deploy-chipnet.ts || tsx src/scripts/deploy-chipnet.ts",
+    "verify:deployment": "tsx src/scripts/verify-deployment.ts"
   },
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",

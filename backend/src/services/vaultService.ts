@@ -20,11 +20,16 @@ export class VaultService {
     // Deploy contract to blockchain
     try {
       const contractService = new ContractService('chipnet');
+      const startTimeUnix = Math.floor(Date.now() / 1000);
       const deployment = await contractService.deployVault(
         dto.signerPubkeys[0],
         dto.signerPubkeys[1],
         dto.signerPubkeys[2],
-        dto.approvalThreshold
+        dto.approvalThreshold,
+        0, // Initial state
+        dto.cycleDuration,
+        startTimeUnix,
+        dto.spendingCap
       );
 
       contractAddress = deployment.contractAddress;
@@ -41,12 +46,15 @@ export class VaultService {
       console.warn('Continuing vault creation without blockchain deployment');
     }
 
+    // Set start time to now (for cycle calculations)
+    const startTime = new Date().toISOString();
+
     const stmt = db.prepare(`
       INSERT INTO vaults (
         id, vault_id, creator, total_deposit, spending_cap, approval_threshold,
         signers, signer_pubkeys, state, cycle_duration, unlock_amount, is_public,
-        contract_address, contract_bytecode, balance
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        contract_address, contract_bytecode, balance, start_time
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -64,7 +72,8 @@ export class VaultService {
       isPublic ? 1 : 0,
       contractAddress || null,
       contractBytecode || null,
-      0 // Initial balance
+      0, // Initial balance
+      startTime
     );
 
     const vault = this.getVaultById(id);
@@ -80,26 +89,27 @@ export class VaultService {
 
     if (!row) return null;
 
-    return {
-      id: row.id,
-      vaultId: row.vault_id,
-      creator: row.creator,
-      totalDeposit: row.total_deposit,
-      spendingCap: row.spending_cap,
-      approvalThreshold: row.approval_threshold,
-      signers: JSON.parse(row.signers),
-      signerPubkeys: row.signer_pubkeys ? JSON.parse(row.signer_pubkeys) : undefined,
-      state: row.state,
-      cycleDuration: row.cycle_duration,
-      unlockAmount: row.unlock_amount,
-      isPublic: Boolean(row.is_public),
-      contractAddress: row.contract_address || undefined,
-      contractBytecode: row.contract_bytecode || undefined,
-      balance: row.balance || 0,
-      createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at),
-    };
-  }
+      return {
+        id: row.id,
+        vaultId: row.vault_id,
+        creator: row.creator,
+        totalDeposit: row.total_deposit,
+        spendingCap: row.spending_cap,
+        approvalThreshold: row.approval_threshold,
+        signers: JSON.parse(row.signers),
+        signerPubkeys: row.signer_pubkeys ? JSON.parse(row.signer_pubkeys) : undefined,
+        state: row.state,
+        cycleDuration: row.cycle_duration,
+        unlockAmount: row.unlock_amount,
+        isPublic: Boolean(row.is_public),
+        contractAddress: row.contract_address || undefined,
+        contractBytecode: row.contract_bytecode || undefined,
+        balance: row.balance || 0,
+        createdAt: new Date(row.created_at),
+        updatedAt: new Date(row.updated_at),
+        startTime: row.start_time ? new Date(row.start_time) : new Date(row.created_at),
+      };
+    }
   
   static getVaultByVaultId(vaultId: string): Vault | null {
     const stmt = db.prepare('SELECT * FROM vaults WHERE vault_id = ?');
@@ -125,6 +135,7 @@ export class VaultService {
       balance: row.balance || 0,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
+      startTime: row.start_time ? new Date(row.start_time) : new Date(row.created_at),
     };
   }
   
@@ -178,6 +189,7 @@ export class VaultService {
       balance: row.balance || 0,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
+      startTime: row.start_time ? new Date(row.start_time) : new Date(row.created_at),
     }));
   }
 

@@ -113,6 +113,13 @@ try {
     db.exec(`ALTER TABLE vaults ADD COLUMN signer_pubkeys TEXT`); // JSON array
     console.log('Added signer_pubkeys column to vaults table');
   }
+
+  // Add start_time column for cycle calculations
+  const hasStartTime = tableInfo.some(col => col.name === 'start_time');
+  if (!hasStartTime) {
+    db.exec(`ALTER TABLE vaults ADD COLUMN start_time DATETIME`);
+    console.log('Added start_time column to vaults table');
+  }
 } catch (error) {
   // Columns might already exist, log warning
   console.warn('Migration error:', error);

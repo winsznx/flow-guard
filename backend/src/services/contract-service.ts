@@ -5,7 +5,8 @@
 
 import { Contract, ElectrumNetworkProvider, SignatureTemplate } from 'cashscript';
 import { binToHex, hexToBin } from '@bitauth/libauth';
-import artifact from '../contracts/FlowGuardDemo.json';
+import artifact from '../contracts/FlowGuardEnhanced.json';
+import { StateService } from './state-service';
 
 export interface VaultDeployment {
   contractAddress: string;
@@ -44,12 +45,20 @@ export class ContractService {
    * @param signer2 Second signer's public key (hex)
    * @param signer3 Third signer's public key (hex)
    * @param approvalThreshold Number of signatures required (e.g., 2 for 2-of-3)
+   * @param state Initial state (0 for new vault)
+   * @param cycleDuration Cycle duration in seconds
+   * @param vaultStartTime Unix timestamp when vault starts
+   * @param spendingCap Maximum spending per period in satoshis
    */
   async deployVault(
     signer1: string,
     signer2: string,
     signer3: string,
-    approvalThreshold: number
+    approvalThreshold: number,
+    state: number = 0,
+    cycleDuration: number,
+    vaultStartTime: number,
+    spendingCap: number
   ): Promise<VaultDeployment> {
     try {
       // Convert hex pubkeys to Uint8Array
@@ -57,10 +66,19 @@ export class ContractService {
       const pk2 = hexToBin(signer2);
       const pk3 = hexToBin(signer3);
 
-      // Create contract instance
+      // Create contract instance with all parameters
       const contract = new Contract(
         artifact as any,
-        [pk1, pk2, pk3, BigInt(approvalThreshold)],
+        [
+          pk1,
+          pk2,
+          pk3,
+          BigInt(approvalThreshold),
+          BigInt(state),
+          BigInt(cycleDuration),
+          BigInt(vaultStartTime),
+          BigInt(spendingCap),
+        ],
         { provider: this.provider }
       );
 
@@ -87,12 +105,16 @@ export class ContractService {
    * Get contract instance from address
    * @param contractAddress The contract's cashaddr
    */
-  private async getContract(
+  async getContract(
     contractAddress: string,
     signer1: string,
     signer2: string,
     signer3: string,
-    approvalThreshold: number
+    approvalThreshold: number,
+    state: number,
+    cycleDuration: number,
+    vaultStartTime: number,
+    spendingCap: number
   ): Promise<Contract> {
     const pk1 = hexToBin(signer1);
     const pk2 = hexToBin(signer2);
@@ -100,7 +122,16 @@ export class ContractService {
 
     const contract = new Contract(
       artifact as any,
-      [pk1, pk2, pk3, BigInt(approvalThreshold)],
+      [
+        pk1,
+        pk2,
+        pk3,
+        BigInt(approvalThreshold),
+        BigInt(state),
+        BigInt(cycleDuration),
+        BigInt(vaultStartTime),
+        BigInt(spendingCap),
+      ],
       { provider: this.provider }
     );
 
@@ -170,13 +201,18 @@ export class ContractService {
 
       const [signer1, signer2, signer3] = signerPublicKeys;
 
-      // Get contract instance
+      // Get contract instance - we need vault parameters from database
+      // For now, using defaults - in production, fetch from vault record
       const contract = await this.getContract(
         contractAddress,
         signer1,
         signer2,
         signer3,
-        approvalThreshold
+        approvalThreshold,
+        0, // state - should be fetched from vault
+        2592000, // cycleDuration - should be fetched from vault
+        Math.floor(Date.now() / 1000), // vaultStartTime - should be fetched from vault
+        1000000000 // spendingCap - should be fetched from vault
       );
 
       // For now, we'll use placeholder signatures
@@ -273,6 +309,223 @@ export class ContractService {
     } catch (error) {
       console.error('Failed to get block height:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Create on-chain proposal transaction with state management
+   * This prepares a transaction that calls createProposal on the enhanced contract
+   * 
+   * @param contractAddress The vault contract address
+   * @param recipientAddress Where to send the funds
+   * @param amount Amount to send in satoshis
+   * @param proposalId On-chain proposal ID
+   * @param currentState Current vault state (bitwise encoded)
+   * @param signerPublicKeys Array of signer public keys
+   * @param approvalThreshold Number of signatures required
+   * @param spendingCap Maximum spending per period
+   */
+  async createOnChainProposal(
+    contractAddress: string,
+    recipientAddress: string,
+    amount: number,
+    proposalId: number,
+    currentState: number,
+    signerPublicKeys: string[],
+    approvalThreshold: number,
+    spendingCap: number
+  ): Promise<ProposalTransaction> {
+    try {
+      if (signerPublicKeys.length !== 3) {
+        throw new Error('Exactly 3 signer public keys required');
+      }
+
+      // Verify proposal doesn't already exist
+      if (StateService.isProposalPending(currentState, proposalId) ||
+          StateService.getProposalStatus(currentState, proposalId) !== 0) {
+        throw new Error(`Proposal ${proposalId} already exists`);
+      }
+
+      // Verify amount doesn't exceed spending cap
+      if (amount > spendingCap) {
+        throw new Error(`Amount ${amount} exceeds spending cap ${spendingCap}`);
+      }
+
+      // Calculate new state with proposal marked as pending
+      const newState = StateService.setProposalPending(currentState, proposalId);
+
+      // Note: This would call the enhanced contract's createProposal function
+      // For now, we return a transaction structure that can be used when the enhanced contract is deployed
+      // The actual transaction building would be:
+      // contract.functions.createProposal(recipient, amount, proposalId, newState, pk1, sig1)
+      
+      return {
+        txHex: '', // Will be built when enhanced contract is deployed
+        txId: '',
+        requiresSignatures: [signerPublicKeys[0]], // Only needs one signature for proposal creation
+      };
+    } catch (error) {
+      console.error('Failed to create on-chain proposal:', error);
+      throw new Error(`On-chain proposal creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Create on-chain approval transaction with state management
+   * 
+   * @param contractAddress The vault contract address
+   * @param proposalId On-chain proposal ID
+   * @param currentState Current vault state (bitwise encoded)
+   * @param signerPublicKeys Array of signer public keys
+   * @param approvalThreshold Number of signatures required
+   */
+  async createOnChainApproval(
+    contractAddress: string,
+    proposalId: number,
+    currentState: number,
+    signerPublicKeys: string[],
+    approvalThreshold: number
+  ): Promise<{ newState: number; isApproved: boolean; transaction: ProposalTransaction }> {
+    try {
+      if (signerPublicKeys.length !== 3) {
+        throw new Error('Exactly 3 signer public keys required');
+      }
+
+      // Verify proposal is pending
+      if (!StateService.isProposalPending(currentState, proposalId)) {
+        throw new Error(`Proposal ${proposalId} is not pending`);
+      }
+
+      // Increment approval and check if threshold is met
+      const { newState, isApproved } = StateService.incrementApprovalWithCheck(
+        currentState,
+        proposalId,
+        approvalThreshold
+      );
+
+      // Note: This would call the enhanced contract's approveProposal function
+      // The actual transaction building would be:
+      // contract.functions.approveProposal(proposalId, newState, pk1, sig1)
+
+      return {
+        newState,
+        isApproved,
+        transaction: {
+          txHex: '', // Will be built when enhanced contract is deployed
+          txId: '',
+          requiresSignatures: [signerPublicKeys[0]], // Only needs one signature for approval
+        },
+      };
+    } catch (error) {
+      console.error('Failed to create on-chain approval:', error);
+      throw new Error(`On-chain approval creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Create cycle unlock transaction with state management
+   * 
+   * @param contractAddress The vault contract address
+   * @param cycleNumber Cycle number to unlock
+   * @param currentState Current vault state (bitwise encoded)
+   * @param vaultStartTime Unix timestamp when vault was created
+   * @param cycleDuration Cycle duration in seconds
+   * @param signerPublicKeys Array of signer public keys
+   */
+  async createCycleUnlock(
+    contractAddress: string,
+    cycleNumber: number,
+    currentState: number,
+    vaultStartTime: number,
+    cycleDuration: number,
+    signerPublicKeys: string[]
+  ): Promise<{ newState: number; transaction: ProposalTransaction }> {
+    try {
+      if (signerPublicKeys.length !== 3) {
+        throw new Error('Exactly 3 signer public keys required');
+      }
+
+      // Check if cycle can be unlocked
+      if (!StateService.canUnlockCycle(currentState, cycleNumber, vaultStartTime, cycleDuration)) {
+        throw new Error(`Cycle ${cycleNumber} cannot be unlocked yet`);
+      }
+
+      // Calculate new state with cycle marked as unlocked
+      const newState = StateService.setCycleUnlocked(currentState, cycleNumber);
+
+      // Note: This would call the enhanced contract's unlock function
+      // The actual transaction building would be:
+      // contract.functions.unlock(cycleNumber, newState, pk1, sig1)
+
+      return {
+        newState,
+        transaction: {
+          txHex: '', // Will be built when enhanced contract is deployed
+          txId: '',
+          requiresSignatures: [signerPublicKeys[0]], // Only needs one signature for unlock
+        },
+      };
+    } catch (error) {
+      console.error('Failed to create cycle unlock:', error);
+      throw new Error(`Cycle unlock creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Create execute payout transaction with state management
+   * 
+   * @param contractAddress The vault contract address
+   * @param recipientAddress Where to send the funds
+   * @param amount Amount to send in satoshis
+   * @param proposalId On-chain proposal ID
+   * @param currentState Current vault state (bitwise encoded)
+   * @param signerPublicKeys Array of signer public keys
+   * @param approvalThreshold Number of signatures required
+   * @param spendingCap Maximum spending per period
+   */
+  async createExecutePayout(
+    contractAddress: string,
+    recipientAddress: string,
+    amount: number,
+    proposalId: number,
+    currentState: number,
+    signerPublicKeys: string[],
+    approvalThreshold: number,
+    spendingCap: number
+  ): Promise<{ newState: number; transaction: ProposalTransaction }> {
+    try {
+      if (signerPublicKeys.length !== 3) {
+        throw new Error('Exactly 3 signer public keys required');
+      }
+
+      // Verify proposal is approved
+      if (!StateService.isProposalApproved(currentState, proposalId)) {
+        throw new Error(`Proposal ${proposalId} is not approved`);
+      }
+
+      // Verify amount doesn't exceed spending cap
+      if (amount > spendingCap) {
+        throw new Error(`Amount ${amount} exceeds spending cap ${spendingCap}`);
+      }
+
+      // Calculate new state with proposal marked as executed
+      const newState = StateService.setProposalExecuted(currentState, proposalId);
+
+      // Note: This would call the enhanced contract's executePayout function
+      // The actual transaction building would be:
+      // contract.functions.executePayout(recipient, amount, proposalId, newState, pk1, sig1, pk2, sig2, pk3, sig3)
+
+      return {
+        newState,
+        transaction: {
+          txHex: '', // Will be built when enhanced contract is deployed
+          txId: '',
+          requiresSignatures: signerPublicKeys.slice(0, approvalThreshold), // Needs threshold signatures
+        },
+      };
+    } catch (error) {
+      console.error('Failed to create execute payout:', error);
+      throw new Error(`Execute payout creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

@@ -401,12 +401,12 @@ export default function Home() {
           </p>
           <div className="flex flex-col sm:flex-row justify-center gap-4">
             <Link to="/vaults/create">
-              <Button size="lg" variant="accent" className="text-lg px-12 py-6">
+              <Button size="lg" variant="accent" className="text-lg px-12 py-6 text-white">
                 Create Your First Vault →
               </Button>
             </Link>
             <Link to="/docs">
-              <Button size="lg" variant="outline" className="text-lg px-12 py-6 border-gray-900 text-gray-900 hover:bg-gray-900 hover:text-white">
+              <Button size="lg" variant="outline" className="text-lg px-12 py-6 border-gray-900 text-gray-900 dark:border-gray-100 dark:text-gray-100 hover:bg-gray-900 dark:hover:bg-gray-100 hover:text-white dark:hover:text-gray-900">
                 Explore Documentation
               </Button>
             </Link>

@@ -1,5 +1,8 @@
 import { Router } from 'express';
 import db from '../database/schema';
+import { getCycleUnlockScheduler } from '../services/cycle-unlock-scheduler';
+import { StateService } from '../services/state-service';
+import { VaultService } from '../services/vaultService';
 
 const router = Router();
 
@@ -58,12 +61,68 @@ router.get('/vaults/:vaultId/cycles/current', (req, res) => {
   }
 });
 
-// Trigger unlock (if needed - usually handled by Loop)
-router.post('/vaults/:vaultId/unlock', (req, res) => {
+// Trigger unlock for a specific cycle
+router.post('/vaults/:vaultId/unlock', async (req, res) => {
   try {
-    // TODO: Implement unlock logic
-    // This would typically be triggered by the Loop mechanism
-    res.json({ message: 'Unlock triggered', vaultId: req.params.vaultId });
+    const { cycleNumber } = req.body;
+    const vaultId = req.params.vaultId;
+    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+
+    if (cycleNumber === undefined) {
+      return res.status(400).json({ error: 'cycleNumber is required' });
+    }
+
+    const vault = VaultService.getVaultByVaultId(vaultId);
+    if (!vault) {
+      return res.status(404).json({ error: 'Vault not found' });
+    }
+
+    // Verify user is a signer
+    if (!VaultService.isSigner(vault, userAddress)) {
+      return res.status(403).json({ error: 'Only signers can unlock cycles' });
+    }
+
+    const scheduler = getCycleUnlockScheduler();
+    const result = await scheduler.unlockCycle(vaultId, cycleNumber);
+
+    if (!result.unlocked) {
+      return res.status(400).json({ error: result.error || 'Failed to unlock cycle' });
+    }
+
+    res.json({
+      message: 'Cycle unlocked successfully',
+      vaultId: result.vaultId,
+      cycleNumber: result.cycleNumber,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get eligible cycles for unlock
+router.get('/vaults/:vaultId/cycles/eligible', (req, res) => {
+  try {
+    const vault = VaultService.getVaultByVaultId(req.params.vaultId);
+    if (!vault) {
+      return res.status(404).json({ error: 'Vault not found' });
+    }
+
+    const vaultStartTime = Math.floor((vault.startTime || vault.createdAt).getTime() / 1000);
+    const currentState = vault.state || 0;
+    const currentCycle = StateService.getCurrentCycle(vaultStartTime, vault.cycleDuration);
+
+    const eligibleCycles: number[] = [];
+    for (let i = 0; i <= currentCycle && i < 16; i++) {
+      if (StateService.canUnlockCycle(currentState, i, vaultStartTime, vault.cycleDuration)) {
+        eligibleCycles.push(i);
+      }
+    }
+
+    res.json({
+      currentCycle,
+      eligibleCycles,
+      unlockedCycles: StateService.getUnlockedCycles(currentState),
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

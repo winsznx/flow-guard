@@ -61,5 +61,51 @@ router.post('/:id/approve', (req, res) => {
   }
 });
 
+// Create on-chain proposal transaction
+router.post('/:id/create-onchain', async (req, res) => {
+  try {
+    const proposalId = req.params.id;
+    const signerPublicKey = req.headers['x-signer-public-key'] as string;
+
+    if (!signerPublicKey) {
+      return res.status(400).json({ error: 'Signer public key is required' });
+    }
+
+    const result = await ProposalService.createOnChainProposalTransaction(proposalId, signerPublicKey);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create on-chain approval transaction
+router.post('/:id/approve-onchain', async (req, res) => {
+  try {
+    const proposalId = req.params.id;
+    const signerPublicKey = req.headers['x-signer-public-key'] as string;
+
+    if (!signerPublicKey) {
+      return res.status(400).json({ error: 'Signer public key is required' });
+    }
+
+    const result = await ProposalService.createOnChainApprovalTransaction(proposalId, signerPublicKey);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create execute payout transaction
+router.post('/:id/execute-onchain', async (req, res) => {
+  try {
+    const proposalId = req.params.id;
+
+    const result = await ProposalService.createExecutePayoutTransaction(proposalId);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
 
