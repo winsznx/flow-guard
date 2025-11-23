@@ -5,4 +5,3 @@
 
 export { MainnetConnector } from './mainnet-connector';
 export { BCHExtensionConnector } from './bch-extension-connector';
-export { ElectronCashConnector } from './electron-cash-connector';

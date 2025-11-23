@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { WalletType } from '../../types/wallet';
-import { Wallet, X, ExternalLink, Chrome, Coins, Download, Key, Monitor } from 'lucide-react';
+import { Wallet, X, ExternalLink, Chrome, Coins, Download, Key } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 interface WalletOption {
@@ -29,12 +29,6 @@ const walletOptions: WalletOption[] = [
     name: 'mainnet.cash',
     description: 'Create new wallet or import existing seed phrase',
     Icon: Coins,
-  },
-  {
-    type: WalletType.ELECTRON_CASH,
-    name: 'Electron Cash',
-    description: 'Connect to Electron Cash desktop wallet (RPC required)',
-    Icon: Monitor,
   },
 ];
 

@@ -78,9 +78,27 @@ export class MainnetConnector implements IWalletConnector {
         }
       }
 
-      const address = await this.getAddress();
-      const publicKey = await this.getPublicKey();
-      const balance = await this.getBalance();
+      // Ensure wallet is fully initialized before fetching data
+      // Add a small delay to allow wallet internal state to settle
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Fetch all wallet data in parallel for better performance
+      const [address, publicKey, balance] = await Promise.all([
+        this.getAddress().catch(err => {
+          console.error('Failed to get address:', err);
+          throw new Error('Failed to retrieve wallet address');
+        }),
+        this.getPublicKey().catch(err => {
+          console.warn('Failed to get public key:', err);
+          // Public key is optional, but log the error
+          return undefined;
+        }),
+        this.getBalance().catch(err => {
+          console.warn('Failed to get balance:', err);
+          // Return zero balance if fetch fails
+          return { bch: 0, sat: 0 };
+        }),
+      ]);
 
       return {
         address,
@@ -191,8 +209,24 @@ export class MainnetConnector implements IWalletConnector {
     }
 
     try {
+      // Wait a bit for wallet to be fully initialized
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       // mainnet-js exposes publicKey property as Uint8Array
-      const publicKeyBytes = this.wallet.publicKey;
+      // Try accessing it multiple ways in case it's not immediately available
+      let publicKeyBytes = this.wallet.publicKey;
+      
+      // If publicKey is not directly available, try alternative methods
+      if (!publicKeyBytes && 'getPublicKey' in this.wallet && typeof (this.wallet as any).getPublicKey === 'function') {
+        publicKeyBytes = await (this.wallet as any).getPublicKey();
+      }
+
+      if (!publicKeyBytes) {
+        // Try one more time after a short delay
+        await new Promise(resolve => setTimeout(resolve, 100));
+        publicKeyBytes = this.wallet.publicKey;
+      }
+
       if (!publicKeyBytes) {
         throw new Error('Public key not available from wallet');
       }

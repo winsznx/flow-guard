@@ -21,7 +21,7 @@ export interface WalletInterface {
   signRawTransaction?: (txHex: string) => Promise<string>;
   isConnected: boolean;
   address: string | null;
-  walletType?: string | null; // Add wallet type to identify Electron Cash
+  walletType?: string | null;
 }
 
 /**
@@ -36,7 +36,6 @@ export async function signTransaction(
   txHex: string
 ): Promise<string> {
   try {
-    // Electron Cash has excellent raw transaction signing support
     // Check if wallet has a method to sign raw hex directly
     if (wallet && wallet.signRawTransaction && typeof wallet.signRawTransaction === 'function') {
       try {
@@ -49,12 +48,6 @@ export async function signTransaction(
       }
     }
 
-    // For Electron Cash specifically, we can also try accessing the connector directly
-    // This is a fallback if signRawTransaction isn't exposed through the interface
-    if (wallet.walletType === 'electron_cash') {
-      console.log('Detected Electron Cash wallet - attempting direct RPC signing');
-      // The connector should handle this through signTransaction with raw hex
-    }
 
     // Alternative: Try using signTransaction with hex in data field
     // Some wallets might support this
@@ -115,7 +108,7 @@ export async function signAndBroadcast(
     // Try to sign the transaction first
     let signedTxHex = txHex;
     
-    // Use signRawTransaction if available (Electron Cash, etc.)
+    // Use signRawTransaction if available
     if (wallet.signRawTransaction && typeof wallet.signRawTransaction === 'function') {
       try {
         console.log('Using wallet signRawTransaction method...');
