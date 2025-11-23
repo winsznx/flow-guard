@@ -5,6 +5,7 @@ import vaultsRouter from './api/vaults.js';
 import proposalsRouter from './api/proposals.js';
 import cyclesRouter from './api/cycles.js';
 import deploymentRouter from './api/deployment.js';
+import transactionsRouter from './api/transactions.js';
 import { startBlockchainMonitor, stopBlockchainMonitor } from './services/blockchain-monitor.js';
 import { startCycleUnlockScheduler, stopCycleUnlockScheduler } from './services/cycle-unlock-scheduler.js';
 
@@ -35,6 +36,7 @@ app.use('/api/vaults', vaultsRouter);
 app.use('/api/proposals', proposalsRouter);
 app.use('/api', cyclesRouter);
 app.use('/api/deployment', deploymentRouter);
+app.use('/api', transactionsRouter);
 
 app.get('/api', (req, res) => {
   res.json({ message: 'FlowGuard API', version: '0.1.0', network: 'chipnet' });

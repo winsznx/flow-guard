@@ -110,7 +110,7 @@ router.post('/:id/execute-onchain', async (req, res) => {
 // Broadcast signed transaction
 router.post('/broadcast', async (req, res) => {
   try {
-    const { txHex } = req.body;
+    const { txHex, txType, vaultId, proposalId, amount, fromAddress, toAddress } = req.body;
 
     if (!txHex) {
       return res.status(400).json({ error: 'txHex is required' });
@@ -122,6 +122,18 @@ router.post('/broadcast', async (req, res) => {
 
     // Broadcast the signed transaction
     const txid = await contractService.broadcastTransaction(txHex);
+
+    // Record transaction in database
+    if (txType) {
+      const { TransactionService } = await import('../services/transactionService.js');
+      await TransactionService.recordTransaction(txid, txType, {
+        vaultId,
+        proposalId,
+        amount,
+        fromAddress,
+        toAddress,
+      });
+    }
 
     res.json({ txid, success: true });
   } catch (error: any) {
