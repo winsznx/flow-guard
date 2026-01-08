@@ -1,10 +1,10 @@
 /**
  * Wallet Types and Interfaces for FlowGuard
- * Supports BCH browser extension wallets (Badger, Paytaca) and mainnet.cash
+ * Supports BCH browser extension wallets (Paytaca) and mainnet.cash
  */
 
 export enum WalletType {
-  BCH_EXTENSION = 'bch_extension', // Badger, Paytaca, etc.
+  BCH_EXTENSION = 'bch_extension', // Paytaca, etc.
   MAINNET = 'mainnet',
 }
 

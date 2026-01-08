@@ -1,6 +1,6 @@
 /**
  * BCH Browser Extension Wallet Connector
- * Supports Badger, Paytaca, and other BCH browser extension wallets
+ * Supports Paytaca and other BCH browser extension wallets
  * Uses the standard window.bitcoincash API
  * 
  * Debug helper: In browser console, run:
@@ -82,7 +82,7 @@ export class BCHExtensionConnector implements IWalletConnector {
       if (window.bitcoincash && isValidWallet(window.bitcoincash)) return window.bitcoincash;
       if (window.paytaca && isValidWallet(window.paytaca)) return window.paytaca;
       if (window.paytacaWallet && isValidWallet(window.paytacaWallet)) return window.paytacaWallet;
-      
+
       // Check for any property that might be a wallet (for debugging)
       for (const key in window) {
         if (key.toLowerCase().includes('paytaca') || key.toLowerCase().includes('bitcoincash')) {
@@ -118,8 +118,8 @@ export class BCHExtensionConnector implements IWalletConnector {
         } else if (attempts >= maxAttempts) {
           clearInterval(checkWallet);
           console.warn('Wallet not detected after', maxAttempts * 100, 'ms');
-          console.warn('Available window properties:', Object.keys(window).filter(k => 
-            k.toLowerCase().includes('paytaca') || 
+          console.warn('Available window properties:', Object.keys(window).filter(k =>
+            k.toLowerCase().includes('paytaca') ||
             k.toLowerCase().includes('bitcoincash') ||
             k.toLowerCase().includes('wallet')
           ));
@@ -141,7 +141,7 @@ export class BCHExtensionConnector implements IWalletConnector {
     }
 
     if (window.bitcoincash) {
-      // Could be Badger or other wallet
+      // Could be Paytaca or other wallet
       return 'BCH Wallet';
     }
 
@@ -161,8 +161,8 @@ export class BCHExtensionConnector implements IWalletConnector {
     if (!walletAvailable) {
       // Provide detailed debugging information
       const debugInfo = {
-        windowProperties: Object.keys(window).filter(k => 
-          k.toLowerCase().includes('paytaca') || 
+        windowProperties: Object.keys(window).filter(k =>
+          k.toLowerCase().includes('paytaca') ||
           k.toLowerCase().includes('bitcoincash') ||
           k.toLowerCase().includes('wallet')
         ),
@@ -170,12 +170,12 @@ export class BCHExtensionConnector implements IWalletConnector {
         hasPaytaca: !!window.paytaca,
         hasPaytacaWallet: !!window.paytacaWallet,
       };
-      
+
       console.error('Wallet detection failed. Debug info:', debugInfo);
-      
+
       throw new Error(
         'BCH wallet extension not found. Please ensure:\n' +
-        '1. Paytaca or Badger wallet extension is installed and enabled\n' +
+        '1. Paytaca wallet extension is installed and enabled\n' +
         '2. The wallet is unlocked\n' +
         '3. Refresh the page after installing/enabling the extension\n' +
         '4. Check the browser console for more details'
@@ -185,9 +185,9 @@ export class BCHExtensionConnector implements IWalletConnector {
     try {
       // Use whichever wallet is available (prefer bitcoincash standard API)
       // Check multiple possible property names
-      this.wallet = 
-        window.bitcoincash || 
-        window.paytaca || 
+      this.wallet =
+        window.bitcoincash ||
+        window.paytaca ||
         window.paytacaWallet ||
         null;
 
@@ -395,7 +395,7 @@ export class BCHExtensionConnector implements IWalletConnector {
             console.warn('Raw transaction signing not supported, falling back to send method');
           }
         }
-        
+
         // If raw signing not available, throw error
         throw new Error(
           'Covenant transaction signing requires raw hex support. ' +

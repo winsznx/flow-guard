@@ -20,7 +20,7 @@ const walletOptions: WalletOption[] = [
   {
     type: WalletType.BCH_EXTENSION,
     name: 'Browser Extension',
-    description: 'Connect your Badger or Paytaca wallet',
+    description: 'Connect your Paytaca wallet extension',
     Icon: Chrome,
     installUrl: 'https://chromewebstore.google.com/detail/paytaca/pakphhpnneopheifihmjcjnbdbhaaiaa',
   },
@@ -153,11 +153,10 @@ export function WalletModal({
                       key={wallet.type}
                       onClick={() => handleConnect(wallet.type)}
                       disabled={isConnecting}
-                      className={`w-full p-4 border rounded-xl transition-all hover:border-[#b2ac88] hover:shadow-md group bg-white dark:bg-[#1a1a1a] ${
-                        isConnecting && selectedWallet === wallet.type
+                      className={`w-full p-4 border rounded-xl transition-all hover:border-[#b2ac88] hover:shadow-md group bg-white dark:bg-[#1a1a1a] ${isConnecting && selectedWallet === wallet.type
                           ? 'border-[#b2ac88] bg-[#b2ac88]/5 dark:bg-[#b2ac88]/10'
                           : 'border-gray-200 dark:border-gray-700'
-                      } ${isConnecting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        } ${isConnecting ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
