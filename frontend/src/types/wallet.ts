@@ -8,7 +8,8 @@
 
 export enum WalletType {
   PAYTACA = 'paytaca',           // Paytaca browser extension
-  WALLETCONNECT = 'walletconnect', // WalletConnect v2 (Cashonize, Zapit, etc.)
+  CASHONIZE = 'cashonize',       // Cashonize mobile wallet (CashScript-aware)
+  WALLETCONNECT = 'walletconnect', // WalletConnect v2 (Zapit, etc.)
   MAINNET = 'mainnet',           // mainnet.cash (seed phrase wallet)
 }
 

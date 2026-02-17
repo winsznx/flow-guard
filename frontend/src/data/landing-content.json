@@ -1,0 +1,482 @@
+{
+    "meta": {
+        "product": "FlowGuard",
+        "tagline": "Safe, automated, on-chain treasury management for Bitcoin Cash",
+        "fonts": {
+            "display": "DM Serif Display",
+            "text": "IBM Plex Sans",
+            "mono": "IBM Plex Mono"
+        },
+        "colors": {
+            "primary": "#0a0a0a",
+            "accent": "#00ff41",
+            "warning": "#ff6b35",
+            "background": "#ffffff",
+            "surface": "#fafafa",
+            "border": "#e5e5e5"
+        }
+    },
+    "sections": [
+        {
+            "id": "header",
+            "type": "navigation",
+            "content": {
+                "logo": "FlowGuard 🛡️",
+                "links": [
+                    {
+                        "label": "Features",
+                        "href": "#features"
+                    },
+                    {
+                        "label": "Governance",
+                        "href": "#governance"
+                    },
+                    {
+                        "label": "Security",
+                        "href": "#security"
+                    },
+                    {
+                        "label": "Docs",
+                        "href": "/docs"
+                    }
+                ],
+                "cta": {
+                    "label": "Launch App",
+                    "href": "/vaults/create"
+                }
+            }
+        },
+        {
+            "id": "hero",
+            "type": "hero",
+            "content": {
+                "headline": "Treasury Management That Enforces Itself",
+                "subheadline": "FlowGuard locks your BCH in covenant-controlled vaults with scheduled releases, multi-party approvals, and spending caps—all enforced on-chain. No custody handoff. No manual execution.",
+                "primaryCta": {
+                    "label": "Create a Vault",
+                    "href": "/vaults/create"
+                },
+                "secondaryCta": {
+                    "label": "Read Documentation",
+                    "href": "/docs"
+                },
+                "visual": "vault_schematic_diagram"
+            }
+        },
+        {
+            "id": "social_proof",
+            "type": "badge_bar",
+            "content": {
+                "badges": [
+                    "Bitcoin Cash",
+                    "CashTokens",
+                    "Chipnet Live",
+                    "Covenants",
+                    "Layla CHIPs",
+                    "Open Source"
+                ]
+            }
+        },
+        {
+            "id": "problem",
+            "type": "problem_statement",
+            "content": {
+                "headline": "Treasury Operations Fail When Execution Is Manual",
+                "problems": [
+                    {
+                        "title": "Spreadsheet Governance",
+                        "description": "Payouts tracked in Google Sheets. Approvals happen in Telegram. No on-chain proof."
+                    },
+                    {
+                        "title": "Multisig Fatigue",
+                        "description": "Signers burn out. Transactions pile up. Emergency payouts bypass process."
+                    },
+                    {
+                        "title": "Budget Drift",
+                        "description": "Spending caps exist in docs, not code. Enforcement is social pressure."
+                    }
+                ]
+            }
+        },
+        {
+            "id": "solution",
+            "type": "solution_diagram",
+            "content": {
+                "headline": "FlowGuard Vaults: Policy-Driven Treasury Execution",
+                "description": "A vault is a covenant-controlled UTXO. Policies are encoded in the contract. Execution requires valid transactions that satisfy the rules—no backend can override them.",
+                "diagram_nodes": [
+                    "Vault UTXO",
+                    "Proposal Creation",
+                    "M-of-N Approval",
+                    "Scheduled Release",
+                    "Payout Execution"
+                ]
+            }
+        },
+        {
+            "id": "features",
+            "type": "feature_grid",
+            "content": {
+                "headline": "Core Features",
+                "features": [
+                    {
+                        "icon": "clock",
+                        "title": "Recurring Unlock Schedules",
+                        "description": "Configure periodic releases (weekly, monthly, custom intervals). Deterministic cycle logic prevents releases beyond the configured schedule."
+                    },
+                    {
+                        "icon": "users",
+                        "title": "Multi-Signature Approval",
+                        "description": "Set M-of-N thresholds (2-of-3, 3-of-5, etc.). No single party can drain the vault. Different actions can require different thresholds."
+                    },
+                    {
+                        "icon": "shield",
+                        "title": "Spending Guardrails",
+                        "description": "Caps per proposal, per period, per recipient. Allowlists and timelocks. All enforced by covenant logic."
+                    },
+                    {
+                        "icon": "eye",
+                        "title": "Full Transparency",
+                        "description": "Every vault action is visible on-chain: creation, proposals, approvals, executions, cycle releases."
+                    },
+                    {
+                        "icon": "lock",
+                        "title": "Non-Custodial Security",
+                        "description": "You control your keys. Funds locked in covenant-controlled UTXOs. No admin backdoors."
+                    },
+                    {
+                        "icon": "zap",
+                        "title": "BCH Native",
+                        "description": "Built with CashScript on Bitcoin Cash. Uses covenant technology for efficient on-chain logic."
+                    }
+                ]
+            }
+        },
+        {
+            "id": "governance",
+            "type": "governance_section",
+            "content": {
+                "headline": "CashTokens & DAO Governance",
+                "description": "FlowGuard vaults can hold and control BCH, CashTokens Fungible Tokens (FT), and NFTs. This enables DAO governance tokens, token vesting schedules, and token-weighted proposal voting.",
+                "capabilities": [
+                    {
+                        "title": "Token Vesting",
+                        "description": "Create vesting vaults that release governance tokens by schedule with cliffs and interval-linear vesting."
+                    },
+                    {
+                        "title": "Token-Weighted Voting",
+                        "description": "Optional DAO mode where proposals require governance voting with weight derived from CashToken FT holdings."
+                    },
+                    {
+                        "title": "Multi-Asset Treasuries",
+                        "description": "Single vault can manage BCH + multiple CashTokens FTs + NFTs with unified policy enforcement."
+                    }
+                ]
+            }
+        },
+        {
+            "id": "scheduling",
+            "type": "scheduling_section",
+            "content": {
+                "headline": "Interval-Based Execution, Not Streaming",
+                "description": "Bitcoin Cash uses a UTXO model. FlowGuard executes treasury actions in discrete, verifiable intervals. The protocol guarantees correctness—rules cannot be violated—and execution happens when an authorized party broadcasts the valid transaction.",
+                "features": [
+                    "Recurring unlock cycles (weekly, monthly, custom)",
+                    "Cliff periods before first release",
+                    "Interval-linear vesting for token distributions",
+                    "Deterministic schedule enforcement"
+                ]
+            }
+        },
+        {
+            "id": "guardrails",
+            "type": "guardrails_section",
+            "content": {
+                "headline": "Spending Guardrails",
+                "description": "Set policy rules that the covenant enforces at execution time.",
+                "guardrails": [
+                    {
+                        "title": "Caps Per Proposal",
+                        "description": "Maximum amount for any single proposal"
+                    },
+                    {
+                        "title": "Caps Per Period",
+                        "description": "Maximum spending per cycle/interval"
+                    },
+                    {
+                        "title": "Caps Per Recipient",
+                        "description": "Limits on how much any address can receive"
+                    },
+                    {
+                        "title": "Role-Based Approvals",
+                        "description": "Different thresholds for different action types"
+                    },
+                    {
+                        "title": "Emergency Pause",
+                        "description": "Optional pause mechanism for critical situations"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "developer",
+            "type": "developer_section",
+            "content": {
+                "headline": "Built for Integration",
+                "description": "FlowGuard provides transaction templates, policy simulation, and indexer support for fast queries.",
+                "code_example": "const vault = new VaultContract({\n  signers: [pk1, pk2, pk3],\n  threshold: 2,\n  cycleDuration: 30 * 24 * 60 * 60,\n  spendingCap: 1000000\n});\n\nconst proposal = vault.createProposal({\n  recipient: recipientAddress,\n  amount: 500000,\n  proposalId: 1\n});\n\nawait vault.executeProposal(proposal);",
+                "links": [
+                    {
+                        "label": "Documentation",
+                        "href": "/docs"
+                    },
+                    {
+                        "label": "GitHub",
+                        "href": "https://github.com/yourusername/flowguard"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "status",
+            "type": "status_section",
+            "content": {
+                "headline": "Current Status & Roadmap",
+                "current": {
+                    "title": "Live on Chipnet",
+                    "description": "Working version deployed. Basic multisig contract handling real transactions. Create vault → propose → approve → execute workflow functional."
+                },
+                "upcoming": {
+                    "title": "Advanced Contracts Ready",
+                    "description": "Contracts leveraging BCH 2026 upgrade features (Loops, Functions, Bitwise, P2S) are written and tested. Pending CHIPs activation on chipnet (November 2025)."
+                }
+            }
+        },
+        {
+            "id": "security",
+            "type": "security_section",
+            "content": {
+                "headline": "Security & Trust",
+                "guarantees": [
+                    {
+                        "title": "Non-Custodial by Design",
+                        "description": "No admin keys. No custodial holding accounts. You maintain full control of your private keys."
+                    },
+                    {
+                        "title": "On-Chain Enforcement",
+                        "description": "All rules enforced by Bitcoin Cash covenants. Policies cannot be bypassed by backend services."
+                    },
+                    {
+                        "title": "Scheduled budget unlocks",
+                        "description": "Budgets release on fixed intervals — enforced by the script."
+                    },
+                    {
+                        "title": "Verifiable treasury state",
+                        "description": "All transitions are provable from the chain."
+                    },
+                    {
+                        "title": "Open Source",
+                        "description": "All contract code is open for review and audit. Designed for audit. Built in public."
+                    }
+                ],
+                "audit_status": "Contracts designed for professional audit. Formal audit planned before mainnet deployment."
+            }
+        },
+        {
+            "id": "comparison",
+            "type": "comparison_table",
+            "content": {
+                "headline": "FlowGuard vs Manual Treasury Management",
+                "columns": [
+                    "Manual Multisig + Spreadsheets",
+                    "Basic Multisig",
+                    "FlowGuard"
+                ],
+                "rows": [
+                    {
+                        "feature": "Recurring Releases",
+                        "values": [
+                            "Manual tracking",
+                            "Manual execution",
+                            "Automated on-chain"
+                        ]
+                    },
+                    {
+                        "feature": "Spending Caps",
+                        "values": [
+                            "Social enforcement",
+                            "Not enforced",
+                            "Covenant-enforced"
+                        ]
+                    },
+                    {
+                        "feature": "Approval Tracking",
+                        "values": [
+                            "Spreadsheets",
+                            "On-chain sigs",
+                            "On-chain + policy"
+                        ]
+                    },
+                    {
+                        "feature": "Transparency",
+                        "values": [
+                            "Private docs",
+                            "Transaction history",
+                            "Full audit trail"
+                        ]
+                    },
+                    {
+                        "feature": "Token Support",
+                        "values": [
+                            "No",
+                            "BCH only",
+                            "BCH + CashTokens"
+                        ]
+                    },
+                    {
+                        "feature": "DAO Governance",
+                        "values": [
+                            "No",
+                            "No",
+                            "Token-weighted voting"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "id": "use_cases",
+            "type": "use_cases",
+            "content": {
+                "headline": "Built for Serious Teams",
+                "cases": [
+                    {
+                        "title": "Founders & Teams",
+                        "description": "Automate payroll and operational expenses with board approval requirements and spending caps.",
+                        "features": [
+                            "Recurring payroll",
+                            "Vendor payments",
+                            "Budget enforcement"
+                        ]
+                    },
+                    {
+                        "title": "DAOs",
+                        "description": "Manage community treasuries with transparent governance and recurring contributor payments.",
+                        "features": [
+                            "Governance voting",
+                            "Contributor stipends",
+                            "Grant programs"
+                        ]
+                    },
+                    {
+                        "title": "Ecosystem Programs",
+                        "description": "Run incentive programs with public accountability and milestone-based releases.",
+                        "features": [
+                            "Incentive distribution",
+                            "Milestone releases",
+                            "Public auditability"
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "id": "covenant_tech",
+            "type": "technical_section",
+            "content": {
+                "headline": "Powered by Layla Covenant Technology",
+                "description": "FlowGuard leverages Bitcoin Cash's advanced covenant features to create efficient, modular treasury logic.",
+                "technologies": [
+                    {
+                        "name": "Loops",
+                        "description": "Enables bounded iteration for validating signer sets, approval proofs, and policy checks."
+                    },
+                    {
+                        "name": "P2S (Pay-to-Script)",
+                        "description": "Safer and more scalable covenant deployments with improved standard handling."
+                    },
+                    {
+                        "name": "Bitwise Operations",
+                        "description": "Efficient state encoding and policy flags for compact on-chain representation."
+                    },
+                    {
+                        "name": "Functions",
+                        "description": "Modular, reusable covenant logic for maintainability and auditability."
+                    }
+                ]
+            }
+        },
+        {
+            "id": "final_cta",
+            "type": "cta_section",
+            "content": {
+                "headline": "Put Your Treasury on Rules, Not Trust",
+                "description": "FlowGuard is protocol infrastructure for teams that take treasury security seriously.",
+                "cta": {
+                    "label": "Launch FlowGuard",
+                    "href": "/vaults/create"
+                }
+            }
+        },
+        {
+            "id": "footer",
+            "type": "footer",
+            "content": {
+                "columns": [
+                    {
+                        "title": "Product",
+                        "links": [
+                            {
+                                "label": "Features",
+                                "href": "#features"
+                            },
+                            {
+                                "label": "Governance",
+                                "href": "#governance"
+                            },
+                            {
+                                "label": "Security",
+                                "href": "#security"
+                            },
+                            {
+                                "label": "Status",
+                                "href": "#status"
+                            }
+                        ]
+                    },
+                    {
+                        "title": "Developers",
+                        "links": [
+                            {
+                                "label": "Documentation",
+                                "href": "/docs"
+                            },
+                            {
+                                "label": "GitHub",
+                                "href": "https://github.com"
+                            },
+                            {
+                                "label": "SDK",
+                                "href": "/docs#sdk"
+                            }
+                        ]
+                    },
+                    {
+                        "title": "Community",
+                        "links": [
+                            {
+                                "label": "Twitter",
+                                "href": "https://twitter.com"
+                            },
+                            {
+                                "label": "Discord",
+                                "href": "https://discord.com"
+                            }
+                        ]
+                    }
+                ],
+                "copyright": "© 2026 FlowGuard. Built for the Bitcoin Cash ecosystem."
+            }
+        }
+    ]
+}
