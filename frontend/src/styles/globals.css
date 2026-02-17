@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@theme {
+  /* FlowGuard Brand Palette (Designer Assets) - SINGLE SOURCE OF TRUTH */
+  --color-brand-50: #E8F4ED;
+  --color-brand-100: #C8E3D4;
+  --color-brand-300: #76B585;
+  --color-brand-700: #2B5858;
+
+  /* Utility Colors */
+  --color-white: #FFFFFF;
+  --color-whiteAlt: #F8F9FA;
+  --color-black: #000000;
+
+  /* App Surfaces */
+  --color-background: #FFFFFF;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #E8F4ED;
+  --color-surfaceAlt: #E8F4ED;
+
+  /* Borders */
+  --color-border: #75B06F;
+  --color-border-hover: #36656B;
+  --color-borderHover: #36656B;
+
+  /* Text (neutral derivatives for readability) */
+  --color-text-primary: #1F2A1F;
+  --color-textPrimary: #1F2A1F;
+  --color-text-secondary: #36656B;
+  --color-textSecondary: #36656B;
+  --color-text-muted: #556255;
+  --color-textMuted: #556255;
+
+  /* Interactive States */
+  --color-primary: #36656B;
+  --color-primary-hover: #2A4F54;
+  --color-primaryHover: #1E3E3E;
+  --color-primary-soft: #C8E3D4;
+  --color-primarySoft: #C8E3D4;
+
+  /* Accents */
+  --color-accent: #75B06F;
+  --color-accent-hover: #5E9A5D;
+  --color-accentHover: #5E9A5D;
+  --color-accent-dim: rgba(117, 176, 111, 0.1);
+  --color-accentDim: rgba(117, 176, 111, 0.1);
+
+  /* Secondary (Yellow/Gold from designer) */
+  --color-secondary: #DAD887;
+  --color-secondary-hover: #CAC877;
+  --color-secondaryHover: #C8A857;
+
+  /* Highlight (Bright yellow-green from designer) */
+  --color-highlight: #F0F8A4;
+
+  /* Semantic (mapped to palette) */
+  --color-success: #75B06F;
+  --color-warning: #DAD887;
+  --color-error: #E85858;
+  --color-info: #36656B;
+
+  /* Focus Ring */
+  --color-focus-ring: #75B06F;
+  --color-focusRing: #75B06F;
+
+  /* Typography */
+  --font-display: 'DM Serif Display', serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-sans: 'IBM Plex Sans', sans-serif;
+
+  /* Border Radius */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  background-color: var(--color-background);
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(117, 176, 111, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(117, 176, 111, 0.1) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
