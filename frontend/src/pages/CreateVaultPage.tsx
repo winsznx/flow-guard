@@ -105,19 +105,19 @@ export default function CreateVaultPage() {
       if (vaultData.unlockAmount <= 0) {
         throw new Error('Unlock amount must be greater than 0');
       }
-      
+
       // Validate deposit amount is reasonable
       // For chipnet, max 100 BCH is reasonable; for mainnet, max 1000 BCH
       const network = wallet.network || 'chipnet';
       const maxDeposit = network === 'mainnet' ? 1000 : 100;
-      
+
       if (vaultData.totalDeposit > maxDeposit) {
         throw new Error(
           `Deposit amount (${vaultData.totalDeposit} BCH) exceeds the maximum allowed for ${network} (${maxDeposit} BCH). ` +
           `If you intended to enter satoshis, please convert: ${vaultData.totalDeposit} satoshis = ${(vaultData.totalDeposit / 100000000).toFixed(8)} BCH`
         );
       }
-      
+
       // Warn if amount seems suspiciously large (whole number > 1000 might be satoshis)
       if (vaultData.totalDeposit >= 1000 && vaultData.totalDeposit === Math.floor(vaultData.totalDeposit)) {
         const possibleSatoshis = vaultData.totalDeposit;
@@ -130,7 +130,7 @@ export default function CreateVaultPage() {
           );
         }
       }
-      
+
       if (validSigners.length !== 3) {
         throw new Error('Exactly 3 signers are required for blockchain deployment');
       }
@@ -145,7 +145,7 @@ export default function CreateVaultPage() {
       if (wallet.balance) {
         const walletBalanceBCH = wallet.balance.bch || 0;
         const requiredAmount = vaultData.totalDeposit + 0.0001; // Add small buffer for fees
-        
+
         if (walletBalanceBCH < requiredAmount) {
           throw new Error(
             `Insufficient balance. You have ${walletBalanceBCH.toFixed(4)} BCH, but need ${requiredAmount.toFixed(4)} BCH (including fees). ` +
@@ -166,7 +166,7 @@ export default function CreateVaultPage() {
       // Step 2: Deposit funds to vault contract
       if (vaultData.totalDeposit > 0) {
         setDepositStatus('depositing');
-        
+
         try {
           // Deposit BCH to the contract address
           // For mainnet.cash wallets, show confirmation dialog
@@ -189,7 +189,7 @@ export default function CreateVaultPage() {
           );
 
           setDepositStatus('success');
-          
+
           // Small delay to show success message
           await new Promise(resolve => setTimeout(resolve, 1500));
         } catch (depositError: any) {
@@ -217,406 +217,373 @@ export default function CreateVaultPage() {
   return (
     <>
       <TransactionConfirmModal />
-    <div className="section-spacious">
-      <div className="max-w-3xl mx-auto">
-        <div className="mb-8">
-          <Link to="/vaults" className="text-[--color-primary] hover:underline">
-            ← Back to Vaults
-          </Link>
-        </div>
-
-        <h1 className="text-4xl font-bold mb-8 section-bold">Create Vault</h1>
-
-        {/* Error Display */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-            <p className="text-red-800 dark:text-red-200">{error}</p>
+      <div className="py-8">
+        <div className="max-w-3xl mx-auto px-6">
+          <div className="mb-8">
+            <Link to="/vaults" className="text-sm font-mono text-textMuted hover:text-textPrimary transition-colors">
+              ← Back to Vaults
+            </Link>
           </div>
-        )}
 
-        {/* Deposit Status Display */}
-        {isSubmitting && depositStatus !== 'idle' && (
-          <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-            {depositStatus === 'creating' && (
-              <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-                <p className="text-blue-800 dark:text-blue-200">
-                  Creating vault and deploying contract...
-                </p>
-              </div>
-            )}
-            {depositStatus === 'depositing' && (
-              <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-                <p className="text-blue-800 dark:text-blue-200">
-                  Depositing {formData.depositAmount} BCH to vault... Please confirm the transaction in your wallet.
-                </p>
-              </div>
-            )}
-            {depositStatus === 'updating' && (
-              <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-                <p className="text-blue-800 dark:text-blue-200">
-                  Updating vault balance...
-                </p>
-              </div>
-            )}
-            {depositStatus === 'success' && (
-              <div className="flex items-center gap-3">
-                <div className="h-5 w-5 rounded-full bg-green-500 flex items-center justify-center">
-                  <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
+          <h1 className="text-4xl md:text-5xl font-display mb-8 tracking-tight">Create Vault</h1>
+
+          {/* Error Display */}
+          {error && (
+            <div className="mb-8 p-4 bg-error/5 border border-error/20 rounded-lg">
+              <p className="text-error font-mono text-sm">{error}</p>
+            </div>
+          )}
+
+          {/* Deposit Status Display */}
+          {isSubmitting && depositStatus !== 'idle' && (
+            <div className="mb-8 p-6 bg-accent/5 border border-accent/20 rounded-lg">
+              {depositStatus === 'creating' && (
+                <div className="flex items-center gap-4">
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent"></div>
+                  <p className="text-textPrimary font-mono text-sm">
+                    Creating vault and deploying contract...
+                  </p>
                 </div>
-                <p className="text-green-800 dark:text-green-200">
-                  Vault created and funded successfully!
-                  {txid && (
-                    <span className="block text-sm mt-1">
-                      Transaction: <a 
-                        href={`https://chipnet.imaginary.cash/tx/${txid}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline"
-                      >
-                        {txid.substring(0, 16)}...
-                      </a>
-                    </span>
-                  )}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Progress Steps */}
-        <div className="mb-8">
-          <div className="flex justify-between">
-            {[1, 2, 3, 4, 5, 6].map((s) => (
-              <div key={s} className="flex-1 flex items-center">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    s <= step ? 'bg-[--color-primary] text-white' : 'bg-gray-200 text-gray-600'
-                  }`}
-                >
-                  {s}
-                </div>
-                {s < 6 && (
-                  <div
-                    className={`flex-1 h-1 mx-2 ${
-                      s < step ? 'bg-[--color-primary]' : 'bg-gray-200'
-                    }`}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <Card padding="lg">
-          {/* Step 1: Basic Info */}
-          {step === 1 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-semibold">Basic Information</h2>
-              <div>
-                <label className="block text-sm font-medium mb-2">Vault Name</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => handleInputChange('name', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                  placeholder="e.g., DAO Treasury"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => handleInputChange('description', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                  rows={4}
-                  placeholder="Describe the purpose of this vault..."
-                />
-              </div>
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.isPublic}
-                    onChange={(e) => handleInputChange('isPublic', e.target.checked)}
-                    className="w-5 h-5 text-green-500 border-gray-300 rounded focus:ring-2 focus:ring-green-500"
-                  />
-                  <div>
-                    <span className="block text-sm font-medium">Make vault public</span>
-                    <span className="block text-xs text-gray-600 mt-1">
-                      Public vaults can be viewed by anyone, but only signers can create proposals and approve them.
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* Step 2: Deposit Amount */}
-          {step === 2 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-semibold">Deposit Amount</h2>
-              <div>
-                <label className="block text-sm font-medium mb-2">Total Deposit (BCH)</label>
-                <input
-                  type="number"
-                  value={formData.depositAmount}
-                  onChange={(e) => handleInputChange('depositAmount', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                  placeholder="0.00"
-                  step="0.01"
-                  min="0.00001"
-                  max={wallet.network === 'mainnet' ? 1000 : 100}
-                />
-                <p className="mt-2 text-sm text-gray-600">
-                  This is the total amount of BCH you'll deposit into the vault.
-                  {wallet.network === 'chipnet' && (
-                    <span className="block mt-1 text-amber-600 dark:text-amber-400">
-                      ⚠️ Maximum {100} BCH for chipnet testing. Enter amount in BCH (not satoshis).
-                    </span>
-                  )}
-                  {wallet.network === 'mainnet' && (
-                    <span className="block mt-1 text-amber-600 dark:text-amber-400">
-                      ⚠️ Maximum {1000} BCH for mainnet. Enter amount in BCH (not satoshis).
-                    </span>
-                  )}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Step 3: Unlock Schedule */}
-          {step === 3 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-semibold">Unlock Schedule</h2>
-              <div>
-                <label className="block text-sm font-medium mb-2">Cycle Duration (seconds)</label>
-                <select
-                  value={formData.cycleDuration}
-                  onChange={(e) => handleInputChange('cycleDuration', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                >
-                  <option value="604800">Weekly (7 days)</option>
-                  <option value="2592000">Monthly (30 days)</option>
-                  <option value="7776000">Quarterly (90 days)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Unlock Amount per Cycle (BCH)</label>
-                <input
-                  type="number"
-                  value={formData.unlockAmount}
-                  onChange={(e) => handleInputChange('unlockAmount', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                  placeholder="0.00"
-                  step="0.01"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Step 4: Signers and Threshold */}
-          {step === 4 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-semibold">Signers and Approval Threshold</h2>
-
-              {/* Warning about blockchain deployment */}
-              <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                  ⚠️ <strong>Blockchain Deployment Required:</strong> This vault will be deployed as a smart contract on Bitcoin Cash chipnet.
-                  You must provide exactly 3 signer addresses with their public keys.
-                </p>
-              </div>
-
-              {/* Auto-fill button */}
-              {wallet.address && wallet.publicKey && (
-                <Button
-                  variant="outline"
-                  onClick={fillCreatorInfo}
-                  type="button"
-                  className="mb-4"
-                >
-                  Auto-fill my wallet as Signer 1
-                </Button>
               )}
-
-              <div>
-                <label className="block text-sm font-medium mb-2">Approval Threshold</label>
-                <input
-                  type="number"
-                  value={formData.approvalThreshold}
-                  onChange={(e) => handleInputChange('approvalThreshold', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                  min="1"
-                  max="3"
-                />
-                <p className="mt-2 text-sm text-gray-600">
-                  Number of signers required to approve a proposal (e.g., 2-of-3)
-                </p>
-              </div>
-
-              <div className="space-y-6">
-                <label className="block text-sm font-medium">Signers (exactly 3 required)</label>
-                {formData.signers.map((signer, index) => (
-                  <div key={index} className="space-y-2 p-4 border border-gray-200 rounded-lg">
-                    <div className="font-medium text-sm text-gray-700 dark:text-gray-300">
-                      Signer {index + 1}
-                    </div>
-                    <input
-                      type="text"
-                      value={signer}
-                      onChange={(e) => handleSignerChange(index, e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                      placeholder={`Signer ${index + 1} BCH address (bitcoincash:...)`}
-                    />
-                    <input
-                      type="text"
-                      value={formData.signerPubkeys[index]}
-                      onChange={(e) => handlePubkeyChange(index, e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary font-mono text-sm"
-                      placeholder={`Signer ${index + 1} public key (hex format, 66 chars for compressed)`}
-                    />
-                    {formData.signerPubkeys[index] && (
-                      <p className="text-xs text-green-600">
-                        ✓ Public key provided ({formData.signerPubkeys[index].length} chars)
-                        {formData.signerPubkeys[index].length !== 66 && formData.signerPubkeys[index].length > 0 && (
-                          <span className="text-yellow-600 ml-2">⚠ Expected 66 characters for compressed public key</span>
-                        )}
-                      </p>
+              {depositStatus === 'depositing' && (
+                <div className="flex items-center gap-4">
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent"></div>
+                  <p className="text-textPrimary font-mono text-sm">
+                    Depositing {formData.depositAmount} BCH to vault... Please confirm in wallet.
+                  </p>
+                </div>
+              )}
+              {depositStatus === 'updating' && (
+                <div className="flex items-center gap-4">
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent"></div>
+                  <p className="text-textPrimary font-mono text-sm">
+                    Updating vault balance...
+                  </p>
+                </div>
+              )}
+              {depositStatus === 'success' && (
+                <div className="flex items-center gap-4">
+                  <div className="h-5 w-5 rounded-full bg-accent flex items-center justify-center">
+                    <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                  <div className="text-textPrimary font-mono text-sm">
+                    <p>Vault created and funded successfully!</p>
+                    {txid && (
+                      <span className="block text-xs mt-1 text-textMuted">
+                        TX: <a
+                          href={`https://chipnet.imaginary.cash/tx/${txid}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline hover:text-accent"
+                        >
+                          {txid.substring(0, 16)}...
+                        </a>
+                      </span>
                     )}
                   </div>
-                ))}
-                <p className="text-sm text-gray-600">
-                  <strong>Note:</strong> Public keys must be in hex format (66 characters for compressed keys, starting with 02 or 03). 
-                  Ask each signer to provide their public key from their BCH wallet. The public key is required for on-chain contract deployment.
-                </p>
-              </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Step 5: Spending Cap */}
-          {step === 5 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-semibold">Spending Cap (Optional)</h2>
-              <div>
-                <label className="block text-sm font-medium mb-2">Maximum Spending per Period (BCH)</label>
-                <input
-                  type="number"
-                  value={formData.spendingCap}
-                  onChange={(e) => handleInputChange('spendingCap', e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary"
-                  placeholder="Leave empty for no cap"
-                  step="0.01"
-                />
-                <p className="mt-2 text-sm text-gray-600">
-                  Optional: Set a maximum amount that can be spent per unlock period.
-                </p>
-              </div>
-            </div>
-          )}
+          {/* Progress Steps */}
+          <div className="mb-12">
+            <div className="flex justify-between items-center relative">
+              {/* Connecting Line */}
+              <div className="absolute left-0 top-1/2 w-full h-[1px] bg-border/30 -z-10" />
 
-          {/* Step 6: Review */}
-          {step === 6 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-semibold">Review and Confirm</h2>
-              <div className="space-y-4">
+              {[1, 2, 3, 4, 5, 6].map((s) => (
+                <div key={s} className="bg-background px-2">
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-xs border transition-colors duration-300 ${s <= step
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-white text-textMuted border-border'
+                      }`}
+                  >
+                    {s}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between mt-2 px-1">
+              <span className="text-[10px] uppercase tracking-widest text-textMuted">Basics</span>
+              <span className="text-[10px] uppercase tracking-widest text-textMuted">Funds</span>
+              <span className="text-[10px] uppercase tracking-widest text-textMuted">Schedule</span>
+              <span className="text-[10px] uppercase tracking-widest text-textMuted">Signers</span>
+              <span className="text-[10px] uppercase tracking-widest text-textMuted">Cap</span>
+              <span className="text-[10px] uppercase tracking-widest text-textMuted">Review</span>
+            </div>
+          </div>
+
+          <Card padding="xl" className="border-border/40 shadow-sm">
+            {/* Step 1: Basic Info */}
+            {step === 1 && (
+              <div className="space-y-8">
+                <h2 className="text-2xl font-display">Basic Information</h2>
                 <div>
-                  <span className="text-sm text-gray-600">Vault Name:</span>
-                  <p className="font-semibold">{formData.name || 'Not set'}</p>
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Vault Name</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => handleInputChange('name', e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
+                    placeholder="e.g., DAO Treasury"
+                  />
                 </div>
                 <div>
-                  <span className="text-sm text-gray-600">Deposit Amount:</span>
-                  <p className="font-semibold">{formData.depositAmount || '0'} BCH</p>
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Description</label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => handleInputChange('description', e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
+                    rows={4}
+                    placeholder="Describe the purpose of this vault..."
+                  />
                 </div>
                 <div>
-                  <span className="text-sm text-gray-600">Unlock Schedule:</span>
-                  <p className="font-semibold">
-                    {formData.unlockAmount || '0'} BCH every{' '}
-                    {formData.cycleDuration === '604800'
-                      ? 'week'
-                      : formData.cycleDuration === '2592000'
-                      ? 'month'
-                      : 'quarter'}
+                  <label className="flex items-center gap-4 cursor-pointer p-4 border border-border rounded-lg hover:bg-surfaceAlt transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={formData.isPublic}
+                      onChange={(e) => handleInputChange('isPublic', e.target.checked)}
+                      className="w-5 h-5 text-accent border-border rounded focus:ring-accent"
+                    />
+                    <div>
+                      <span className="block text-sm font-bold uppercase tracking-wide">Make vault public</span>
+                      <span className="block text-xs text-textMuted mt-1">
+                        Public vaults can be viewed by anyone, but only signers can create proposals and approve them.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Deposit Amount */}
+            {step === 2 && (
+              <div className="space-y-8">
+                <h2 className="text-2xl font-display">Deposit Amount</h2>
+                <div>
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Total Deposit (BCH)</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={formData.depositAmount}
+                      onChange={(e) => handleInputChange('depositAmount', e.target.value)}
+                      className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
+                      placeholder="0.00"
+                      step="0.01"
+                      min="0.00001"
+                      max={wallet.network === 'mainnet' ? 1000 : 100}
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">BCH</span>
+                  </div>
+                  <p className="mt-3 text-xs text-textMuted font-mono">
+                    This is the total amount of BCH you'll deposit into the vault.
+                    {wallet.network === 'chipnet' && (
+                      <span className="block mt-1 text-warning">
+                        ⚠️ Maximum {100} BCH for chipnet testing.
+                      </span>
+                    )}
                   </p>
                 </div>
+              </div>
+            )}
+
+            {/* Step 3: Unlock Schedule */}
+            {step === 3 && (
+              <div className="space-y-8">
+                <h2 className="text-2xl font-display">Unlock Schedule</h2>
                 <div>
-                  <span className="text-sm text-gray-600">Approval Threshold:</span>
-                  <p className="font-semibold">
-                    {formData.approvalThreshold}-of-{formData.signers.filter(s => s).length}
-                  </p>
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Cycle Duration</label>
+                  <select
+                    value={formData.cycleDuration}
+                    onChange={(e) => handleInputChange('cycleDuration', e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm appearance-none"
+                  >
+                    <option value="604800">Weekly (7 days)</option>
+                    <option value="2592000">Monthly (30 days)</option>
+                    <option value="7776000">Quarterly (90 days)</option>
+                  </select>
                 </div>
                 <div>
-                  <span className="text-sm text-gray-600">Signers:</span>
-                  <div className="space-y-2 mt-2">
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Unlock Amount per Cycle</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={formData.unlockAmount}
+                      onChange={(e) => handleInputChange('unlockAmount', e.target.value)}
+                      className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
+                      placeholder="0.00"
+                      step="0.01"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">BCH</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Signers and Threshold */}
+            {step === 4 && (
+              <div className="space-y-8">
+                <h2 className="text-2xl font-display">Signers & Threshold</h2>
+
+                <div className="p-4 bg-accent/5 border border-accent/20 rounded-lg">
+                  <p className="text-xs font-mono text-textMuted">
+                    <strong className="text-textPrimary">BLOCKCHAIN DEPLOYMENT:</strong> Smart contract requires exactly 3 valid signer addresses and public keys.
+                  </p>
+                </div>
+
+                {wallet.address && wallet.publicKey && (
+                  <button
+                    onClick={fillCreatorInfo}
+                    type="button"
+                    className="text-xs uppercase tracking-wider font-bold text-accent hover:text-accent-hover transition-colors"
+                  >
+                    + Auto-fill my wallet as Signer 1
+                  </button>
+                )}
+
+                <div>
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Approval Threshold</label>
+                  <input
+                    type="number"
+                    value={formData.approvalThreshold}
+                    onChange={(e) => handleInputChange('approvalThreshold', e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
+                    min="1"
+                    max="3"
+                  />
+                  <p className="mt-2 text-xs text-textMuted font-mono">
+                    M-of-N required to approve proposals.
+                  </p>
+                </div>
+
+                <div className="space-y-6">
+                  <label className="block text-sm font-bold uppercase tracking-wide">Signers (3 Required)</label>
+                  {formData.signers.map((signer, index) => (
+                    <div key={index} className="space-y-3 p-6 border border-border rounded-lg bg-whiteAlt/50">
+                      <div className="font-bold text-xs uppercase tracking-wider text-textMuted">
+                        Signer {index + 1}
+                      </div>
+                      <input
+                        type="text"
+                        value={signer}
+                        onChange={(e) => handleSignerChange(index, e.target.value)}
+                        className="w-full px-4 py-2 bg-white border border-border rounded focus:outline-none focus:border-primary font-mono text-xs"
+                        placeholder="BCH Address (bitcoincash:...)"
+                      />
+                      <input
+                        type="text"
+                        value={formData.signerPubkeys[index]}
+                        onChange={(e) => handlePubkeyChange(index, e.target.value)}
+                        className="w-full px-4 py-2 bg-white border border-border rounded focus:outline-none focus:border-primary font-mono text-xs"
+                        placeholder="Public Key (hex)"
+                      />
+                      {formData.signerPubkeys[index] && (
+                        <p className="text-[10px] font-mono flex items-center gap-2">
+                          <span className="text-accent">✓ key provided</span>
+                          {formData.signerPubkeys[index].length !== 66 && (
+                            <span className="text-warning">⚠ Check length (66)</span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step 5: Spending Cap */}
+            {step === 5 && (
+              <div className="space-y-8">
+                <h2 className="text-2xl font-display">Spending Cap (Optional)</h2>
+                <div>
+                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Max Spend per Period</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={formData.spendingCap}
+                      onChange={(e) => handleInputChange('spendingCap', e.target.value)}
+                      className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
+                      placeholder="No Cap"
+                      step="0.01"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">BCH</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 6: Review */}
+            {step === 6 && (
+              <div className="space-y-8">
+                <h2 className="text-2xl font-display">Confirm Deployment</h2>
+
+                <div className="grid gap-6 md:grid-cols-2 font-mono text-sm border-t border-border pt-6">
+                  <div>
+                    <span className="text-xs uppercase text-textMuted block mb-1">Name</span>
+                    <p className="font-bold">{formData.name || 'Untitled'}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs uppercase text-textMuted block mb-1">Deposit</span>
+                    <p className="font-bold">{formData.depositAmount || '0'} BCH</p>
+                  </div>
+                  <div>
+                    <span className="text-xs uppercase text-textMuted block mb-1">Schedule</span>
+                    <p className="font-bold">{formData.unlockAmount || '0'} BCH / {formData.cycleDuration === '604800' ? 'Week' : 'Month'}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs uppercase text-textMuted block mb-1">Threshold</span>
+                    <p className="font-bold">{formData.approvalThreshold}-of-{formData.signers.filter(s => s).length}</p>
+                  </div>
+                </div>
+
+                <div className="border-t border-border pt-6">
+                  <span className="text-xs uppercase text-textMuted block mb-3">Signers</span>
+                  <div className="space-y-2">
                     {formData.signers.filter(s => s).map((signer, index) => (
-                      <div key={index} className="text-sm">
-                        <p className="font-medium">Signer {index + 1}:</p>
-                        <p className="font-mono text-xs text-gray-600 truncate">{signer}</p>
-                        {formData.signerPubkeys[index] && (
-                          <p className="font-mono text-xs text-green-600">
-                            ✓ Public key: {formData.signerPubkeys[index].substring(0, 20)}...
-                          </p>
-                        )}
+                      <div key={index} className="flex justify-between items-center text-xs font-mono p-2 bg-whiteAlt rounded">
+                        <span className="truncate w-1/3">{signer}</span>
+                        <span className="truncate w-1/3 text-textMuted">{formData.signerPubkeys[index] || '-'}</span>
                       </div>
                     ))}
                   </div>
                 </div>
-                <div>
-                  <span className="text-sm text-gray-600">Spending Cap:</span>
-                  <p className="font-semibold">
-                    {formData.spendingCap || 'No cap'}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-sm text-gray-600">Visibility:</span>
-                  <p className="font-semibold">
-                    {formData.isPublic ? 'Public' : 'Private'}
-                  </p>
-                </div>
-              </div>
 
-              {/* Blockchain deployment notice */}
-              <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                <p className="text-sm text-blue-800 dark:text-blue-200">
-                  🔗 <strong>Blockchain Deployment:</strong> Creating this vault will deploy a smart contract to Bitcoin Cash chipnet.
-                  The contract will be deployed with the 3 signers and their public keys you've provided.
-                </p>
+                <div className="p-4 bg-accent/5 border border-accent/20 rounded-lg">
+                  <p className="text-xs font-mono text-textMuted">
+                    <strong className="text-textPrimary">READY TO DEPLOY:</strong> Clicking "Deploy Vault" will initiate a blockchain transaction.
+                  </p>
+                </div>
               </div>
+            )}
+
+            {/* Navigation Buttons */}
+            <div className="flex justify-between mt-12 pt-8 border-t border-border">
+              {step > 1 ? (
+                <Button variant="outline" onClick={handleBack} disabled={isSubmitting}>
+                  BACK
+                </Button>
+              ) : (
+                <div />
+              )}
+
+              {step < 6 ? (
+                <Button onClick={handleNext}>NEXT STEP</Button>
+              ) : (
+                <Button onClick={handleSubmit} disabled={isSubmitting} variant="primary" className="shadow-lg shadow-accent/20">
+                  {isSubmitting
+                    ? 'PROCESSING...'
+                    : 'DEPLOY VAULT'}
+                </Button>
+              )}
             </div>
-          )}
-
-          {/* Navigation Buttons */}
-          <div className="flex justify-between mt-8 pt-6 border-t border-gray-200">
-            {step > 1 ? (
-              <Button variant="outline" onClick={handleBack} disabled={isSubmitting}>
-                Back
-              </Button>
-            ) : (
-              <div />
-            )}
-            {step < 6 ? (
-              <Button onClick={handleNext}>Next</Button>
-            ) : (
-              <Button onClick={handleSubmit} disabled={isSubmitting}>
-                {isSubmitting 
-                  ? depositStatus === 'creating' 
-                    ? 'Creating Vault...' 
-                    : depositStatus === 'depositing'
-                    ? 'Depositing Funds...'
-                    : depositStatus === 'updating'
-                    ? 'Updating Balance...'
-                    : 'Processing...'
-                  : 'Create Vault'}
-              </Button>
-            )}
-          </div>
-        </Card>
+          </Card>
+        </div>
       </div>
-    </div>
     </>
   );
 }

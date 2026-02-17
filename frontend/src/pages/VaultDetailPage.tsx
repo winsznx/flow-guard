@@ -3,14 +3,16 @@ import { useParams, Link } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { fetchVault, fetchProposals, approveProposal } from '../utils/api';
-import { approveProposalOnChain, executePayoutOnChain, unlockCycleOnChain } from '../utils/blockchain';
+import { approveProposalOnChain, executePayoutOnChain, unlockCycleOnChain, getExplorerTxUrl } from '../utils/blockchain';
 import { AddSignerModal } from '../components/vaults/AddSignerModal';
 import { useWallet } from '../hooks/useWallet';
-import { CheckCircle, DollarSign, Unlock, ExternalLink } from 'lucide-react';
+import { useNetwork } from '../hooks/useNetwork';
+import { CheckCircle, DollarSign, Unlock, ExternalLink, ChevronLeft, Wallet, Shield, FileText, Clock, ArrowUpRight, ArrowDownLeft, Activity, Zap, Users } from 'lucide-react';
 
 export default function VaultDetailPage() {
   const { id } = useParams<{ id: string }>();
   const wallet = useWallet();
+  const network = useNetwork();
   const [vault, setVault] = useState<any>(null);
   const [proposals, setProposals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,9 +31,7 @@ export default function VaultDetailPage() {
     if (!id || !vault?.contractAddress) return;
     try {
       setLoadingTransactions(true);
-      const API_BASE_URL = import.meta.env.VITE_API_URL ||
-        (import.meta.env.PROD ? 'https://flowguard-production.up.railway.app/api' : '/api');
-      const response = await fetch(`${API_BASE_URL}/vaults/${id}/transactions`);
+      const response = await fetch(`/api/vaults/${id}/transactions`);
       if (response.ok) {
         const data = await response.json();
         setTransactions(data.transactions || []);
@@ -82,9 +82,7 @@ export default function VaultDetailPage() {
     const loadEligibleCycles = async () => {
       if (!id || !vault?.contractAddress) return;
       try {
-        const API_BASE_URL = import.meta.env.VITE_API_URL ||
-          (import.meta.env.PROD ? 'https://flowguard-production.up.railway.app/api' : '/api');
-        const response = await fetch(`${API_BASE_URL}/vaults/${id}/cycles/eligible`);
+        const response = await fetch(`/api/vaults/${id}/cycles/eligible`);
         if (response.ok) {
           const data = await response.json();
           setEligibleCycles(data.eligibleCycles || []);
@@ -137,7 +135,7 @@ export default function VaultDetailPage() {
             }
           );
           console.log('On-chain approval successful, txid:', txid);
-          alert(`SUCCESS: Approval Successful!\n\nYour signature has been broadcast to the BCH blockchain.\n\nTransaction ID: ${txid}\n\nView on explorer: https://chipnet.chaingraph.cash/tx/${txid}`);
+          alert(`SUCCESS: Approval Successful!\n\nYour signature has been broadcast to the BCH blockchain.\n\nTransaction ID: ${txid}\n\nView on explorer: ${getExplorerTxUrl(txid, network)}`);
         } catch (onChainError: any) {
           console.warn('On-chain approval failed, falling back to database:', onChainError);
           // Fallback to database approval
@@ -223,7 +221,7 @@ export default function VaultDetailPage() {
         `SUCCESS: Payout Executed Successfully!\n\n` +
         `Funds have been sent from the vault contract to the recipient.\n\n` +
         `Transaction ID: ${txid}\n\n` +
-        `View on explorer: https://chipnet.chaingraph.cash/tx/${txid}`
+        `View on explorer: ${getExplorerTxUrl(txid, network)}`
       );
 
       // Reload proposals to show updated status
@@ -317,7 +315,7 @@ export default function VaultDetailPage() {
         `Cycle #${cycleNumber} has been unlocked on the blockchain.\n` +
         `${vault.unlockAmount || 0} BCH is now available for spending.\n\n` +
         `Transaction ID: ${txid}\n\n` +
-        `View on explorer: https://chipnet.chaingraph.cash/tx/${txid}`
+        `View on explorer: ${getExplorerTxUrl(txid, network)}`
       );
 
       // Reload vault to show updated balance and cycles
@@ -326,9 +324,7 @@ export default function VaultDetailPage() {
         setVault(vaultData);
 
         // Reload eligible cycles
-        const API_BASE_URL = import.meta.env.VITE_API_URL ||
-          (import.meta.env.PROD ? 'https://flowguard-production.up.railway.app/api' : '/api');
-        const response = await fetch(`${API_BASE_URL}/vaults/${id}/cycles/eligible`);
+        const response = await fetch(`/api/vaults/${id}/cycles/eligible`);
         if (response.ok) {
           const data = await response.json();
           setEligibleCycles(data.eligibleCycles || []);
@@ -367,8 +363,8 @@ export default function VaultDetailPage() {
 
   if (loading) {
     return (
-      <div className="section-spacious">
-        <div className="max-w-7xl mx-auto">
+      <div className="py-8">
+        <div className="max-w-7xl mx-auto px-6">
           <div className="text-center py-16">Loading vault...</div>
         </div>
       </div>
@@ -377,8 +373,8 @@ export default function VaultDetailPage() {
 
   if (error) {
     return (
-      <div className="section-spacious">
-        <div className="max-w-7xl mx-auto">
+      <div className="py-8">
+        <div className="max-w-7xl mx-auto px-6">
           <Card padding="lg" className="text-center py-16 border-2 border-red-200 bg-red-50">
             <h2 className="text-2xl font-semibold mb-4 text-red-800">Error loading vault</h2>
             <p className="text-red-600 mb-4">{error}</p>
@@ -393,8 +389,8 @@ export default function VaultDetailPage() {
 
   if (!vault) {
     return (
-      <div className="section-spacious">
-        <div className="max-w-7xl mx-auto">
+      <div className="py-8">
+        <div className="max-w-7xl mx-auto px-6">
           <Card padding="lg" className="text-center py-16">
             <h2 className="text-2xl font-semibold mb-4">Vault not found</h2>
             <Link to="/vaults">
@@ -406,380 +402,350 @@ export default function VaultDetailPage() {
     );
   }
 
-  // Calculate unlocked/locked amounts (mock for now)
+  // Calculate unlocked/locked amounts
   const unlocked = vault.unlockAmount || 0;
   const locked = (vault.totalDeposit || 0) - unlocked;
 
   return (
-    <div className="section-spacious">
-      <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <Link to="/vaults" className="text-green-600 hover:underline">
-            ← Back to Vaults
+    <div className="py-6 md:py-8">
+      <div className="max-w-7xl mx-auto px-4 md:px-6">
+        <div className="mb-6 md:mb-8">
+          <Link to="/vaults" className="text-textMuted hover:text-textPrimary font-mono text-sm flex items-center gap-2">
+            <ChevronLeft className="w-4 h-4" />
+            Back to Vaults
           </Link>
         </div>
 
-        <div className="flex justify-between items-start mb-8">
+        <div className="flex flex-col md:flex-row justify-between items-start mb-8 md:mb-10 lg:mb-12 gap-4 md:gap-6">
           <div>
-            <div className="flex items-center gap-3 mb-2">
-              <h1 className="text-4xl font-bold section-bold">
+            <div className="flex flex-wrap items-center gap-2 md:gap-3 lg:gap-4 mb-3">
+              <h1 className="text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-display font-bold text-textPrimary">
                 {vault.name || vault.vaultId || `Vault ${vault.id?.slice(0, 8)}`}
               </h1>
               <span
-                className={`inline-flex items-center px-3 py-1 text-sm font-semibold rounded-full ${
-                  role === 'creator'
-                    ? 'bg-blue-100 text-blue-800'
-                    : role === 'signer'
-                    ? 'bg-purple-100 text-purple-800'
-                    : 'bg-gray-100 text-gray-800'
-                }`}
+                className={`inline-flex items-center px-3 py-1 text-xs font-mono uppercase bg-black text-white border border-border`}
               >
                 {role === 'creator' ? 'Creator' : role === 'signer' ? 'Signer' : 'Viewer'}
               </span>
               {vault.isPublic && (
-                <span className="inline-flex items-center px-3 py-1 bg-yellow-100 text-yellow-800 text-sm font-semibold rounded-full">
+                <span className="inline-flex items-center px-3 py-1 bg-white text-textPrimary border border-border text-xs font-mono uppercase">
                   Public
                 </span>
               )}
             </div>
-            {vault.description && <p className="text-gray-600">{vault.description}</p>}
+            {vault.description && <p className="text-textMuted text-sm md:text-base lg:text-lg max-w-2xl">{vault.description}</p>}
           </div>
           <div className="flex gap-3">
             {isCreator && (
-              <Button variant="outline" size="lg" onClick={() => setShowAddSignerModal(true)}>
+              <Button variant="outline" onClick={() => setShowAddSignerModal(true)}>
                 + Add Signer
               </Button>
             )}
             {canInteract && (
-              <Link to={`/vaults/${id}/proposals/create`}>
-                <Button size="lg">Create Proposal</Button>
-              </Link>
+              <>
+                <Link to={`/vaults/${id}/create-stream`}>
+                  <Button variant="outline" className="flex items-center gap-2">
+                    <Zap className="w-4 h-4" />
+                    Create Stream
+                  </Button>
+                </Link>
+                <Link to={`/vaults/${id}/batch-create`}>
+                  <Button variant="outline" className="flex items-center gap-2">
+                    <Users className="w-4 h-4" />
+                    Batch Streams
+                  </Button>
+                </Link>
+                <Link to={`/vaults/${id}/proposals/create`}>
+                  <Button>Create Proposal</Button>
+                </Link>
+              </>
             )}
           </div>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <Card padding="lg">
-            <h3 className="text-sm text-gray-600 mb-2">Total Deposit</h3>
-            <p className="text-3xl font-bold">{vault.totalDeposit || 0} BCH</p>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8 md:mb-10 lg:mb-12">
+          <Card padding="md" className="relative overflow-hidden group">
+            <div className="relative z-10 transition-transform duration-300 group-hover:-translate-y-1">
+              <h3 className="font-mono text-xs uppercase text-textMuted mb-2 tracking-wider">Total Deposit</h3>
+              <p className="font-display text-2xl md:text-3xl lg:text-4xl text-textPrimary">{vault.totalDeposit || 0} <span className="text-sm md:text-base lg:text-lg text-textMuted">BCH</span></p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 text-border z-0 group-hover:scale-110 transition-transform duration-500">
+              <DollarSign className="w-16 h-16 md:w-24 md:h-24 lg:w-32 lg:h-32" />
+            </div>
           </Card>
-          <Card padding="lg">
-            <h3 className="text-sm text-gray-600 mb-2">On-Chain Balance</h3>
-            <p className="text-3xl font-bold text-blue-600">
-              {vault.balance !== undefined ? (vault.balance / 100000000).toFixed(8) : '0.00000000'} BCH
-            </p>
-            <p className="text-xs text-gray-500 mt-1">Live from blockchain</p>
+
+          <Card padding="md" className="relative overflow-hidden group">
+            <div className="relative z-10 transition-transform duration-300 group-hover:-translate-y-1">
+              <h3 className="font-mono text-xs uppercase text-textMuted mb-2 tracking-wider">On-Chain Balance</h3>
+              <div className="flex items-baseline gap-2">
+                <p className="font-display text-2xl md:text-3xl lg:text-4xl text-accent">
+                  {vault.balance !== undefined ? (vault.balance / 100000000).toFixed(8) : '0.00000000'}
+                </p>
+                <span className="text-sm md:text-base lg:text-lg text-textMuted font-display">BCH</span>
+              </div>
+              <p className="text-xs font-mono text-textMuted mt-2 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
+                Live Sync
+              </p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 text-accent/10 z-0 group-hover:scale-110 transition-transform duration-500">
+              <Wallet className="w-16 h-16 md:w-24 md:h-24 lg:w-32 lg:h-32" />
+            </div>
           </Card>
-          <Card padding="lg">
-            <h3 className="text-sm text-gray-600 mb-2">Locked</h3>
-            <p className="text-3xl font-bold">{locked.toFixed(2)} BCH</p>
+
+          <Card padding="md" className="relative overflow-hidden group">
+            <div className="relative z-10 transition-transform duration-300 group-hover:-translate-y-1">
+              <h3 className="font-mono text-xs uppercase text-textMuted mb-2 tracking-wider">Locked Funds</h3>
+              <p className="font-display text-4xl text-textPrimary">{locked.toFixed(2)} <span className="text-lg text-textMuted">BCH</span></p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 text-border z-0 group-hover:scale-110 transition-transform duration-500">
+              <Shield className="w-16 h-16 md:w-24 md:h-24 lg:w-32 lg:h-32" />
+            </div>
           </Card>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
-          <Card padding="lg">
-            <h2 className="text-xl font-semibold mb-4">Vault Details</h2>
-            <div className="space-y-3">
-              {vault.contractAddress && (
-                <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                  <div className="text-xs text-blue-800 dark:text-blue-200 mb-1 font-semibold">Contract Address (BCH Chipnet)</div>
-                  <a
-                    href={`https://chipnet.chaingraph.cash/address/${vault.contractAddress}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-mono text-xs text-blue-600 dark:text-blue-400 hover:underline break-all"
-                  >
-                    {vault.contractAddress}
-                  </a>
+        <div className="grid lg:grid-cols-3 gap-6 md:gap-8 mb-8 md:mb-10 lg:mb-12">
+          {/* Main Content Column */}
+          <div className="lg:col-span-2 space-y-6 md:space-y-8">
+
+            {/* Active Proposals */}
+            <section>
+              <div className="flex items-center justify-between mb-4 md:mb-6">
+                <h2 className="font-display text-xl md:text-2xl text-textPrimary">Active Proposals</h2>
+              </div>
+
+              {!canInteract ? (
+                <Card padding="lg" className="bg-whiteAlt border-dashed border-border">
+                  <p className="text-textMuted font-mono text-center py-8">
+                    Strict access control. Only signers can view proposals.
+                  </p>
+                </Card>
+              ) : loadingProposals ? (
+                <div className="space-y-4">
+                  {[1, 2].map(i => (
+                    <div key={i} className="h-48 bg-surfaceAlt rounded-xl animate-pulse"></div>
+                  ))}
                 </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-gray-600">Spending Cap:</span>
-                <span className="font-semibold">{vault.spendingCap || 'No cap'} BCH</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Approval Threshold:</span>
-                <span className="font-semibold">
-                  {vault.approvalThreshold}-of-{vault.signers?.length || 0}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Cycle Duration:</span>
-                <span className="font-semibold">
-                  {vault.cycleDuration === 604800
-                    ? 'Weekly'
-                    : vault.cycleDuration === 2592000
-                    ? 'Monthly'
-                    : vault.cycleDuration === 7776000
-                    ? 'Quarterly'
-                    : `${vault.cycleDuration}s`}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Unlock Amount:</span>
-                <span className="font-semibold">{vault.unlockAmount || 0} BCH</span>
-              </div>
-            </div>
-          </Card>
-
-          <Card padding="lg">
-            <h2 className="text-xl font-semibold mb-4">Signers</h2>
-            <div className="space-y-2">
-              {vault.signers && vault.signers.length > 0 ? (
-                vault.signers.map((signer: string, index: number) => (
-                  <div key={index} className="flex items-center justify-between">
-                    <span className="font-mono text-sm">{signer}</span>
-                    {signer.toLowerCase() === vault.creator?.toLowerCase() ? (
-                      <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded font-semibold">
-                        Creator
-                      </span>
-                    ) : (
-                      <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded">
-                        Signer {index + 1}
-                      </span>
-                    )}
-                  </div>
-                ))
+              ) : proposals.length === 0 ? (
+                <div className="text-center py-12 border border-dashed border-border rounded-xl">
+                  <p className="text-textMuted font-mono mb-4">No active proposals in queue</p>
+                  <Link to={`/vaults/${id}/proposals/create`}>
+                    <Button variant="outline" size="sm">Create First Proposal</Button>
+                  </Link>
+                </div>
               ) : (
-                <p className="text-gray-600 text-sm">No signers</p>
-              )}
-            </div>
-          </Card>
-        </div>
-
-        {canInteract ? (
-          <Card padding="lg" className="mb-8">
-            <h2 className="text-xl font-semibold mb-4">Active Proposals</h2>
-            {loadingProposals ? (
-              <p className="text-gray-600">Loading proposals...</p>
-            ) : proposals.length === 0 ? (
-              <p className="text-gray-600">No active proposals</p>
-            ) : (
-              <div className="space-y-4">
-                {proposals.map((proposal) => (
-                  <div
-                    key={proposal.id}
-                    className="p-4 border border-gray-200 rounded-lg hover:border-green-500 transition-colors"
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h3 className="font-semibold">{proposal.amount} BCH</h3>
-                        <p className="text-sm text-gray-600">{proposal.reason}</p>
-                      </div>
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          proposal.status === 'approved'
-                            ? 'bg-green-100 text-green-800'
+                <div className="space-y-4">
+                  {proposals.map((proposal) => (
+                    <Card key={proposal.id} padding="lg" className="group hover:border-accent/50 transition-colors">
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center text-accent">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h3 className="font-display text-xl text-textPrimary">{proposal.amount} BCH</h3>
+                            <p className="text-sm font-mono text-textMuted">Proposal #{proposal.id.slice(0, 4)}</p>
+                          </div>
+                        </div>
+                        <span
+                          className={`font-mono text-xs uppercase px-3 py-1 border ${proposal.status === 'approved'
+                            ? 'bg-accent text-white border-accent'
                             : proposal.status === 'executed'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-yellow-100 text-yellow-800'
-                        }`}
-                      >
-                        {proposal.status}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center mt-4">
-                      <div className="text-sm text-gray-600">
-                        To: <span className="font-mono">{proposal.recipient}</span>
-                      </div>
-                      <div className="text-sm">
-                        <span className="text-gray-600">Approvals: </span>
-                        <span className="font-semibold">
-                          {proposal.approvalCount || 0}/{vault.approvalThreshold || 0}
+                              ? 'bg-black text-white border-black'
+                              : 'bg-white text-textMuted border-border'
+                            }`}
+                        >
+                          {proposal.status}
                         </span>
                       </div>
-                    </div>
-                    {proposal.status === 'pending' && (
-                      <div className="mt-4 flex gap-2">
+
+                      <p className="text-textPrimary mb-6 p-4 bg-whiteAlt rounded-lg font-medium border border-border">
+                        "{proposal.reason}"
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="p-3 border border-border rounded-lg">
+                          <span className="block text-xs font-mono text-textMuted uppercase mb-1">Recipient</span>
+                          <span className="font-mono text-sm text-textPrimary break-all">{proposal.recipient.slice(0, 12)}...{proposal.recipient.slice(-6)}</span>
+                        </div>
+                        <div className="p-3 border border-border rounded-lg">
+                          <span className="block text-xs font-mono text-textMuted uppercase mb-1">Approvals</span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-display text-lg text-textPrimary">
+                              {proposal.approvalCount || 0}/{vault.approvalThreshold || 0}
+                            </span>
+                            <div className="flex-1 h-1.5 bg-surfaceAlt rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-accent transition-all duration-500"
+                                style={{ width: `${Math.min(((proposal.approvalCount || 0) / (vault.approvalThreshold || 1)) * 100, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {proposal.status === 'pending' && (
                         <Button
-                          size="sm"
+                          className="w-full"
                           variant="outline"
                           onClick={() => handleApproveProposal(proposal.id)}
                           disabled={approvingProposalId === proposal.id}
                         >
-                          {approvingProposalId === proposal.id ? 'Approving...' : 'Approve Proposal'}
+                          {approvingProposalId === proposal.id ? 'Broadcasting Signature...' : 'Approve Proposal'}
                         </Button>
-                      </div>
-                    )}
-                    {proposal.status === 'approved' && vault?.contractAddress && (
-                      <div className="mt-4 flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleExecutePayout(proposal.id)}
-                          disabled={executingProposalId === proposal.id}
-                        >
-                          <DollarSign className="w-4 h-4 mr-1" />
-                          {executingProposalId === proposal.id ? 'Executing...' : 'Execute Payout'}
-                        </Button>
-                        <div className="text-xs text-green-600 flex items-center gap-1">
-                          <CheckCircle className="w-3 h-3" />
-                          Ready to execute - {vault.approvalThreshold} approvals met
+                      )}
+                      {proposal.status === 'approved' && vault?.contractAddress && (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 text-sm text-green-600 font-mono bg-green-50 p-2 rounded justify-center">
+                            <CheckCircle className="w-4 h-4" />
+                            Threshold Met - Ready for Execution
+                          </div>
+                          <Button
+                            className="w-full"
+                            onClick={() => handleExecutePayout(proposal.id)}
+                            disabled={executingProposalId === proposal.id}
+                          >
+                            {executingProposalId === proposal.id ? 'Executing Payout...' : 'Execute Payout'}
+                          </Button>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        ) : (
-          <Card padding="lg" className="bg-gray-50 mb-8">
-            <h2 className="text-xl font-semibold mb-4">Active Proposals</h2>
-            <p className="text-gray-600">
-              You don't have permission to view proposals. Only signers can view and interact with proposals.
-            </p>
-          </Card>
-        )}
-
-        {vault?.contractAddress && canInteract && (
-          <Card padding="lg" className="mb-8">
-            <h2 className="text-xl font-semibold mb-4">Unlock Cycles</h2>
-            {eligibleCycles.length === 0 ? (
-              <div className="text-gray-600">
-                <p className="mb-2">No cycles eligible for unlock at this time.</p>
-                <p className="text-sm">
-                  Current Cycle: <span className="font-semibold">#{currentCycle}</span>
-                </p>
-                <p className="text-xs text-gray-500 mt-2">
-                  Cycles become eligible based on the vault's cycle duration setting.
-                </p>
-              </div>
-            ) : (
-              <div>
-                <div className="mb-4 text-sm text-gray-600">
-                  <p>
-                    Current Cycle: <span className="font-semibold">#{currentCycle}</span>
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Unlocking a cycle releases {vault.unlockAmount || 0} BCH for spending
-                  </p>
-                </div>
-                <div className="space-y-3">
-                  {eligibleCycles.map((cycleNum) => (
-                    <div
-                      key={cycleNum}
-                      className="p-4 border border-gray-200 rounded-lg hover:border-green-500 transition-colors"
-                    >
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h3 className="font-semibold text-lg">Cycle #{cycleNum}</h3>
-                          <p className="text-sm text-gray-600">
-                            Unlock Amount: <span className="font-semibold">{vault.unlockAmount || 0} BCH</span>
-                          </p>
-                        </div>
-                        <Button
-                          size="sm"
-                          onClick={() => handleUnlockCycle(cycleNum)}
-                          disabled={unlockingCycle === cycleNum}
-                        >
-                          <Unlock className="w-4 h-4 mr-1" />
-                          {unlockingCycle === cycleNum ? 'Unlocking...' : 'Unlock Cycle'}
-                        </Button>
-                      </div>
-                      <div className="mt-2 text-xs text-green-600 flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3" />
-                        Ready to unlock - requires {vault.approvalThreshold} signer approvals
-                      </div>
-                    </div>
+                      )}
+                    </Card>
                   ))}
                 </div>
-              </div>
-            )}
-          </Card>
-        )}
+              )}
+            </section>
 
-        {vault?.contractAddress && (
-          <Card padding="lg">
-            <h2 className="text-xl font-semibold mb-4">Transaction History</h2>
-            {loadingTransactions ? (
-              <p className="text-gray-600">Loading transactions...</p>
-            ) : transactions.length === 0 ? (
-              <div className="text-gray-600">
-                <p className="mb-2">No on-chain transactions found for this vault.</p>
-                <p className="text-sm text-gray-500">
-                  Transactions will appear here once proposals are approved and executed on-chain.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {transactions.map((tx: any) => (
-                  <div
-                    key={tx.id}
-                    className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:border-blue-500 dark:hover:border-blue-600 transition-colors bg-white dark:bg-[#1a1a1a]"
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span
-                            className={`px-2 py-1 rounded text-xs font-semibold ${
-                              tx.txType === 'proposal'
-                                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200'
-                                : tx.txType === 'approve'
-                                ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                                : tx.txType === 'payout'
-                                ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
-                                : tx.txType === 'unlock'
-                                ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-200'
-                                : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
-                            }`}
-                          >
-                            {tx.txType?.toUpperCase() || 'TRANSACTION'}
-                          </span>
-                          <span
-                            className={`px-2 py-1 rounded text-xs font-semibold ${
-                              tx.status === 'confirmed'
-                                ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                                : tx.status === 'pending'
-                                ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200'
-                                : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                            }`}
-                          >
-                            {tx.status?.toUpperCase() || 'PENDING'}
-                          </span>
-                          {tx.amount && (
-                            <span className="font-semibold text-gray-900 dark:text-white">
-                              {tx.amount} BCH
-                            </span>
-                          )}
+            {/* Transaction History */}
+            {vault?.contractAddress && (
+              <section>
+                <h2 className="font-display text-2xl text-textPrimary mb-6">History</h2>
+                <Card padding="none" className="overflow-hidden">
+                  {loadingTransactions ? (
+                    <div className="p-8 text-center text-textMuted font-mono">Loading history...</div>
+                  ) : transactions.length === 0 ? (
+                    <div className="p-12 text-center">
+                      <Clock className="w-8 h-8 text-textMuted mx-auto mb-3 opacity-50" />
+                      <p className="text-textMuted font-mono">No on-chain activity yet.</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-black/5">
+                      {transactions.map((tx: any) => (
+                        <div key={tx.id} className="p-4 hover:bg-whiteAlt transition-colors flex items-center justify-between group">
+                          <div className="flex items-center gap-4">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${tx.txType === 'payout' ? 'bg-red-50 text-red-600' :
+                              tx.txType === 'deposit' ? 'bg-green-50 text-green-600' : 'bg-surfaceAlt text-textSecondary'
+                              }`}>
+                              {tx.txType === 'payout' ? <ArrowUpRight className="w-4 h-4" /> :
+                                tx.txType === 'deposit' ? <ArrowDownLeft className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
+                            </div>
+                            <div>
+                              <p className="font-mono text-sm text-textPrimary font-semibold uppercase">{tx.txType}</p>
+                              <p className="text-xs text-textMuted font-mono">
+                                {tx.createdAt && new Date(tx.createdAt).toLocaleDateString()}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-mono text-sm text-textPrimary">{tx.amount ? `${tx.amount} BCH` : '-'}</p>
+                            <a
+                              href={getExplorerTxUrl(tx.txHash, network)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-accent opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 justify-end hover:underline"
+                            >
+                              View <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
                         </div>
-                        {tx.toAddress && (
-                          <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                            To: <span className="font-mono">{tx.toAddress.slice(0, 20)}...</span>
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-right text-xs text-gray-500 dark:text-gray-400">
-                        {tx.createdAt && new Date(tx.createdAt).toLocaleString()}
-                      </div>
+                      ))}
                     </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="text-xs">
-                        <span className="text-gray-600 dark:text-gray-400">TX Hash: </span>
-                        <a
-                          href={`https://chipnet.chaingraph.cash/tx/${tx.txHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-mono text-blue-600 dark:text-blue-400 hover:underline break-all"
-                        >
-                          {tx.txHash?.slice(0, 16)}...{tx.txHash?.slice(-16)}
-                        </a>
-                      </div>
-                      <a
-                        href={`https://chipnet.chaingraph.cash/tx/${tx.txHash}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                      >
-                        View on Explorer
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  )}
+                </Card>
+              </section>
             )}
-          </Card>
-        )}
+          </div>
+
+          {/* Sidebar Column */}
+          <div className="space-y-6">
+            <Card padding="lg">
+              <h3 className="font-display text-lg text-textPrimary mb-4 border-b border-border pb-4">Vault Details</h3>
+              <dl className="space-y-4">
+                {vault.contractAddress && (
+                  <div>
+                    <dt className="text-xs font-mono text-textMuted uppercase mb-1">Contract</dt>
+                    <dd className="font-mono text-xs text-accent break-all bg-accent/5 p-2 rounded border border-accent/10">
+                      {vault.contractAddress}
+                    </dd>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <dt className="text-xs font-mono text-textMuted uppercase mb-1">Threshold</dt>
+                    <dd className="font-display text-xl text-textPrimary">{vault.approvalThreshold}/{vault.signers?.length || 0}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-mono text-textMuted uppercase mb-1">Unlock</dt>
+                    <dd className="font-display text-xl text-textPrimary">{vault.unlockAmount || 0} <span className="text-sm text-textMuted">BCH</span></dd>
+                  </div>
+                </div>
+                <div>
+                  <dt className="text-xs font-mono text-textMuted uppercase mb-1">Cycle</dt>
+                  <dd className="font-mono text-sm text-textPrimary border border-border rounded px-2 py-1 inline-block">
+                    {vault.cycleDuration === 604800 ? 'Weekly' :
+                      vault.cycleDuration === 2592000 ? 'Monthly' :
+                        `${vault.cycleDuration}s`}
+                  </dd>
+                </div>
+              </dl>
+            </Card>
+
+            <Card padding="lg">
+              <div className="flex items-center justify-between mb-4 border-b border-border pb-4">
+                <h3 className="font-display text-lg text-textPrimary">Signers</h3>
+                <span className="font-mono text-xs text-textMuted">{vault.signers?.length || 0} Active</span>
+              </div>
+              <ul className="space-y-3">
+                {vault.signers?.map((signer: string, idx: number) => (
+                  <li key={idx} className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-surfaceAlt flex items-center justify-center text-textPrimary font-mono text-xs">
+                      {idx + 1}
+                    </div>
+                    <div className="overflow-hidden">
+                      <p className="font-mono text-xs text-textPrimary truncate w-full">{signer}</p>
+                      {signer.toLowerCase() === vault.creator?.toLowerCase() && (
+                        <span className="text-[10px] uppercase font-bold text-accent tracking-wider">Creator</span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+
+            {/* Unlock Cycles Widget */}
+            {vault?.contractAddress && canInteract && (
+              <Card padding="lg" className="border-accent/20 bg-accent/5">
+                <h3 className="font-display text-lg text-textPrimary mb-2">Unlock Cycles</h3>
+                <p className="text-sm text-textMuted mb-4">Current Cycle: <span className="font-mono font-bold">#{currentCycle}</span></p>
+
+                {eligibleCycles.length > 0 ? (
+                  <div className="space-y-2">
+                    {eligibleCycles.map(cycle => (
+                      <Button key={cycle} className="w-full justify-between group" onClick={() => handleUnlockCycle(cycle)} disabled={unlockingCycle === cycle}>
+                        <span>Cycle #{cycle}</span>
+                        {unlockingCycle === cycle ? <span className="animate-spin">⌛</span> : <Unlock className="w-4 h-4 opacity-50 group-hover:opacity-100" />}
+                      </Button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs font-mono text-textMuted text-center py-4 border border-dashed border-border rounded">
+                    No cycles eligible yet
+                  </p>
+                )}
+              </Card>
+            )}
+          </div>
+        </div>
 
         {/* Add Signer Modal */}
         {showAddSignerModal && id && (
@@ -788,7 +754,6 @@ export default function VaultDetailPage() {
             onClose={() => setShowAddSignerModal(false)}
             onSuccess={() => {
               setShowAddSignerModal(false);
-              // Reload vault data
               fetchVault(id, wallet.address || undefined).then(setVault).catch(console.error);
             }}
           />
