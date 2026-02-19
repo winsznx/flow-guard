@@ -1,5 +1,5 @@
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { WalletModal } from './components/ui/WalletModal';
@@ -44,24 +44,12 @@ function App() {
   const { isOpen, closeModal } = useWalletModal();
   const navigate = useNavigate();
   const location = useLocation();
-  const previouslyConnected = useRef(false);
+  /* Redirect logic removed to allow users to view landing page even when connected */
 
-  // Redirect to /vaults after wallet connection (if on home page)
+  // Scroll to top on route change
   useEffect(() => {
-    if (wallet.isConnected && !previouslyConnected.current) {
-      // Wallet just connected
-      previouslyConnected.current = true;
-
-      // Only redirect if on home page
-      if (location.pathname === '/') {
-        setTimeout(() => {
-          navigate('/vaults');
-        }, 300); // Small delay for smooth transition
-      }
-    } else if (!wallet.isConnected) {
-      previouslyConnected.current = false;
-    }
-  }, [wallet.isConnected, location.pathname, navigate]);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [location.pathname]);
 
   return (
     <div className="bg-background min-h-screen flex flex-col">
@@ -215,20 +203,14 @@ function App() {
           <Route
             path="/explorer"
             element={
-              <DashboardLayout>
-                <ExplorerPage />
-              </DashboardLayout>
+              <ExplorerPage />
             }
           />
 
-          {/* Admin/Operator Indexer Status (no auth for now, can add later) */}
+          {/* Public Status Page (standalone) */}
           <Route
-            path="/admin/indexer"
-            element={
-              <DashboardLayout>
-                <IndexerStatusPage />
-              </DashboardLayout>
-            }
+            path="/status"
+            element={<IndexerStatusPage />}
           />
 
           {/* Protected routes with dashboard layout */}

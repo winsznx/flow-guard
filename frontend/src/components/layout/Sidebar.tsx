@@ -45,14 +45,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { path: '/streams', icon: Inbox, label: 'Vesting' }, // Vesting product
     { path: '/payments', icon: Repeat, label: 'Payments' }, // Recurring payments product
     { path: '/airdrops', icon: Gift, label: 'Airdrops' }, // Mass distribution product
-    { path: '/explorer', icon: Globe, label: 'Explorer' }, // Public activity explorer
     { path: '/vaults', icon: LayoutDashboard, label: 'Treasuries' },
     { path: '/vaults/create', icon: PlusCircle, label: 'Create Treasury' },
     { path: '/proposals', icon: FileText, label: 'Proposals' },
     { path: '/budgets', icon: DollarSign, label: 'Budget Plans' },
     { path: '/governance', icon: Vote, label: 'Governance' },
     { path: '/docs', icon: BookOpen, label: 'Documentation' },
-    { path: '/admin/indexer', icon: Server, label: 'Indexer Status' }, // Operator dashboard
   ];
 
   const isActive = (path: string) => {
@@ -129,8 +127,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 to={item.path}
                 onClick={isMobileOpen ? onMobileClose : undefined}
                 className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-300 font-mono text-sm group relative overflow-hidden ${active
-                    ? 'bg-accent text-textPrimary shadow-lg shadow-accent/20 font-bold'
-                    : 'text-textMuted hover:bg-brand-100 hover:text-textPrimary'
+                  ? 'bg-accent text-textPrimary shadow-lg shadow-accent/20 font-bold'
+                  : 'text-textMuted hover:bg-brand-100 hover:text-textPrimary'
                   } ${resolvedOpen ? 'justify-start' : 'justify-center'}`}
                 title={!resolvedOpen ? item.label : undefined}
               >
