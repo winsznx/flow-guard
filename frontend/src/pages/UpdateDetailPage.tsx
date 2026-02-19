@@ -14,6 +14,197 @@ interface BlogPost {
 }
 
 const BLOG_POSTS: Record<string, BlogPost> = {
+    'why-flowguard-is-non-custodial': {
+        slug: 'why-flowguard-is-non-custodial',
+        title: 'Why FlowGuard Is Non-Custodial (And Why That Matters)',
+        date: '2026-02-19',
+        summary: 'FlowGuard does not hold your keys, sign on your behalf, or control funds. Treasury rules are enforced directly by covenant contracts on Bitcoin Cash.',
+        tags: ['Security', 'Architecture', 'Deep Dive'],
+        readingTime: 7,
+        author: 'FlowGuard Team',
+        content: `
+# Why FlowGuard Is Non-Custodial (And Why That Matters)
+
+## Introduction
+
+When projects hear "treasury management," the first concern is usually custody.
+
+Who controls the keys?
+Who can override transactions?
+What happens if the backend goes offline?
+
+FlowGuard is designed so that:
+
+- It does not hold your keys.
+- It does not sign on your behalf.
+- It cannot move funds.
+
+Everything is enforced directly by covenant contracts on Bitcoin Cash.
+
+## The Core Rule
+
+**If a rule is not enforced on-chain, it is not considered a real rule.**
+
+That means:
+
+- Spending caps must be validated by the contract.
+- Approval thresholds must be validated by the contract.
+- Vesting calculations must be validated by the contract.
+- Milestone releases must be validated by the contract.
+
+The backend can help build transactions.
+
+It cannot make them valid.
+
+Only the blockchain can.
+
+## How Transactions Actually Flow
+
+Let's break down a real example.
+
+### Example: Executing a Vault Proposal
+
+A proposal is created inside a vault contract.
+
+Required signers approve it.
+
+A transaction is constructed referencing the contract UTXO.
+
+Signers sign using their own wallets.
+
+The transaction is broadcast to the network.
+
+At validation time, the contract checks:
+
+- Does the number of approvals meet the threshold?
+- Is the payout within the spending cap?
+- Is the vault in an unlocked cycle?
+- Is the recipient allowed?
+
+If any check fails, the transaction is invalid.
+
+There is no fallback path.
+
+## Wallet Signing Model
+
+FlowGuard follows a simple separation:
+
+### Backend
+Reads contract state, builds transaction templates, and indexes blockchain data.
+
+### Wallet
+Signs transactions and authorizes fund movement.
+
+### Blockchain
+Enforces covenant rules.
+
+The backend never has signing authority.
+
+Even if the backend were compromised, it could not spend treasury funds without valid signatures and valid contract conditions.
+
+## Streams and State Enforcement
+
+For vesting streams, FlowGuard uses NFT commitments via CashTokens.
+
+Each stream tracks state in a 40-byte commitment:
+
+- Status
+- Flags
+- Total released
+- Time cursor
+- Recipient hash
+
+When a claim is attempted:
+
+- The contract calculates how much is vested.
+- The NFT commitment updates.
+- Only the valid portion can be released.
+
+If someone tries to claim more than vested, the contract rejects it.
+
+No backend logic can change that outcome.
+
+## What This Prevents
+
+Non-custodial design prevents:
+
+- Admin key abuse
+- Silent overrides
+- Database-level balance manipulation
+- Hidden rule changes
+- Off-chain governance shortcuts
+
+If treasury policy changes, it must change through contract logic — not through server updates.
+
+## Why This Matters for BCH
+
+Bitcoin Cash enables:
+
+- Low fees
+- Fast settlement
+- UTXO-based scripting
+
+Covenants extend this further by allowing contracts to enforce spending conditions.
+
+FlowGuard uses this capability to shift treasury enforcement from:
+
+**"Please follow the rules."**
+
+to
+
+**"You physically cannot break the rules."**
+
+That distinction is important for:
+
+- Grant programs
+- DAO-style organizations
+- Contributor payroll
+- Long-term ecosystem funding
+
+As treasury size grows, enforcement matters more than trust.
+
+## Failure Modes
+
+A strong system must define what happens when something goes wrong.
+
+- A signer disappears → threshold logic still applies.
+- A backend server goes offline → funds remain in contract.
+- A wallet UI fails → UTXOs remain valid on-chain.
+
+Treasury logic is not dependent on uptime.
+
+It is dependent on blockchain validation.
+
+## What Non-Custodial Does Not Mean
+
+Non-custodial does not mean "no structure."
+
+It means structure exists at the protocol layer.
+
+FlowGuard contracts still define:
+
+- Who can approve
+- When funds unlock
+- How much can move
+- What conditions must be met
+
+The difference is that enforcement happens at consensus level.
+
+## Closing
+
+FlowGuard does not ask teams to trust a platform.
+
+It encodes treasury rules into covenant contracts on Bitcoin Cash.
+
+Wallet signs.
+Blockchain verifies.
+Rules are enforced.
+
+In the next post, we'll go deeper into how a vault contract enforces spending caps and approval thresholds internally.
+
+If you're managing treasury on BCH, understanding this separation is essential.
+`
+    },
     'what-flowguard-is': {
         slug: 'what-flowguard-is',
         title: 'What FlowGuard Actually Is (And What It Isn’t)',

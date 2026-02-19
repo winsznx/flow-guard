@@ -18,6 +18,17 @@ interface BlogPost {
 
 const BLOG_POSTS: BlogPost[] = [
     {
+        slug: 'why-flowguard-is-non-custodial',
+        title: 'Why FlowGuard Is Non-Custodial (And Why That Matters)',
+        date: '2026-02-19',
+        summary: 'FlowGuard does not hold your keys, sign on your behalf, or control funds. Treasury rules are enforced directly by covenant contracts on Bitcoin Cash.',
+        tags: ['Security', 'Architecture', 'Deep Dive'],
+        readingTime: 7,
+        featured: true,
+        status: 'published',
+        author: 'FlowGuard Team'
+    },
+    {
         slug: 'what-flowguard-is',
         title: 'What FlowGuard Actually Is (And What It Isn’t)',
         date: '2026-02-18',
