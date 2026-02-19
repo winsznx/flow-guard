@@ -26,7 +26,8 @@ const BLOG_POSTS: BlogPost[] = [
         readingTime: 7,
         featured: true,
         status: 'published',
-        author: 'FlowGuard Team'
+        author: 'FlowGuard Team',
+        cover: '/updates/FlowGuard Blog Banner.png'
     },
     {
         slug: 'what-flowguard-is',
@@ -164,30 +165,41 @@ export default function UpdatesPage() {
                 {/* Featured Post */}
                 {featuredPost && !searchQuery && !selectedTag && (
                     <Link to={`/updates/${featuredPost.slug}`} className="block mb-16 group">
-                        <div className="bg-surface border border-border rounded-2xl p-8 hover:border-primary/50 transition-all">
-                            <div className="flex items-center gap-2 mb-4">
-                                <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-semibold rounded-full">
-                                    Featured
-                                </span>
-                            </div>
-                            <h2 className="font-display text-3xl md:text-4xl font-bold text-textPrimary mb-4 group-hover:text-primary transition-colors">
-                                {featuredPost.title}
-                            </h2>
-                            <p className="text-lg text-textSecondary mb-6">
-                                {featuredPost.summary}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-4 text-sm text-textMuted">
-                                <div className="flex items-center gap-2">
-                                    <Calendar className="w-4 h-4" />
-                                    {new Date(featuredPost.date).toLocaleDateString('en-US', {
-                                        year: 'numeric',
-                                        month: 'long',
-                                        day: 'numeric'
-                                    })}
+                        <div className="bg-surface border border-border rounded-2xl overflow-hidden hover:border-primary/50 transition-all">
+                            {featuredPost.cover && (
+                                <div className="w-full h-64 md:h-80 overflow-hidden">
+                                    <img
+                                        src={featuredPost.cover}
+                                        alt={featuredPost.title}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                    />
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <Clock className="w-4 h-4" />
-                                    {featuredPost.readingTime} min read
+                            )}
+                            <div className="p-8">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-semibold rounded-full">
+                                        Featured
+                                    </span>
+                                </div>
+                                <h2 className="font-display text-3xl md:text-4xl font-bold text-textPrimary mb-4 group-hover:text-primary transition-colors">
+                                    {featuredPost.title}
+                                </h2>
+                                <p className="text-lg text-textSecondary mb-6">
+                                    {featuredPost.summary}
+                                </p>
+                                <div className="flex flex-wrap items-center gap-4 text-sm text-textMuted">
+                                    <div className="flex items-center gap-2">
+                                        <Calendar className="w-4 h-4" />
+                                        {new Date(featuredPost.date).toLocaleDateString('en-US', {
+                                            year: 'numeric',
+                                            month: 'long',
+                                            day: 'numeric'
+                                        })}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Clock className="w-4 h-4" />
+                                        {featuredPost.readingTime} min read
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -200,36 +212,47 @@ export default function UpdatesPage() {
                         <Link
                             key={post.slug}
                             to={`/updates/${post.slug}`}
-                            className="group bg-surface border border-border rounded-xl p-6 hover:border-primary/50 transition-all"
+                            className="group bg-surface border border-border rounded-xl overflow-hidden hover:border-primary/50 transition-all"
                         >
-                            <div className="flex flex-wrap gap-2 mb-4">
-                                {post.tags.map(tag => (
-                                    <span
-                                        key={tag}
-                                        className="px-2 py-1 bg-surfaceAlt text-textMuted text-xs font-medium rounded"
-                                    >
-                                        {tag}
-                                    </span>
-                                ))}
-                            </div>
-                            <h3 className="font-display text-xl font-bold text-textPrimary mb-3 group-hover:text-primary transition-colors">
-                                {post.title}
-                            </h3>
-                            <p className="text-textSecondary mb-4 line-clamp-2">
-                                {post.summary}
-                            </p>
-                            <div className="flex items-center justify-between text-sm text-textMuted">
-                                <div className="flex items-center gap-2">
-                                    <Calendar className="w-4 h-4" />
-                                    {new Date(post.date).toLocaleDateString('en-US', {
-                                        month: 'short',
-                                        day: 'numeric',
-                                        year: 'numeric'
-                                    })}
+                            {post.cover && (
+                                <div className="w-full h-48 overflow-hidden">
+                                    <img
+                                        src={post.cover}
+                                        alt={post.title}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                    />
                                 </div>
-                                <div className="flex items-center gap-2 text-primary group-hover:gap-3 transition-all">
-                                    Read more
-                                    <ArrowRight className="w-4 h-4" />
+                            )}
+                            <div className="p-6">
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    {post.tags.map(tag => (
+                                        <span
+                                            key={tag}
+                                            className="px-2 py-1 bg-surfaceAlt text-textMuted text-xs font-medium rounded"
+                                        >
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                                <h3 className="font-display text-xl font-bold text-textPrimary mb-3 group-hover:text-primary transition-colors">
+                                    {post.title}
+                                </h3>
+                                <p className="text-textSecondary mb-4 line-clamp-2">
+                                    {post.summary}
+                                </p>
+                                <div className="flex items-center justify-between text-sm text-textMuted">
+                                    <div className="flex items-center gap-2">
+                                        <Calendar className="w-4 h-4" />
+                                        {new Date(post.date).toLocaleDateString('en-US', {
+                                            month: 'short',
+                                            day: 'numeric',
+                                            year: 'numeric'
+                                        })}
+                                    </div>
+                                    <div className="flex items-center gap-2 text-primary group-hover:gap-3 transition-all">
+                                        Read more
+                                        <ArrowRight className="w-4 h-4" />
+                                    </div>
                                 </div>
                             </div>
                         </Link>

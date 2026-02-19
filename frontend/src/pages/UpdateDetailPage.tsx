@@ -11,6 +11,7 @@ interface BlogPost {
     readingTime: number;
     author?: string;
     content: string;
+    cover?: string;
 }
 
 const BLOG_POSTS: Record<string, BlogPost> = {
@@ -22,6 +23,7 @@ const BLOG_POSTS: Record<string, BlogPost> = {
         tags: ['Security', 'Architecture', 'Deep Dive'],
         readingTime: 7,
         author: 'FlowGuard Team',
+        cover: '/updates/FlowGuard Blog Banner.png',
         content: `
 # Why FlowGuard Is Non-Custodial (And Why That Matters)
 
@@ -748,6 +750,15 @@ export default function UpdateDetailPage() {
         <main className="bg-background min-h-screen">
             {/* Header */}
             <div className="bg-surface border-b border-border">
+                {post.cover && (
+                    <div className="w-full max-h-96 overflow-hidden">
+                        <img
+                            src={post.cover}
+                            alt={post.title}
+                            className="w-full h-full object-cover"
+                        />
+                    </div>
+                )}
                 <div className="max-w-4xl mx-auto px-6 py-8">
                     <Link
                         to="/updates"
