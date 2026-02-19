@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Shield, Lock, Vote, Zap, CheckCircle2, ArrowRight, Database, Clock, Coins, Users, PieChart, Gift, Eye, Menu, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Shield, Lock, Vote, Zap, CheckCircle2, ArrowRight, Database, Clock, Coins, Users, PieChart, Gift, Eye, Menu, X, ChevronDown } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
 import { ResourcesDropdown } from '../components/ui/ResourcesDropdown';
 import { MobileMenu } from '../components/layout/MobileMenu';
 import Hero3D from '../components/hero/Hero3D';
+import { NoiseBackground } from '../components/ui/NoiseBackground';
 
 const fadeInUp = {
   initial: { opacity: 0, y: 60 },
@@ -24,6 +25,7 @@ const staggerContainer = {
 
 export default function Home() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [openFaq, setOpenFaq] = useState<number>(0);
 
   return (
     <main className="bg-background min-h-screen">
@@ -72,98 +74,100 @@ export default function Home() {
         </div>
       </nav>
 
-      <section className="pt-24 md:pt-28 lg:pt-32 pb-8 md:pb-10 px-4 md:px-6 lg:px-12 bg-surface relative overflow-hidden">
-        <div className="max-w-7xl mx-auto relative">
-          <div className="max-w-4xl">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.5 }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surfaceAlt/50 border border-border mb-6"
-            >
-              <span className="w-2 h-2 rounded-full bg-brand300 animate-pulse" />
-              <span className="text-xs font-mono text-textSecondary">v0.2.0-alpha · Chipnet</span>
-            </motion.div>
-
-            <motion.h1
-              {...fadeInUp}
-              className="font-display text-4xl md:text-6xl leading-[0.95] mb-4 text-textPrimary"
-            >
-              Where Logic
-              <br />
-              <span className="text-brand300">Becomes Law</span>
-            </motion.h1>
-
-            <motion.p
-              {...fadeInUp}
-              transition={{ delay: 0.1, duration: 0.6 }}
-              className="text-xl md:text-2xl text-textSecondary mb-3 max-w-3xl leading-relaxed"
-            >
-              The Protocol for Guaranteed, Permissionless Fund Movement on BCH.
-            </motion.p>
-
-            <motion.div
-              {...fadeInUp}
-              transition={{ delay: 0.2, duration: 0.6 }}
-              className="grid md:grid-cols-2 gap-4 mb-12 max-w-2xl"
-            >
-              <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
-                <CheckCircle2 className="w-6 h-6 text-brand300 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="font-medium text-textPrimary mb-1">Rules enforced Onchain</p>
-                  <p className="text-sm text-textSecondary">Spending limits and release conditions cannot be overridden</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
-                <CheckCircle2 className="w-6 h-6 text-brand300 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="font-medium text-textPrimary mb-1">Time-locked by default</p>
-                  <p className="text-sm text-textSecondary">Funds unlock only when the time conditions are met</p>
-                </div>
-              </div>
-            </motion.div>
-
-            <motion.div
-              {...fadeInUp}
-              transition={{ delay: 0.3, duration: 0.6 }}
-              className="flex flex-col sm:flex-row gap-4"
-            >
-              <Link to="/vaults">
-                <motion.button
-                  whileHover={{ scale: 1.02, y: -2 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="group bg-primary text-white px-8 py-4 rounded-full text-base font-semibold hover:bg-primaryHover transition-all shadow-2xl hover:shadow-brand300/20 flex items-center gap-3"
-                >
-                  Launch App
-                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </motion.button>
-              </Link>
-              <a
-                href="#features"
-                onClick={(e) => {
-                  e.preventDefault();
-                  document.querySelector('#features')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }}
+      <section className="pt-24 md:pt-28 lg:pt-32 pb-8 md:pb-10 px-4 md:px-6 lg:px-12 bg-surface overflow-hidden">
+        <div className="max-w-7xl mx-auto">
+          <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center">
+            <div className="flex flex-col">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.5 }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surfaceAlt/50 border border-border mb-6 w-fit"
               >
-                <motion.button
-                  whileHover={{ scale: 1.02, y: -2 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="border-2 border-border text-textPrimary px-8 py-4 rounded-full text-base font-semibold hover:border-primary hover:bg-surfaceAlt/30 transition-all"
+                <span className="w-2 h-2 rounded-full bg-brand300 animate-pulse" />
+                <span className="text-xs font-mono text-textSecondary">v0.2.0-alpha · Chipnet</span>
+              </motion.div>
+
+              <motion.h1
+                {...fadeInUp}
+                className="font-display text-4xl md:text-5xl lg:text-6xl leading-[0.95] mb-4 text-textPrimary"
+              >
+                Where Logic
+                <br />
+                <span className="text-brand300">Becomes Law</span>
+              </motion.h1>
+
+              <motion.p
+                {...fadeInUp}
+                transition={{ delay: 0.1, duration: 0.6 }}
+                className="text-lg md:text-xl text-textSecondary mb-6 leading-relaxed"
+              >
+                The Protocol for Guaranteed, Permissionless Fund Movement on BCH.
+              </motion.p>
+
+              <motion.div
+                {...fadeInUp}
+                transition={{ delay: 0.2, duration: 0.6 }}
+                className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-10"
+              >
+                <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
+                  <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium text-textPrimary mb-1 text-sm">Rules enforced Onchain</p>
+                    <p className="text-xs text-textSecondary">Spending limits and release conditions cannot be overridden</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
+                  <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium text-textPrimary mb-1 text-sm">Time-locked by default</p>
+                    <p className="text-xs text-textSecondary">Funds unlock only when the time conditions are met</p>
+                  </div>
+                </div>
+              </motion.div>
+
+              <motion.div
+                {...fadeInUp}
+                transition={{ delay: 0.3, duration: 0.6 }}
+                className="flex flex-col sm:flex-row gap-4"
+              >
+                <Link to="/vaults">
+                  <motion.button
+                    whileHover={{ scale: 1.02, y: -2 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="group bg-primary text-white px-8 py-4 rounded-full text-base font-semibold hover:bg-primaryHover transition-all shadow-2xl hover:shadow-brand300/20 flex items-center gap-3"
+                  >
+                    Launch App
+                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  </motion.button>
+                </Link>
+                <a
+                  href="#features"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    document.querySelector('#features')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
                 >
-                  See Payment Flows
-                </motion.button>
-              </a>
+                  <motion.button
+                    whileHover={{ scale: 1.02, y: -2 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="border-2 border-border text-textPrimary px-8 py-4 rounded-full text-base font-semibold hover:border-primary hover:bg-surfaceAlt/30 transition-all"
+                  >
+                    See Payment Flows
+                  </motion.button>
+                </a>
+              </motion.div>
+            </div>
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 1, delay: 0.2 }}
+              className="w-full h-[400px] lg:h-[600px]"
+            >
+              <Hero3D />
             </motion.div>
           </div>
-
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 1, delay: 0.2 }}
-            className="mt-12 lg:mt-0 lg:absolute lg:right-[-8%] lg:top-[-20%] w-full h-[400px] lg:w-[52%] lg:h-[800px] pointer-events-none lg:pointer-events-auto z-0"
-          >
-            <Hero3D />
-          </motion.div>
         </div>
       </section>
 
@@ -667,7 +671,7 @@ export default function Home() {
             <h2 className="font-display text-6xl mb-6 text-textPrimary">Frequently asked questions</h2>
           </motion.div>
 
-          <div className="space-y-6">
+          <div className="space-y-3">
             {[
               {
                 q: 'Who controls the funds?',
@@ -700,10 +704,38 @@ export default function Home() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.05 }}
-                className="group bg-surface border border-border hover:border-brand300/50 rounded-2xl p-8 transition-all"
+                className={`bg-surface border rounded-2xl overflow-hidden transition-colors ${openFaq === i ? 'border-brand300/60' : 'border-border hover:border-brand300/30'
+                  }`}
               >
-                <h3 className="font-display text-2xl mb-4 text-textPrimary group-hover:text-brand300 transition-colors">{faq.q}</h3>
-                <p className="text-textSecondary leading-relaxed">{faq.a}</p>
+                <button
+                  onClick={() => setOpenFaq(openFaq === i ? -1 : i)}
+                  className="w-full flex items-center justify-between gap-4 px-8 py-6 text-left"
+                >
+                  <span className={`font-display text-xl transition-colors ${openFaq === i ? 'text-brand300' : 'text-textPrimary'
+                    }`}>{faq.q}</span>
+                  <motion.div
+                    animate={{ rotate: openFaq === i ? 180 : 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="flex-shrink-0"
+                  >
+                    <ChevronDown className={`w-5 h-5 transition-colors ${openFaq === i ? 'text-brand300' : 'text-textMuted'
+                      }`} />
+                  </motion.div>
+                </button>
+                <AnimatePresence initial={false}>
+                  {openFaq === i && (
+                    <motion.div
+                      key="answer"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.28, ease: 'easeInOut' }}
+                      className="overflow-hidden"
+                    >
+                      <p className="px-8 pb-6 text-textSecondary leading-relaxed">{faq.a}</p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </motion.div>
             ))}
           </div>
@@ -711,15 +743,7 @@ export default function Home() {
       </section>
 
       <section className="py-20 md:py-28 lg:py-32 px-4 md:px-6 lg:px-12 relative overflow-hidden border-t border-border/30 bg-[#F1F3E0]">
-        <div
-          className="absolute inset-0 z-0 opacity-60 mix-blend-multiply pointer-events-none"
-          style={{
-            backgroundImage: 'url(/assets/flowguard_hero_bg.png)',
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat'
-          }}
-        />
+        <NoiseBackground />
 
         <div className="max-w-4xl mx-auto text-center relative z-10">
           <motion.div

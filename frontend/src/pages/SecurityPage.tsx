@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Shield, Lock, Code2, Network, Eye, CheckCircle2, AlertCircle, ArrowLeft } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
+import { NoiseBackground } from '../components/ui/NoiseBackground';
 import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
 
 const fadeInUp = {
@@ -43,11 +44,7 @@ export default function SecurityPage() {
 
       {/* Hero Section */}
       <section className="pt-32 pb-16 px-6 lg:px-12">
-        <div className="max-w-4xl mx-auto">
-          <Link to="/" className="inline-flex items-center gap-2 text-textSecondary hover:text-primary transition-colors mb-8">
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
-          </Link>
+        <div className="max-w-4xl mx-auto text-center">
 
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -299,8 +296,10 @@ export default function SecurityPage() {
       </section>
 
       {/* CTA */}
-      <section className="py-24 px-6 lg:px-12 bg-accent/5">
-        <div className="max-w-4xl mx-auto text-center">
+      {/* CTA */}
+      <section className="relative overflow-hidden py-24 px-6 lg:px-12 bg-accent/5">
+        <NoiseBackground />
+        <div className="relative z-10 max-w-4xl mx-auto text-center">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
