@@ -27,7 +27,7 @@ const BLOG_POSTS: BlogPost[] = [
         featured: true,
         status: 'published',
         author: 'FlowGuard Team',
-        cover: '/updates/FlowGuard Blog Banner.png'
+        cover: '/updates/FlowGuard X post.png'
     },
     {
         slug: 'why-flowguard-is-non-custodial',

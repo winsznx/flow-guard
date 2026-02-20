@@ -24,7 +24,7 @@ const BLOG_POSTS: Record<string, BlogPost> = {
         tags: ['Education', 'Vaults', 'Architecture', 'BCH'],
         readingTime: 6,
         author: 'FlowGuard Team',
-        cover: '/updates/FlowGuard Blog Banner.png',
+        cover: '/updates/FlowGuard X post.png',
         content: `
 # How FlowGuard Vaults Enforce Spending Rules On-Chain
 
