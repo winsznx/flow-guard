@@ -18,6 +18,16 @@ interface BlogPost {
 
 const BLOG_POSTS: BlogPost[] = [
     {
+        slug: 'how-flowguard-airdrops-use-merkle-proofs-on-chain',
+        title: 'How FlowGuard Airdrops Use Merkle Proofs On-Chain',
+        date: '2026-02-22',
+        summary: 'On Bitcoin Cash, airdrops can be enforced by covenant contracts using Merkle proofs. That means eligibility is verified on-chain and double-claims are prevented.',
+        tags: ['Education', 'Airdrops', 'Merkle Trees', 'BCH'],
+        readingTime: 6,
+        status: 'published',
+        author: 'FlowGuard Team'
+    },
+    {
         slug: 'how-flowguard-uses-cashtokens-nfts-to-track-vesting-state',
         title: 'How FlowGuard Uses CashTokens NFTs to Track Vesting State',
         date: '2026-02-21',

@@ -1,0 +1,208 @@
+---
+title: "How FlowGuard Airdrops Use Merkle Proofs On-Chain"
+date: "2026-02-22"
+summary: "On Bitcoin Cash, airdrops can be enforced by covenant contracts using Merkle proofs. That means eligibility is verified on-chain and double-claims are prevented."
+tags: ["Education", "Airdrops", "Merkle Trees", "BCH"]
+status: "published"
+author: "FlowGuard Team"
+readingTime: 6
+---
+
+# How FlowGuard Airdrops Use Merkle Proofs On-Chain
+
+## Introduction
+
+Airdrops are common in crypto ecosystems.
+
+But most of them are handled manually:
+
+- A list of addresses in a CSV
+- A script that sends funds
+- A spreadsheet tracking who claimed
+- A backend preventing duplicates
+
+This works — but it relies on trust.
+
+FlowGuard handles airdrops differently.
+
+On Bitcoin Cash, airdrops can be enforced by covenant contracts using Merkle proofs.
+
+That means:
+
+- Eligibility is verified on-chain.
+- Double-claims are prevented on-chain.
+- Distribution does not require manual execution.
+
+## The Core Idea: Merkle Trees
+
+A Merkle tree allows a large dataset (like thousands of recipients) to be represented by a single hash: the Merkle root.
+
+Each leaf in the tree represents:
+
+(address, amount)
+
+When someone claims:
+
+- They submit their address
+- Their allocation
+- A Merkle proof
+
+The contract verifies:
+
+- That the proof reconstructs the root
+- That the address and amount match a valid leaf
+
+If verification succeeds, the claim is valid.
+
+## What Gets Stored On-Chain
+
+When a FlowGuard airdrop is deployed:
+
+The contract stores:
+
+- The Merkle root
+- The total campaign allocation
+- Expiry rules (if applicable)
+
+The Merkle root becomes the reference for eligibility.
+
+The full CSV does not need to live on-chain.
+
+## Preventing Double-Claims
+
+Verification alone is not enough.
+
+The contract must also ensure:
+
+An address cannot claim twice.
+
+FlowGuard tracks claim state inside contract logic (using NFT commitment patterns similar to streams).
+
+When a claim succeeds:
+
+- The contract marks that claim as completed
+- Future claims from the same leaf fail
+
+This prevents:
+
+- Duplicate withdrawals
+- Replay attempts
+- Manual tracking errors
+
+Double-claim prevention is enforced by consensus.
+
+## Claim Flow Example
+
+Let's walk through it.
+
+Campaign creator uploads CSV:
+
+- Address A → 1 BCH
+- Address B → 0.5 BCH
+- Address C → 2 BCH
+
+A Merkle tree is generated.
+
+The Merkle root is embedded in the contract.
+
+The contract is funded with the total allocation.
+
+Now:
+
+Address B wants to claim.
+
+They submit their proof.
+
+The contract verifies the Merkle path.
+
+It checks if B has already claimed.
+
+If valid, 0.5 BCH is released.
+
+No admin approves this.
+No backend updates a spreadsheet.
+
+The chain validates everything.
+
+## Why This Matters for BCH Projects
+
+Structured airdrops are useful for:
+
+- Grant distributions
+- Contributor rewards
+- Retroactive funding
+- Ecosystem incentives
+- Token launches
+
+Manual distribution does not scale well.
+
+With covenant-based validation:
+
+- The creator cannot selectively deny valid claimers.
+- The recipient does not need to trust the distributor.
+- The contract enforces the allocation exactly as defined.
+
+## Trust Reduction
+
+Traditional airdrops require trust in:
+
+- Whoever runs the distribution script
+- Whoever tracks the claims
+- Whoever maintains the backend
+
+FlowGuard removes those dependencies.
+
+The contract enforces:
+
+- Eligibility
+- Allocation size
+- Single-claim rule
+
+If a claim violates the Merkle proof or state rules, it fails automatically.
+
+## BCH-Specific Advantage
+
+Because Bitcoin Cash supports covenant logic and native token primitives, airdrop contracts can:
+
+- Hold BCH
+- Hold fungible tokens
+- Validate proof logic
+- Enforce state transitions
+
+This keeps distribution logic fully inside the UTXO model.
+
+No external oracle required.
+
+## What This Changes
+
+Instead of:
+
+"Trust us, we'll send it."
+
+You get:
+
+"Prove you're eligible, and the contract releases it."
+
+The difference is subtle but important.
+
+One is discretionary.
+
+The other is deterministic and enforced.
+
+## Closing
+
+FlowGuard airdrops move distribution from:
+
+Manual coordination
+to
+On-chain verification.
+
+Eligibility is proven.
+State is tracked.
+Funds are released only when conditions are satisfied.
+
+No spreadsheets.
+No manual payout scripts.
+No hidden approvals.
+
+Next, we'll break down how FlowGuard handles milestone-based budget plans for structured grant funding.
