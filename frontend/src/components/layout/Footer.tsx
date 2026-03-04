@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Twitter, Send, Youtube } from 'lucide-react';
-import { APP_SITE_URL, DOCS_SITE_URL, EXPLORER_SITE_URL } from '../../utils/publicUrls';
+import { APP_SITE_URL, DOCS_SITE_URL, EXPLORER_SITE_URL, MAIN_SITE_URL } from '../../utils/publicUrls';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
@@ -11,8 +11,8 @@ export function Footer() {
         <div className="grid grid-cols-1 lg:grid-cols-6 gap-12 lg:gap-8 mb-16">
           {/* Brand Block */}
           <div className="lg:col-span-2 space-y-6">
-            <Link
-              to="/"
+            <a
+              href={MAIN_SITE_URL}
               className="inline-block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 focus-visible:ring-offset-2 focus-visible:ring-offset-brand700 rounded-sm"
             >
               <img
@@ -20,7 +20,7 @@ export function Footer() {
                 alt="FlowGuard"
                 className="h-8 object-contain"
               />
-            </Link>
+            </a>
             <p className="text-brand100 text-lg leading-relaxed max-w-sm">
               Infrastructure for permissionless treasury automation, built on BCH.
             </p>

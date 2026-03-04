@@ -2,8 +2,8 @@ import React from 'react';
 import { useWalletModal } from '../hooks/useWalletModal';
 import { useAppMode } from '../hooks/useAppMode';
 import { ShieldCheck, UserCircle, ArrowRight, Zap, Target, Lock } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import { PageMeta } from '../components/seo/PageMeta';
+import { MAIN_SITE_URL } from '../utils/publicUrls';
 
 export const SplitLoginScreen: React.FC = () => {
     const { openModal } = useWalletModal();
@@ -28,9 +28,9 @@ export const SplitLoginScreen: React.FC = () => {
                 <div className="absolute bottom-0 left-0 w-96 h-96 bg-blue-500 rounded-full blur-[150px] opacity-10 -translate-x-1/2 translate-y-1/2"></div>
 
                 <div className="relative z-10">
-                    <Link to="/" className="flex items-center gap-3 mb-16">
+                    <a href={MAIN_SITE_URL} className="flex items-center gap-3 mb-16">
                         <img src="/assets/flow-green.png" alt="FlowGuard" className="h-8 object-contain brightness-0 invert" />
-                    </Link>
+                    </a>
 
                     <h1 className="text-4xl lg:text-5xl xl:text-6xl font-extrabold tracking-tight leading-tight mb-6">
                         The operating system <br />
@@ -60,7 +60,9 @@ export const SplitLoginScreen: React.FC = () => {
             <div className="flex-1 flex flex-col justify-center p-8 sm:p-12 lg:p-20 relative">
                 {/* Mobile Logo */}
                 <div className="md:hidden mb-12">
-                    <img src="/assets/flow-green.png" alt="FlowGuard" className="h-8 object-contain" />
+                    <a href={MAIN_SITE_URL} className="inline-flex items-center">
+                        <img src="/assets/flow-green.png" alt="FlowGuard" className="h-8 object-contain" />
+                    </a>
                 </div>
 
                 <div className="max-w-md w-full mx-auto">

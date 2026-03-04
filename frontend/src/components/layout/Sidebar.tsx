@@ -18,6 +18,7 @@ import {
   History,
 } from 'lucide-react';
 import { useAppMode } from '../../hooks/useAppMode';
+import { MAIN_SITE_URL } from '../../utils/publicUrls';
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -100,8 +101,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Header - Logo & Toggle */}
         <div className={`flex items-center h-20 transition-all duration-300 ${resolvedOpen ? 'px-4 justify-between' : 'px-0 justify-center'
           }`}>
-          <Link to="/" className={`flex items-center gap-3 overflow-hidden ${resolvedOpen ? 'ml-0' : 'mx-auto'
-            }`}>
+          <a
+            href={MAIN_SITE_URL}
+            onClick={isMobileOpen ? onMobileClose : undefined}
+            className={`flex items-center gap-3 overflow-hidden ${resolvedOpen ? 'ml-0' : 'mx-auto'
+              }`}
+          >
             <img
               src="/assets/flow-logo.png"
               alt="FlowGuard"
@@ -113,7 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               FlowGuard
             </span>
-          </Link>
+          </a>
 
           {/* Desktop Collapse Toggle */}
           {isOpen && (

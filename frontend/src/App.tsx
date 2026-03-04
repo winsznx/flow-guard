@@ -82,7 +82,7 @@ function App() {
 
   // Scroll to top on route change
   useEffect(() => {
-    if (!location.pathname.startsWith('/app') && !location.pathname.startsWith('/streams') && !location.pathname.startsWith('/vaults') && !location.pathname.startsWith('/payments') && !location.pathname.startsWith('/airdrops') && !location.pathname.startsWith('/proposals') && !location.pathname.startsWith('/budgets') && !location.pathname.startsWith('/governance') && location.pathname !== '/explorer' && location.pathname !== '/status') {
+    if (!location.pathname.startsWith('/app') && !location.pathname.startsWith('/streams') && !location.pathname.startsWith('/vaults') && !location.pathname.startsWith('/payments') && !location.pathname.startsWith('/airdrops') && !location.pathname.startsWith('/proposals') && !location.pathname.startsWith('/budgets') && !location.pathname.startsWith('/governance') && location.pathname !== '/explorer') {
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
   }, [location.pathname, location.search]);
