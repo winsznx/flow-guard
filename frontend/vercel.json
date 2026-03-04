@@ -41,7 +41,7 @@
       "destination": "https://api.flowguard.cash/api/:path*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/)(?!assets/)(?!images/)(?!.*\\.).*)",
       "destination": "/index.html"
     }
   ]
