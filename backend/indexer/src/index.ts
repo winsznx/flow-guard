@@ -17,6 +17,8 @@
  * - API Server: Serves indexed data to frontend/SDK
  */
 
+import { createServer, type Server } from 'node:http';
+import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import { ElectrumNetworkProvider } from 'cashscript';
 import {
@@ -30,6 +32,8 @@ import {
   ScheduleType,
   VoteChoice,
 } from '@flowguard/shared/types';
+
+dotenv.config();
 
 /**
  * Indexer Configuration
@@ -60,6 +64,18 @@ export class FlowGuardIndexer {
   private provider: ElectrumNetworkProvider;
   private currentHeight: number = 0;
   private isRunning: boolean = false;
+  private statusServer?: Server;
+  private readonly startedAt: string = new Date().toISOString();
+  private lastPollStartedAt: string | null = null;
+  private lastPollCompletedAt: string | null = null;
+  private lastSuccessfulIndexAt: string | null = null;
+  private lastError: string | null = null;
+  private lastNetworkHeight: number | null = null;
+  private consecutiveFailures: number = 0;
+  private idlePolls: number = 0;
+  private blocksIndexed: number = 0;
+  private covenantUtxosProcessed: number = 0;
+  private pollCount: number = 0;
 
   constructor(config: IndexerConfig) {
     this.config = config;
@@ -70,7 +86,10 @@ export class FlowGuardIndexer {
     });
 
     // Initialize BCH network provider
-    this.provider = new ElectrumNetworkProvider(config.network);
+    this.provider = new ElectrumNetworkProvider(
+      config.network,
+      config.electrumServer ? { hostname: config.electrumServer } : undefined,
+    );
   }
 
   /**
@@ -99,8 +118,115 @@ export class FlowGuardIndexer {
   async stop(): Promise<void> {
     console.log('[Indexer] Stopping...');
     this.isRunning = false;
+    if (this.statusServer) {
+      await new Promise<void>((resolve, reject) => {
+        this.statusServer!.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
     await this.db.end();
     await this.provider.disconnect();
+  }
+
+  async startStatusServer(port: number): Promise<void> {
+    this.statusServer = createServer(async (req, res) => {
+      try {
+        if (req.url === '/health') {
+          const snapshot = await this.getStatusSnapshot();
+          const healthy = snapshot.service.status !== 'critical';
+          res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: healthy ? 'ok' : 'degraded',
+            service: 'flowguard-indexer',
+            timestamp: new Date().toISOString(),
+          }));
+          return;
+        }
+
+        if (req.url === '/status') {
+          const snapshot = await this.getStatusSnapshot();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(snapshot));
+          return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      } catch (error: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'Failed to serve status',
+          message: error.message,
+        }));
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.statusServer!.listen(port, '0.0.0.0', () => resolve());
+      this.statusServer!.once('error', reject);
+    });
+
+    console.log(`[Indexer] Status server listening on :${port}`);
+  }
+
+  async getStatusSnapshot(): Promise<Record<string, unknown>> {
+    const blockCount = await this.safeCount('blocks');
+    const vaultCount = await this.safeCount('vaults');
+    const proposalCount = await this.safeCount('proposals');
+    const scheduleCount = await this.safeCount('schedules');
+
+    const lag = this.lastNetworkHeight === null ? null : Math.max(0, this.lastNetworkHeight - this.currentHeight);
+    const serviceStatus =
+      this.lastError && this.consecutiveFailures >= 3
+        ? 'critical'
+        : this.consecutiveFailures > 0
+          ? 'degraded'
+          : 'healthy';
+
+    return {
+      service: {
+        name: 'FlowGuard Indexer',
+        kind: 'indexer',
+        status: serviceStatus,
+        running: this.isRunning,
+        startedAt: this.startedAt,
+        uptimeSeconds: Math.floor(process.uptime()),
+      },
+      chain: {
+        network: this.config.network,
+        electrumServer: this.config.electrumServer,
+        currentIndexedHeight: this.currentHeight,
+        lastNetworkHeight: this.lastNetworkHeight,
+        blocksBehind: lag,
+        confirmations: this.config.confirmations,
+      },
+      runtime: {
+        pollIntervalMs: this.config.pollInterval,
+        pollCount: this.pollCount,
+        idlePolls: this.idlePolls,
+        consecutiveFailures: this.consecutiveFailures,
+        lastPollStartedAt: this.lastPollStartedAt,
+        lastPollCompletedAt: this.lastPollCompletedAt,
+        lastSuccessfulIndexAt: this.lastSuccessfulIndexAt,
+        lastError: this.lastError,
+      },
+      workload: {
+        monitoredAddresses: this.config.vaultAddresses.length,
+        blocksIndexed: this.blocksIndexed,
+        covenantUtxosProcessed: this.covenantUtxosProcessed,
+      },
+      database: {
+        blocks: blockCount,
+        vaults: vaultCount,
+        proposals: proposalCount,
+        schedules: scheduleCount,
+      },
+      resources: {
+        memoryRssMB: Number((process.memoryUsage().rss / 1024 / 1024).toFixed(2)),
+        heapUsedMB: Number((process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)),
+        nodeVersion: process.version,
+      },
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /**
@@ -151,28 +277,47 @@ export class FlowGuardIndexer {
   private async pollBlocks(): Promise<void> {
     while (this.isRunning) {
       try {
+        this.pollCount += 1;
+        this.lastPollStartedAt = new Date().toISOString();
+
         // Get current network height
         const networkHeight = await this.provider.getBlockHeight();
+        this.lastNetworkHeight = networkHeight;
 
         // Check if new blocks available (with confirmation requirement)
         const targetHeight = networkHeight - this.config.confirmations;
 
         if (this.currentHeight < targetHeight) {
+          this.idlePolls = 0;
           console.log(`[Indexer] Indexing blocks ${this.currentHeight + 1} to ${targetHeight}`);
 
           // Index blocks sequentially
           for (let height = this.currentHeight + 1; height <= targetHeight; height++) {
             await this.indexBlock(height);
             this.currentHeight = height;
+            this.blocksIndexed += 1;
+            this.lastSuccessfulIndexAt = new Date().toISOString();
           }
 
           console.log(`[Indexer] Synced to block ${this.currentHeight}`);
+        } else {
+          this.idlePolls += 1;
+          if (this.idlePolls === 1 || this.idlePolls % 10 === 0) {
+            console.log(`[Indexer] Heartbeat: idle at block ${this.currentHeight}, network ${networkHeight}`);
+          }
         }
+
+        this.consecutiveFailures = 0;
+        this.lastError = null;
+        this.lastPollCompletedAt = new Date().toISOString();
 
         // Wait before next poll
         await this.sleep(this.config.pollInterval);
       } catch (error) {
         console.error('[Indexer] Polling error:', error);
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.consecutiveFailures += 1;
+        this.lastPollCompletedAt = new Date().toISOString();
         await this.sleep(this.config.pollInterval);
       }
     }
@@ -188,7 +333,7 @@ export class FlowGuardIndexer {
       // Generate a deterministic block hash from height
       // Note: ElectrumNetworkProvider doesn't expose block.header method
       // So we use a simple hash for tracking purposes
-      const blockHash = `block_${height}_${Date.now()}`;
+      const blockHash = `block_${height}`;
       const blockTimestamp = Math.floor(Date.now() / 1000);
 
       // Store block metadata
@@ -297,6 +442,7 @@ export class FlowGuardIndexer {
           // Check if UTXO has a CashToken with NFT
           if (utxo.token?.nft) {
             await this.processCovenantUTXO(utxo as any, address, blockTimestamp);
+            this.covenantUtxosProcessed += 1;
           } else {
             console.log(`[Indexer]           Skipped (no NFT)`);
           }
@@ -656,6 +802,15 @@ export class FlowGuardIndexer {
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+
+  private async safeCount(tableName: string): Promise<number> {
+    try {
+      const result = await this.db.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${tableName}`);
+      return Number(result.rows[0]?.count || 0);
+    } catch {
+      return 0;
+    }
+  }
 }
 
 /**
@@ -665,7 +820,7 @@ const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].repla
 if (isMain) {
   const config: IndexerConfig = {
     databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost:5432/flowguard',
-    network: (process.env.NETWORK as 'mainnet' | 'chipnet') || 'chipnet',
+    network: ((process.env.BCH_NETWORK || process.env.NETWORK) as 'mainnet' | 'chipnet') || 'chipnet',
     electrumServer: process.env.ELECTRUM_SERVER || 'chipnet.imaginary.cash',
     startBlock: parseInt(process.env.START_BLOCK || '0', 10),
     confirmations: parseInt(process.env.CONFIRMATIONS || '6', 10),
@@ -674,6 +829,7 @@ if (isMain) {
   };
 
   const indexer = new FlowGuardIndexer(config);
+  const statusPort = parseInt(process.env.PORT || '3201', 10);
 
   // Graceful shutdown
   process.on('SIGINT', async () => {
@@ -682,8 +838,17 @@ if (isMain) {
     process.exit(0);
   });
 
+  process.on('SIGTERM', async () => {
+    console.log('\n[Indexer] Received SIGTERM, shutting down gracefully...');
+    await indexer.stop();
+    process.exit(0);
+  });
+
   // Start indexer
-  indexer.start().catch((error) => {
+  Promise.all([
+    indexer.start(),
+    indexer.startStatusServer(statusPort),
+  ]).catch((error) => {
     console.error('[Indexer] Fatal error:', error);
     process.exit(1);
   });

@@ -1,496 +1,369 @@
-/**
- * Indexer Status Dashboard
- * Internal/operator-facing monitoring dashboard for indexer health
- *
- * This is NOT user-facing - it's for operators to monitor system health
- */
-
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
-  Database,
-  Wifi,
-  Clock,
   AlertCircle,
-  CheckCircle,
-  TrendingUp,
-  Server,
-  Cpu,
-  HardDrive,
-  Zap,
+  CheckCircle2,
+  Clock3,
+  Database,
+  Gauge,
   RefreshCw,
+  Server,
+  ShieldAlert,
+  Wifi,
   XCircle,
-  AlertTriangle,
 } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Footer } from '../components/layout/Footer';
+import { PageMeta } from '../components/seo/PageMeta';
 
-interface IndexerStatus {
-  success: boolean;
-  timestamp: number;
-  sync: {
-    status: string;
-    currentBlock: number;
-    networkBlock: number;
-    blocksBehind: number;
-    syncSpeed: number;
-    lastSyncTime: string;
-    syncProgress: string | number;
-  };
-  processing: {
-    totalTransactions: number;
-    processingRate: number;
-    processingRatePerSecond: string;
-    decodeSuccessRate: number;
-    decodeErrors: number;
-    breakdown: {
-      vaults: number;
-      streams: number;
-      proposals: number;
-      airdrops: number;
-    };
-  };
-  health: {
-    status: string;
-    uptime: {
-      seconds: number;
-      formatted: string;
-      startTime: string;
-    };
-    errors: {
-      total: number;
-      lastHour: number;
-      lastDay: number;
-      recent: any[];
-    };
-    warnings: {
-      total: number;
-      lastHour: number;
-      lastDay: number;
-    };
-    healthScore: number;
+type ServiceStatus = 'healthy' | 'degraded' | 'critical' | 'manual' | 'not_configured' | 'unreachable' | 'unknown';
+
+interface BackendStatusPayload {
+  service: {
+    name: string;
+    status: ServiceStatus;
+    uptimeSeconds: number;
+    startedAt: string;
   };
   database: {
-    sizeMB: string;
-    tables: {
-      vaults: number;
-      streams: number;
-      proposals: number;
-      airdrops: number;
-      total: number;
-    };
-    performance: {
-      avgQueryTimeMs: string;
-      slowQueries: number;
-    };
-    connections: {
-      active: number;
-      idle: number;
-      max: number;
-    };
+    engine: string;
+    counts: Record<string, number>;
+    queryLatencyMs: number;
   };
   network: {
-    name: string;
-    electrumStatus: string;
-    latencyMs?: number;
-    failedRequests: number;
-    reconnectionAttempts: number;
-    error?: string;
+    network: string;
+    electrumServer: string | null;
+    height: number | null;
+    latencyMs: number | null;
+    error: string | null;
   };
   resources: {
-    cpu?: {
-      usage: any;
-      loadAverage: number[];
-    };
-    memory: {
-      usedMB: string;
-      totalMB?: string;
-      rss?: string;
-    };
-    platform?: string;
-    nodeVersion?: string;
+    memoryRssMB: number;
+    heapUsedMB: number;
+    nodeVersion: string;
+    platform: string;
   };
 }
 
+interface RemoteServicePayload {
+  name: string;
+  url: string | null;
+  configured: boolean;
+  reachable: boolean;
+  status: ServiceStatus;
+  data: Record<string, any> | null;
+  error: string | null;
+}
+
+interface SystemStatusPayload {
+  success: boolean;
+  timestamp: string;
+  overallStatus: ServiceStatus;
+  services: {
+    backend: BackendStatusPayload;
+    indexer: RemoteServicePayload;
+    executor: RemoteServicePayload;
+  };
+  summary: {
+    healthy: number;
+    degraded: number;
+    critical: number;
+    manual: number;
+    notConfigured: number;
+  };
+}
+
+const statusTone: Record<ServiceStatus, { label: string; className: string; icon: typeof CheckCircle2 }> = {
+  healthy: { label: 'Healthy', className: 'text-green-500 bg-green-500/10 border-green-500/20', icon: CheckCircle2 },
+  degraded: { label: 'Degraded', className: 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20', icon: AlertCircle },
+  critical: { label: 'Critical', className: 'text-red-500 bg-red-500/10 border-red-500/20', icon: XCircle },
+  manual: { label: 'Manual', className: 'text-blue-500 bg-blue-500/10 border-blue-500/20', icon: Clock3 },
+  not_configured: { label: 'Not Configured', className: 'text-textMuted bg-surfaceAlt border-border', icon: ShieldAlert },
+  unreachable: { label: 'Unreachable', className: 'text-red-500 bg-red-500/10 border-red-500/20', icon: Wifi },
+  unknown: { label: 'Unknown', className: 'text-textMuted bg-surfaceAlt border-border', icon: AlertCircle },
+};
+
+function formatUptime(seconds: number) {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function ServiceBadge({ status }: { status: ServiceStatus }) {
+  const tone = statusTone[status] || statusTone.unknown;
+  const Icon = tone.icon;
+
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-mono ${tone.className}`}>
+      <Icon className="h-3.5 w-3.5" />
+      {tone.label}
+    </span>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string | number | null | undefined }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-border/60 py-2 last:border-b-0">
+      <span className="text-xs font-mono text-textMuted">{label}</span>
+      <span className="text-right text-sm font-medium text-textPrimary break-all">{value ?? 'N/A'}</span>
+    </div>
+  );
+}
+
 export default function IndexerStatusPage() {
-  const [status, setStatus] = useState<IndexerStatus | null>(null);
+  const [status, setStatus] = useState<SystemStatusPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-
-  useEffect(() => {
-    fetchStatus();
-    const interval = autoRefresh ? setInterval(fetchStatus, 5000) : undefined;
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [autoRefresh]);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch('/api/admin/indexer/status');
+      const response = await fetch('/api/admin/system/status');
       const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || data.error || 'Failed to load system status');
+      }
+
       setStatus(data);
       setLastUpdate(new Date());
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load system status');
+    } finally {
       setLoading(false);
-    } catch (error) {
-      console.error('Failed to fetch indexer status:', error);
-      setLoading(false);
     }
   };
 
-  const getSyncStatusColor = (status: string) => {
-    switch (status) {
-      case 'SYNCED': return 'text-green-500';
-      case 'SYNCING': return 'text-blue-500';
-      case 'BEHIND': return 'text-yellow-500';
-      case 'STALLED': return 'text-orange-500';
-      case 'NETWORK_ERROR': return 'text-red-500';
-      default: return 'text-gray-500';
-    }
-  };
+  useEffect(() => {
+    fetchStatus();
+  }, []);
 
-  const getSyncStatusIcon = (status: string) => {
-    switch (status) {
-      case 'SYNCED': return <CheckCircle className="w-5 h-5" />;
-      case 'SYNCING': return <RefreshCw className="w-5 h-5 animate-spin" />;
-      case 'BEHIND': return <Clock className="w-5 h-5" />;
-      case 'STALLED': return <AlertTriangle className="w-5 h-5" />;
-      case 'NETWORK_ERROR': return <XCircle className="w-5 h-5" />;
-      default: return <Activity className="w-5 h-5" />;
-    }
-  };
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(fetchStatus, 8000);
+    return () => clearInterval(interval);
+  }, [autoRefresh]);
 
-  const getHealthScoreColor = (score: number) => {
-    if (score >= 90) return 'text-green-500';
-    if (score >= 70) return 'text-yellow-500';
-    if (score >= 50) return 'text-orange-500';
-    return 'text-red-500';
-  };
+  const serviceCards = useMemo(() => {
+    if (!status) return [];
+
+    return [
+      {
+        key: 'backend',
+        title: status.services.backend.service.name,
+        icon: Server,
+        status: status.services.backend.service.status,
+        content: (
+          <div className="space-y-1">
+            <DetailRow label="Uptime" value={formatUptime(status.services.backend.service.uptimeSeconds)} />
+            <DetailRow label="SQLite Query" value={`${status.services.backend.database.queryLatencyMs}ms`} />
+            <DetailRow label="Electrum" value={status.services.backend.network.electrumServer || 'Default'} />
+            <DetailRow label="Network Height" value={status.services.backend.network.height} />
+            <DetailRow label="Heap Used" value={`${status.services.backend.resources.heapUsedMB} MB`} />
+          </div>
+        ),
+      },
+      {
+        key: 'indexer',
+        title: 'FlowGuard Indexer',
+        icon: Database,
+        status: status.services.indexer.status,
+        content: status.services.indexer.data ? (
+          <div className="space-y-1">
+            <DetailRow label="Indexed Height" value={status.services.indexer.data.chain?.currentIndexedHeight} />
+            <DetailRow label="Blocks Behind" value={status.services.indexer.data.chain?.blocksBehind} />
+            <DetailRow label="Monitored Addresses" value={status.services.indexer.data.workload?.monitoredAddresses} />
+            <DetailRow label="Blocks Indexed" value={status.services.indexer.data.workload?.blocksIndexed} />
+            <DetailRow label="Last Success" value={status.services.indexer.data.runtime?.lastSuccessfulIndexAt} />
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <DetailRow label="Configured" value={status.services.indexer.configured ? 'Yes' : 'No'} />
+            <DetailRow label="Reachable" value={status.services.indexer.reachable ? 'Yes' : 'No'} />
+            <DetailRow label="Error" value={status.services.indexer.error} />
+          </div>
+        ),
+      },
+      {
+        key: 'executor',
+        title: 'FlowGuard Executor',
+        icon: Activity,
+        status: status.services.executor.status,
+        content: status.services.executor.data ? (
+          <div className="space-y-1">
+            <DetailRow label="Automatic Signing" value={status.services.executor.data.capabilities?.automaticSigningConfigured ? 'Configured' : 'Not Configured'} />
+            <DetailRow label="Queue Ready" value={`${status.services.executor.data.queue?.executableSchedules ?? 0} schedules / ${status.services.executor.data.queue?.executableProposals ?? 0} proposals`} />
+            <DetailRow label="Tasks Seen" value={status.services.executor.data.queue?.tasksSeen} />
+            <DetailRow label="Manual Required" value={status.services.executor.data.queue?.manualExecutionsRequired} />
+            <DetailRow label="Last Task" value={status.services.executor.data.runtime?.lastTaskAt} />
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <DetailRow label="Configured" value={status.services.executor.configured ? 'Yes' : 'No'} />
+            <DetailRow label="Reachable" value={status.services.executor.reachable ? 'Yes' : 'No'} />
+            <DetailRow label="Error" value={status.services.executor.error} />
+          </div>
+        ),
+      },
+    ];
+  }, [status]);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <div className="flex-grow p-4 md:p-6 lg:p-8">
-        <div className="max-w-7xl mx-auto">
+    <>
+      <PageMeta
+        title="System Status"
+        description="Monitor FlowGuard backend, indexer, and executor health across BCH network connectivity, database state, and worker runtime."
+        path="/status"
+      />
+      <div className="min-h-screen bg-background flex flex-col">
+        <div className="flex-grow px-4 py-6 md:px-6 lg:px-8">
+          <div className="mx-auto max-w-7xl space-y-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Operators</p>
+              <h1 className="mt-2 text-3xl font-display font-bold text-textPrimary md:text-5xl">System Status</h1>
+              <p className="mt-2 max-w-2xl text-sm text-textMuted md:text-base">
+                Real-time health for the backend API, indexer, and executor. This page uses service endpoints, not synthetic SQLite estimates.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {status && <ServiceBadge status={status.overallStatus} />}
+              <Button onClick={fetchStatus} variant="secondary" className="flex items-center gap-2">
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+              <button
+                onClick={() => setAutoRefresh((value) => !value)}
+                className={`rounded-full border px-4 py-2 text-xs font-mono transition-colors ${autoRefresh ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-textPrimary'}`}
+              >
+                Auto Refresh {autoRefresh ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          </div>
+
           {loading && !status ? (
-            <div className="flex items-center justify-center h-64">
-              <RefreshCw className="w-6 h-6 md:w-8 md:h-8 animate-spin text-accent" />
-            </div>
-          ) : !status ? (
-            <div className="text-center px-4">
-              <AlertCircle className="w-12 h-12 md:w-16 md:h-16 text-error mx-auto mb-4" />
-              <h2 className="text-xl md:text-2xl font-bold text-textPrimary mb-2">Failed to Load Indexer Status</h2>
-              <p className="text-sm md:text-base text-textMuted mb-4">Could not connect to indexer monitoring service</p>
-              <Button onClick={fetchStatus}>Retry</Button>
-            </div>
+            <Card className="p-10">
+              <div className="flex items-center justify-center gap-3 text-textMuted">
+                <RefreshCw className="h-5 w-5 animate-spin" />
+                Loading service status...
+              </div>
+            </Card>
+          ) : error && !status ? (
+            <Card className="border-error/30 p-10">
+              <div className="flex flex-col items-center justify-center gap-3 text-center">
+                <AlertCircle className="h-10 w-10 text-error" />
+                <div>
+                  <h2 className="text-xl font-semibold text-textPrimary">Unable to load system status</h2>
+                  <p className="mt-2 text-sm text-textMuted">{error}</p>
+                </div>
+                <Button onClick={fetchStatus}>Retry</Button>
+              </div>
+            </Card>
           ) : (
             <>
-              {/* Header */}
-              <div className="mb-6 md:mb-8">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                  <div>
-                    <h1 className="text-3xl md:text-4xl lg:text-5xl font-display font-bold text-textPrimary mb-2">
-                      Indexer Status
-                    </h1>
-                    <p className="text-sm md:text-base text-textMuted font-mono">
-                      Operational monitoring dashboard
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 md:gap-4">
-                    <div className="text-left md:text-right">
-                      <div className="text-xs md:text-sm text-textMuted font-mono">Last Update</div>
-                      <div className="text-xs md:text-sm font-mono text-textPrimary">
-                        {lastUpdate.toLocaleTimeString()}
-                      </div>
-                    </div>
-                    <Button
-                      onClick={fetchStatus}
-                      variant="secondary"
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      <span className="hidden sm:inline">Refresh</span>
-                    </Button>
-                    <button
-                      onClick={() => setAutoRefresh(!autoRefresh)}
-                      className={`px-3 md:px-4 py-2 rounded-lg font-mono text-xs md:text-sm transition-colors whitespace-nowrap ${autoRefresh
-                        ? 'bg-accent text-white'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                        }`}
-                    >
-                      {autoRefresh ? 'Auto: ON' : 'Auto: OFF'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Sync Status Banner */}
-              <Card className="mb-6 p-4 md:p-6 border-2 border-accent/20">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className={`${getSyncStatusColor(status.sync.status)}`}>
-                      {getSyncStatusIcon(status.sync.status)}
-                    </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Card className="p-5">
+                  <div className="flex items-start justify-between">
                     <div>
-                      <div className="text-xl md:text-2xl font-bold text-textPrimary">
-                        {status.sync.status.replace('_', ' ')}
-                      </div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono">
-                        Block {status.sync.currentBlock.toLocaleString()} / {status.sync.networkBlock.toLocaleString()}
-                      </div>
+                      <p className="text-xs font-mono text-textMuted">Healthy Services</p>
+                      <p className="mt-2 text-3xl font-bold text-textPrimary">{status?.summary.healthy ?? 0}</p>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4 md:gap-6 lg:gap-8">
-                    <div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono">Blocks Behind</div>
-                      <div className="text-lg md:text-2xl font-bold text-textPrimary">
-                        {status.sync.blocksBehind.toLocaleString()}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono">Sync Speed</div>
-                      <div className="text-lg md:text-2xl font-bold text-textPrimary">
-                        {status.sync.syncSpeed.toFixed(1)} <span className="hidden sm:inline">blk/min</span><span className="sm:hidden">b/m</span>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono">Progress</div>
-                      <div className="text-lg md:text-2xl font-bold text-textPrimary">
-                        {status.sync.syncProgress}%
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                {/* Progress bar */}
-                <div className="mt-4 bg-gray-200 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-accent h-full transition-all duration-300"
-                    style={{ width: `${status.sync.syncProgress}%` }}
-                  />
-                </div>
-              </Card>
-
-              {/* Main Metrics Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6">
-                {/* Processing Metrics */}
-                <Card className="p-4 md:p-6">
-                  <div className="flex items-start justify-between mb-3 md:mb-4">
-                    <div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono mb-1">Processing Rate</div>
-                      <div className="text-2xl md:text-3xl font-bold text-textPrimary">
-                        {status.processing.processingRate}
-                      </div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono">tx/hour</div>
-                    </div>
-                    <TrendingUp className="w-6 h-6 md:w-8 md:h-8 text-accent flex-shrink-0" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Total Indexed</span>
-                      <span className="font-bold text-textPrimary">
-                        {status.processing.totalTransactions.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Decode Success</span>
-                      <span className="font-bold text-green-500">
-                        {status.processing.decodeSuccessRate}%
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Decode Errors</span>
-                      <span className="font-bold text-textPrimary">
-                        {status.processing.decodeErrors}
-                      </span>
-                    </div>
+                    <CheckCircle2 className="h-6 w-6 text-green-500" />
                   </div>
                 </Card>
-
-                {/* Service Health */}
-                <Card className="p-4 md:p-6">
-                  <div className="flex items-start justify-between mb-3 md:mb-4">
+                <Card className="p-5">
+                  <div className="flex items-start justify-between">
                     <div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono mb-1">Health Score</div>
-                      <div className={`text-2xl md:text-3xl font-bold ${getHealthScoreColor(status.health.healthScore)}`}>
-                        {status.health.healthScore}
-                      </div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono">/ 100</div>
+                      <p className="text-xs font-mono text-textMuted">Degraded / Critical</p>
+                      <p className="mt-2 text-3xl font-bold text-textPrimary">{(status?.summary.degraded ?? 0) + (status?.summary.critical ?? 0)}</p>
                     </div>
-                    <Activity className="w-6 h-6 md:w-8 md:h-8 text-accent flex-shrink-0" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Uptime</span>
-                      <span className="font-bold text-textPrimary font-mono">
-                        {status.health.uptime.formatted}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Errors (24h)</span>
-                      <span className={`font-bold ${status.health.errors.lastDay > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                        {status.health.errors.lastDay}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Warnings (24h)</span>
-                      <span className={`font-bold ${status.health.warnings.lastDay > 0 ? 'text-yellow-500' : 'text-green-500'}`}>
-                        {status.health.warnings.lastDay}
-                      </span>
-                    </div>
+                    <ShieldAlert className="h-6 w-6 text-yellow-500" />
                   </div>
                 </Card>
-
-                {/* Network Connectivity */}
-                <Card className="p-4 md:p-6">
-                  <div className="flex items-start justify-between mb-3 md:mb-4">
+                <Card className="p-5">
+                  <div className="flex items-start justify-between">
                     <div>
-                      <div className="text-xs md:text-sm text-textMuted font-mono mb-1">Network</div>
-                      <div className="text-2xl md:text-3xl font-bold text-textPrimary capitalize">
-                        {status.network.name}
-                      </div>
-                      <div className={`text-xs md:text-sm font-mono ${status.network.electrumStatus === 'CONNECTED' ? 'text-green-500' : 'text-red-500'}`}>
-                        {status.network.electrumStatus}
-                      </div>
+                      <p className="text-xs font-mono text-textMuted">Manual Services</p>
+                      <p className="mt-2 text-3xl font-bold text-textPrimary">{status?.summary.manual ?? 0}</p>
                     </div>
-                    <Wifi className="w-6 h-6 md:w-8 md:h-8 text-accent flex-shrink-0" />
+                    <Clock3 className="h-6 w-6 text-blue-500" />
                   </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Latency</span>
-                      <span className="font-bold text-textPrimary">
-                        {status.network.latencyMs ? `${status.network.latencyMs}ms` : 'N/A'}
-                      </span>
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-xs font-mono text-textMuted">Last Update</p>
+                      <p className="mt-2 text-lg font-semibold text-textPrimary">{lastUpdate ? lastUpdate.toLocaleTimeString() : 'N/A'}</p>
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Failed Requests</span>
-                      <span className="font-bold text-textPrimary">
-                        {status.network.failedRequests}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-textMuted font-mono">Reconnects</span>
-                      <span className="font-bold text-textPrimary">
-                        {status.network.reconnectionAttempts}
-                      </span>
-                    </div>
+                    <Gauge className="h-6 w-6 text-accent" />
                   </div>
                 </Card>
               </div>
 
-              {/* Contract Type Breakdown */}
-              <Card className="mb-6 p-4 md:p-6">
-                <h3 className="text-lg md:text-xl font-bold text-textPrimary mb-3 md:mb-4 flex items-center gap-2">
-                  <Database className="w-4 h-4 md:w-5 md:h-5 text-accent" />
-                  Contract Type Breakdown
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-                  <div className="text-center p-3 md:p-4 bg-brand-100 rounded-lg">
-                    <div className="text-2xl md:text-3xl font-bold text-textPrimary">
-                      {status.processing.breakdown.vaults.toLocaleString()}
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+                {serviceCards.map(({ key, title, icon: Icon, status: serviceStatus, content }) => (
+                  <Card key={key} className="p-5">
+                    <div className="flex flex-col gap-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className="rounded-2xl border border-border bg-surfaceAlt p-3">
+                            <Icon className="h-5 w-5 text-accent" />
+                          </div>
+                          <div>
+                            <h2 className="text-lg font-semibold text-textPrimary">{title}</h2>
+                            <p className="text-xs font-mono text-textMuted">Operational health and runtime state</p>
+                          </div>
+                        </div>
+                        <ServiceBadge status={serviceStatus} />
+                      </div>
+                      {content}
                     </div>
-                    <div className="text-xs md:text-sm text-textMuted font-mono mt-1">Vaults</div>
-                  </div>
-                  <div className="text-center p-3 md:p-4 bg-brand-100 rounded-lg">
-                    <div className="text-2xl md:text-3xl font-bold text-textPrimary">
-                      {status.processing.breakdown.streams.toLocaleString()}
-                    </div>
-                    <div className="text-xs md:text-sm text-textMuted font-mono mt-1">Streams</div>
-                  </div>
-                  <div className="text-center p-3 md:p-4 bg-brand-100 rounded-lg">
-                    <div className="text-2xl md:text-3xl font-bold text-textPrimary">
-                      {status.processing.breakdown.proposals.toLocaleString()}
-                    </div>
-                    <div className="text-xs md:text-sm text-textMuted font-mono mt-1">Proposals</div>
-                  </div>
-                  <div className="text-center p-3 md:p-4 bg-brand-100 rounded-lg">
-                    <div className="text-2xl md:text-3xl font-bold text-textPrimary">
-                      {status.processing.breakdown.airdrops.toLocaleString()}
-                    </div>
-                    <div className="text-xs md:text-sm text-textMuted font-mono mt-1">Airdrops</div>
-                  </div>
-                </div>
-              </Card>
+                  </Card>
+                ))}
+              </div>
 
-              {/* Database & Resources */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-                {/* Database Metrics */}
-                <Card className="p-4 md:p-6">
-                  <h3 className="text-lg md:text-xl font-bold text-textPrimary mb-3 md:mb-4 flex items-center gap-2">
-                    <HardDrive className="w-4 h-4 md:w-5 md:h-5 text-accent" />
-                    Database Metrics
-                  </h3>
-                  <div className="space-y-3 md:space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Database Size</span>
-                      <span className="text-lg md:text-xl font-bold text-textPrimary">
-                        {status.database.sizeMB} MB
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Total Rows</span>
-                      <span className="text-lg md:text-xl font-bold text-textPrimary">
-                        {status.database.tables.total.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Avg Query Time</span>
-                      <span className="text-lg md:text-xl font-bold text-textPrimary">
-                        {status.database.performance.avgQueryTimeMs}ms
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Active Connections</span>
-                      <span className="text-lg md:text-xl font-bold text-textPrimary">
-                        {status.database.connections.active} / {status.database.connections.max}
-                      </span>
-                    </div>
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+                <Card className="p-5">
+                  <div className="flex items-center gap-2">
+                    <Database className="h-5 w-5 text-accent" />
+                    <h2 className="text-lg font-semibold text-textPrimary">Backend Database Inventory</h2>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                    {Object.entries(status?.services.backend.database.counts ?? {}).map(([key, value]) => (
+                      <div key={key} className="rounded-2xl border border-border bg-surfaceAlt px-4 py-3">
+                        <p className="text-xs font-mono uppercase tracking-[0.2em] text-textMuted">{key}</p>
+                        <p className="mt-2 text-xl font-bold text-textPrimary">{value.toLocaleString()}</p>
+                      </div>
+                    ))}
                   </div>
                 </Card>
 
-                {/* Resource Usage */}
-                <Card className="p-4 md:p-6">
-                  <h3 className="text-lg md:text-xl font-bold text-textPrimary mb-3 md:mb-4 flex items-center gap-2">
-                    <Cpu className="w-4 h-4 md:w-5 md:h-5 text-accent" />
-                    Resource Usage
-                  </h3>
-                  <div className="space-y-3 md:space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Memory (Heap)</span>
-                      <span className="text-lg md:text-xl font-bold text-textPrimary">
-                        {status.resources.memory.usedMB} MB
-                        {status.resources.memory.totalMB && ` / ${status.resources.memory.totalMB} MB`}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Memory (RSS)</span>
-                      <span className="text-lg md:text-xl font-bold text-textPrimary">
-                        {status.resources.memory.rss} MB
-                      </span>
-                    </div>
-                    {status.resources.cpu && status.resources.cpu.loadAverage && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs md:text-sm text-textMuted font-mono">Load Average</span>
-                        <span className="text-lg md:text-xl font-bold text-textPrimary font-mono">
-                          {status.resources.cpu.loadAverage[0].toFixed(2)}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs md:text-sm text-textMuted font-mono">Platform</span>
-                      <span className="text-xs md:text-sm font-bold text-textPrimary font-mono">
-                        {status.resources.platform} / {status.resources.nodeVersion}
-                      </span>
-                    </div>
+                <Card className="p-5">
+                  <div className="flex items-center gap-2">
+                    <Wifi className="h-5 w-5 text-accent" />
+                    <h2 className="text-lg font-semibold text-textPrimary">Network Summary</h2>
+                  </div>
+                  <div className="mt-4 space-y-1">
+                    <DetailRow label="BCH Network" value={status?.services.backend.network.network} />
+                    <DetailRow label="Electrum Host" value={status?.services.backend.network.electrumServer} />
+                    <DetailRow label="Electrum Latency" value={status?.services.backend.network.latencyMs ? `${status.services.backend.network.latencyMs}ms` : 'N/A'} />
+                    <DetailRow label="Indexer URL" value={status?.services.indexer.url} />
+                    <DetailRow label="Executor URL" value={status?.services.executor.url} />
                   </div>
                 </Card>
               </div>
-
             </>
           )}
         </div>
+        </div>
+        <Footer />
       </div>
-      <Footer />
-    </div>
+    </>
   );
 }

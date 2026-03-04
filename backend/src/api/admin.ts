@@ -3,232 +3,237 @@
  * Internal/operator-facing endpoints for system monitoring
  */
 
+import os from 'node:os';
 import { Router, Request, Response } from 'express';
-import db from '../database/schema.js';
 import { ElectrumNetworkProvider } from 'cashscript';
-import os from 'os';
+import db from '../database/schema.js';
 
 const router = Router();
 
-/**
- * GET /api/admin/indexer/status
- * Get comprehensive indexer health and metrics
- *
- * Returns:
- * - Sync status (current block, lag, speed)
- * - Processing metrics (tx indexed, decode rates)
- * - Service health (uptime, errors, warnings)
- * - Database metrics (size, row counts, performance)
- * - Network connectivity (electrum status, latency)
- * - Resource usage (if available)
- */
-router.get('/admin/indexer/status', async (req: Request, res: Response) => {
+type ServiceStatus = 'healthy' | 'degraded' | 'critical' | 'manual' | 'not_configured' | 'unreachable' | 'unknown';
+
+interface RemoteServiceEnvelope {
+  name: string;
+  url: string | null;
+  configured: boolean;
+  reachable: boolean;
+  status: ServiceStatus;
+  data: Record<string, unknown> | null;
+  error: string | null;
+}
+
+function classifyOverallStatus(statuses: ServiceStatus[]): ServiceStatus {
+  if (statuses.some((status) => status === 'critical' || status === 'unreachable')) {
+    return 'critical';
+  }
+  if (statuses.some((status) => status === 'degraded' || status === 'unknown')) {
+    return 'degraded';
+  }
+  if (statuses.every((status) => status === 'not_configured')) {
+    return 'not_configured';
+  }
+  if (statuses.some((status) => status === 'manual')) {
+    return 'manual';
+  }
+  return 'healthy';
+}
+
+function countRows(tableName: string): number {
   try {
-    const network = (req.query.network as string) || 'chipnet';
-    const provider = new ElectrumNetworkProvider(network as any);
+    const row = db!.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get() as { count?: number } | undefined;
+    return row?.count || 0;
+  } catch {
+    return 0;
+  }
+}
 
-    // 1. SYNC STATUS
-    const networkHeight = await provider.getBlockHeight();
+async function fetchJson(url: string, timeoutMs = 4000): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Get last indexed block from database (if indexer tables exist)
-    let lastIndexedBlock = 0;
-    let syncStatus = 'NOT_CONFIGURED';
-    let blocksBehind = networkHeight;
-
-    try {
-      // Check if we're using SQLite or if indexer DB tables exist
-      const blockRow = db!.prepare('SELECT MAX(created_at) as last_sync FROM streams').get() as any;
-      if (blockRow?.last_sync) {
-        // Estimate block from timestamp (rough approximation)
-        const now = Math.floor(Date.now() / 1000);
-        const timeSinceLastSync = now - blockRow.last_sync;
-        const estimatedBlocksPerSecond = 1 / 600; // BCH: ~10 min blocks
-        lastIndexedBlock = networkHeight - Math.floor(timeSinceLastSync * estimatedBlocksPerSecond);
-        blocksBehind = networkHeight - lastIndexedBlock;
-
-        if (blocksBehind < 10) syncStatus = 'SYNCED';
-        else if (blocksBehind < 100) syncStatus = 'SYNCING';
-        else if (blocksBehind < 1000) syncStatus = 'BEHIND';
-        else syncStatus = 'STALLED';
-      }
-    } catch (e) {
-      // No indexer data yet
-      syncStatus = 'NOT_STARTED';
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
     }
+    return await response.json() as Record<string, unknown>;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
-    // Calculate sync speed (blocks per minute)
-    // For now, estimate based on last hour of activity
-    const syncSpeed = blocksBehind > 0 ? Math.min(60, blocksBehind / 10) : 0;
+async function fetchRemoteServiceStatus(name: string, baseUrl?: string): Promise<RemoteServiceEnvelope> {
+  if (!baseUrl) {
+    return {
+      name,
+      url: null,
+      configured: false,
+      reachable: false,
+      status: 'not_configured',
+      data: null,
+      error: null,
+    };
+  }
 
-    // 2. PROCESSING METRICS
-    const vaultCount = db!.prepare('SELECT COUNT(*) as count FROM vaults').get() as any;
-    const streamCount = db!.prepare('SELECT COUNT(*) as count FROM streams').get() as any;
-    const proposalCount = db!.prepare('SELECT COUNT(*) as count FROM proposals').get() as any;
-    const airdropCount = db!.prepare('SELECT COUNT(*) as count FROM airdrops').get() as any;
+  const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  const statusUrl = new URL('status', normalizedBaseUrl).toString();
 
-    const totalContracts = (vaultCount?.count || 0) +
-                          (streamCount?.count || 0) +
-                          (proposalCount?.count || 0) +
-                          (airdropCount?.count || 0);
+  try {
+    const data = await fetchJson(statusUrl);
+    const service = (data.service as Record<string, unknown> | undefined) ?? {};
 
-    // Get recent activity (last hour)
-    const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
-    const recentStreams = db!.prepare('SELECT COUNT(*) as count FROM streams WHERE created_at > ?').get(oneHourAgo) as any;
-    const recentVaults = db!.prepare('SELECT COUNT(*) as count FROM vaults WHERE created_at > ?').get(oneHourAgo) as any;
-    const recentProposals = db!.prepare('SELECT COUNT(*) as count FROM proposals WHERE created_at > ?').get(oneHourAgo) as any;
+    return {
+      name,
+      url: statusUrl,
+      configured: true,
+      reachable: true,
+      status: (service.status as ServiceStatus) || 'unknown',
+      data,
+      error: null,
+    };
+  } catch (error: any) {
+    return {
+      name,
+      url: statusUrl,
+      configured: true,
+      reachable: false,
+      status: 'unreachable',
+      data: null,
+      error: error.message,
+    };
+  }
+}
 
-    const processingRate = (recentStreams?.count || 0) + (recentVaults?.count || 0) + (recentProposals?.count || 0);
+async function getBackendStatus(network: 'mainnet' | 'chipnet', electrumServer?: string) {
+  const provider = new ElectrumNetworkProvider(
+    network,
+    electrumServer ? { hostname: electrumServer } : undefined,
+  );
 
-    // Decode success rate (assume high for now, would track errors in production)
-    const decodeSuccessRate = 99.8;
+  const networkStartedAt = Date.now();
+  let networkStatus: ServiceStatus = 'healthy';
+  let networkHeight: number | null = null;
+  let networkLatencyMs: number | null = null;
+  let networkError: string | null = null;
 
-    // 3. SERVICE HEALTH
-    const startTime = Date.now() - (process.uptime() * 1000);
-    const uptimeSeconds = process.uptime();
-    const uptimeDays = Math.floor(uptimeSeconds / 86400);
-    const uptimeHours = Math.floor((uptimeSeconds % 86400) / 3600);
-    const uptimeMins = Math.floor((uptimeSeconds % 3600) / 60);
+  try {
+    networkHeight = await provider.getBlockHeight();
+    networkLatencyMs = Date.now() - networkStartedAt;
+  } catch (error: any) {
+    networkStatus = 'degraded';
+    networkError = error.message;
+  } finally {
+    await provider.disconnect().catch(() => undefined);
+  }
 
-    // Error tracking (would be stored in errors table in production)
-    const errorCount = 0;
-    const warningCount = 0;
+  const vaultCount = countRows('vaults');
+  const streamCount = countRows('streams');
+  const proposalCount = countRows('proposals');
+  const airdropCount = countRows('airdrops');
+  const paymentCount = countRows('payments');
+  const budgetPlanCount = countRows('budget_plans');
 
-    // 4. DATABASE METRICS
-    // SQLite doesn't easily expose database size, but we can estimate from row counts
-    const totalRows = totalContracts;
-    const estimatedDbSizeMB = totalRows * 0.001; // Rough estimate: ~1KB per row
+  const queryStartedAt = Date.now();
+  db!.prepare('SELECT COUNT(*) as count FROM streams').get();
+  const queryLatencyMs = Date.now() - queryStartedAt;
 
-    // Query performance (measure a simple query)
-    const queryStart = Date.now();
-    db!.prepare('SELECT COUNT(*) FROM streams').get();
-    const queryTimeMs = Date.now() - queryStart;
+  return {
+    service: {
+      name: 'FlowGuard Backend API',
+      kind: 'backend',
+      status: networkStatus,
+      startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+    },
+    database: {
+      engine: 'sqlite',
+      counts: {
+        vaults: vaultCount,
+        streams: streamCount,
+        proposals: proposalCount,
+        airdrops: airdropCount,
+        payments: paymentCount,
+        budgetPlans: budgetPlanCount,
+        total: vaultCount + streamCount + proposalCount + airdropCount + paymentCount + budgetPlanCount,
+      },
+      queryLatencyMs,
+    },
+    network: {
+      status: networkStatus,
+      network,
+      electrumServer: electrumServer || null,
+      height: networkHeight,
+      latencyMs: networkLatencyMs,
+      error: networkError,
+    },
+    resources: {
+      memoryRssMB: Number((process.memoryUsage().rss / 1024 / 1024).toFixed(2)),
+      heapUsedMB: Number((process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)),
+      loadAverage: process.platform !== 'win32' ? os.loadavg() : [0, 0, 0],
+      nodeVersion: process.version,
+      platform: process.platform,
+    },
+    timestamp: new Date().toISOString(),
+  };
+}
 
-    // 5. NETWORK CONNECTIVITY
-    const networkLatencyStart = Date.now();
-    try {
-      await provider.getBlockHeight();
-      const networkLatency = Date.now() - networkLatencyStart;
+async function buildSystemStatus() {
+  const network = ((process.env.BCH_NETWORK || process.env.NETWORK) as 'mainnet' | 'chipnet') || 'chipnet';
+  const electrumServer = process.env.ELECTRUM_SERVER;
 
-      const response = {
-        success: true,
-        timestamp: Date.now(),
+  const [backendStatus, indexerStatus, executorStatus] = await Promise.all([
+    getBackendStatus(network, electrumServer),
+    fetchRemoteServiceStatus('Indexer', process.env.INDEXER_STATUS_URL),
+    fetchRemoteServiceStatus('Executor', process.env.EXECUTOR_STATUS_URL),
+  ]);
 
-        // 1. Sync Status
-        sync: {
-          status: syncStatus,
-          currentBlock: lastIndexedBlock,
-          networkBlock: networkHeight,
-          blocksBehind,
-          syncSpeed, // blocks per minute
-          lastSyncTime: new Date().toISOString(),
-          syncProgress: lastIndexedBlock > 0 ? ((lastIndexedBlock / networkHeight) * 100).toFixed(2) : 0,
-        },
+  const overallStatus = classifyOverallStatus([
+    backendStatus.service.status as ServiceStatus,
+    indexerStatus.status,
+    executorStatus.status,
+  ]);
 
-        // 2. Processing Metrics
-        processing: {
-          totalTransactions: totalContracts,
-          processingRate, // transactions per hour
-          processingRatePerSecond: (processingRate / 3600).toFixed(2),
-          decodeSuccessRate,
-          decodeErrors: 0,
-          breakdown: {
-            vaults: vaultCount?.count || 0,
-            streams: streamCount?.count || 0,
-            proposals: proposalCount?.count || 0,
-            airdrops: airdropCount?.count || 0,
-          },
-        },
+  return {
+    success: true,
+    timestamp: new Date().toISOString(),
+    overallStatus,
+    services: {
+      backend: backendStatus,
+      indexer: indexerStatus,
+      executor: executorStatus,
+    },
+    summary: {
+      healthy: [backendStatus.service.status, indexerStatus.status, executorStatus.status].filter((status) => status === 'healthy').length,
+      degraded: [backendStatus.service.status, indexerStatus.status, executorStatus.status].filter((status) => status === 'degraded').length,
+      critical: [backendStatus.service.status, indexerStatus.status, executorStatus.status].filter((status) => status === 'critical' || status === 'unreachable').length,
+      manual: [backendStatus.service.status, indexerStatus.status, executorStatus.status].filter((status) => status === 'manual').length,
+      notConfigured: [backendStatus.service.status, indexerStatus.status, executorStatus.status].filter((status) => status === 'not_configured').length,
+    },
+  };
+}
 
-        // 3. Service Health
-        health: {
-          status: 'RUNNING',
-          uptime: {
-            seconds: Math.floor(uptimeSeconds),
-            formatted: `${uptimeDays}d ${uptimeHours}h ${uptimeMins}m`,
-            startTime: new Date(startTime).toISOString(),
-          },
-          errors: {
-            total: errorCount,
-            lastHour: 0,
-            lastDay: 0,
-            recent: [], // Would contain last N errors
-          },
-          warnings: {
-            total: warningCount,
-            lastHour: 0,
-            lastDay: 0,
-          },
-          healthScore: 100, // Composite metric: 100 = perfect
-        },
+router.get('/admin/system/status', async (_req: Request, res: Response) => {
+  try {
+    const status = await buildSystemStatus();
+    res.json(status);
+  } catch (error: any) {
+    console.error('GET /admin/system/status error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch system status',
+      message: error.message,
+    });
+  }
+});
 
-        // 4. Database Metrics
-        database: {
-          sizeMB: estimatedDbSizeMB.toFixed(2),
-          tables: {
-            vaults: vaultCount?.count || 0,
-            streams: streamCount?.count || 0,
-            proposals: proposalCount?.count || 0,
-            airdrops: airdropCount?.count || 0,
-            total: totalContracts,
-          },
-          performance: {
-            avgQueryTimeMs: queryTimeMs.toFixed(2),
-            slowQueries: 0,
-          },
-          connections: {
-            active: 1, // SQLite single connection
-            idle: 0,
-            max: 1,
-          },
-        },
-
-        // 5. Network Connectivity
-        network: {
-          name: network,
-          electrumStatus: 'CONNECTED',
-          latencyMs: networkLatency,
-          failedRequests: 0,
-          reconnectionAttempts: 0,
-        },
-
-        // 6. Resource Usage (from Node.js process)
-        resources: {
-          cpu: {
-            usage: process.cpuUsage(),
-            loadAverage: process.platform !== 'win32' ? os.loadavg() : [0, 0, 0],
-          },
-          memory: {
-            usedMB: (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
-            totalMB: (process.memoryUsage().heapTotal / 1024 / 1024).toFixed(2),
-            rss: (process.memoryUsage().rss / 1024 / 1024).toFixed(2),
-          },
-          platform: process.platform,
-          nodeVersion: process.version,
-        },
-      };
-
-      res.json(response);
-    } catch (networkError: any) {
-      // Network connectivity failed
-      res.json({
-        success: true,
-        timestamp: Date.now(),
-        sync: { status: 'NETWORK_ERROR', blocksBehind: 0 },
-        processing: { totalTransactions: totalContracts },
-        health: { status: 'DEGRADED', uptime: { seconds: Math.floor(uptimeSeconds) } },
-        database: { sizeMB: estimatedDbSizeMB.toFixed(2), tables: { total: totalContracts } },
-        network: {
-          name: network,
-          electrumStatus: 'DISCONNECTED',
-          error: networkError.message,
-        },
-        resources: {
-          memory: {
-            usedMB: (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
-          },
-        },
-      });
-    }
+router.get('/admin/indexer/status', async (_req: Request, res: Response) => {
+  try {
+    const status = await buildSystemStatus();
+    res.json({
+      success: true,
+      timestamp: status.timestamp,
+      service: status.services.indexer,
+    });
   } catch (error: any) {
     console.error('GET /admin/indexer/status error:', error);
     res.status(500).json({
@@ -239,54 +244,22 @@ router.get('/admin/indexer/status', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/admin/indexer/errors
- * Get recent indexer errors and warnings
- */
-router.get('/admin/indexer/errors', async (req: Request, res: Response) => {
-  try {
-    const limit = parseInt(req.query.limit as string) || 50;
-
-    // In production, this would query an errors table
-    // For now, return empty array
-    res.json({
-      success: true,
-      errors: [],
-      total: 0,
-    });
-  } catch (error: any) {
-    console.error('GET /admin/indexer/errors error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch errors',
-      message: error.message,
-    });
-  }
+router.get('/admin/indexer/errors', async (_req: Request, res: Response) => {
+  const indexerStatus = await fetchRemoteServiceStatus('Indexer', process.env.INDEXER_STATUS_URL);
+  res.json({
+    success: true,
+    errors: indexerStatus.error ? [{ service: 'indexer', message: indexerStatus.error }] : [],
+    total: indexerStatus.error ? 1 : 0,
+  });
 });
 
-/**
- * POST /api/admin/indexer/resync
- * Trigger a resync from specific block height
- */
 router.post('/admin/indexer/resync', async (req: Request, res: Response) => {
-  try {
-    const { fromBlock } = req.body;
-
-    // In production, this would trigger the indexer service to resync
-    // For now, return success
-    res.json({
-      success: true,
-      message: `Resync triggered from block ${fromBlock}`,
-      fromBlock,
-    });
-  } catch (error: any) {
-    console.error('POST /admin/indexer/resync error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to trigger resync',
-      message: error.message,
-    });
-  }
+  res.status(501).json({
+    success: false,
+    error: 'Not implemented',
+    message: 'Remote indexer resync control is not implemented yet.',
+    fromBlock: req.body?.fromBlock ?? null,
+  });
 });
 
 export default router;

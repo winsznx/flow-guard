@@ -68,7 +68,10 @@ export class TransactionBuilder {
 
   constructor(config: TxBuilderConfig) {
     this.config = config;
-    this.provider = new ElectrumNetworkProvider(config.network);
+    this.provider = new ElectrumNetworkProvider(
+      config.network,
+      config.electrumServer ? { hostname: config.electrumServer } : undefined,
+    );
   }
 
   /**

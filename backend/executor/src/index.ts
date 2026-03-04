@@ -22,6 +22,8 @@
  * - Executor earns small fee for gas costs
  */
 
+import { createServer, type Server } from 'node:http';
+import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import { Contract, ElectrumNetworkProvider, SignatureTemplate } from 'cashscript';
 import {
@@ -32,6 +34,8 @@ import {
   ProposalStatus,
 } from '@flowguard/shared/types';
 import { TransactionBuilder, TxBuilderConfig } from './services/TransactionBuilder.js';
+
+dotenv.config();
 
 /**
  * Executor Configuration
@@ -70,6 +74,19 @@ export class FlowGuardExecutor {
   private provider: ElectrumNetworkProvider;
   private txBuilder: TransactionBuilder;
   private isRunning: boolean = false;
+  private statusServer?: Server;
+  private readonly startedAt: string = new Date().toISOString();
+  private lastPollStartedAt: string | null = null;
+  private lastPollCompletedAt: string | null = null;
+  private lastTaskAt: string | null = null;
+  private lastError: string | null = null;
+  private lastNetworkHeight: number | null = null;
+  private pollCount: number = 0;
+  private idlePolls: number = 0;
+  private consecutiveFailures: number = 0;
+  private tasksSeen: number = 0;
+  private tasksExecuted: number = 0;
+  private manualExecutionsRequired: number = 0;
 
   constructor(config: ExecutorConfig) {
     this.config = config;
@@ -80,7 +97,10 @@ export class FlowGuardExecutor {
     });
 
     // Initialize BCH network provider
-    this.provider = new ElectrumNetworkProvider(config.network);
+    this.provider = new ElectrumNetworkProvider(
+      config.network,
+      config.electrumServer ? { hostname: config.electrumServer } : undefined,
+    );
 
     // Initialize transaction builder
     const txBuilderConfig: TxBuilderConfig = {
@@ -113,8 +133,121 @@ export class FlowGuardExecutor {
   async stop(): Promise<void> {
     console.log('[Executor] Stopping...');
     this.isRunning = false;
+    if (this.statusServer) {
+      await new Promise<void>((resolve, reject) => {
+        this.statusServer!.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
     await this.db.end();
     await this.provider.disconnect();
+  }
+
+  async startStatusServer(port: number): Promise<void> {
+    this.statusServer = createServer(async (req, res) => {
+      try {
+        if (req.url === '/health') {
+          const snapshot = await this.getStatusSnapshot();
+          const healthy = snapshot.service.status !== 'critical';
+          res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: healthy ? 'ok' : 'degraded',
+            service: 'flowguard-executor',
+            timestamp: new Date().toISOString(),
+          }));
+          return;
+        }
+
+        if (req.url === '/status') {
+          const snapshot = await this.getStatusSnapshot();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(snapshot));
+          return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      } catch (error: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'Failed to serve status',
+          message: error.message,
+        }));
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.statusServer!.listen(port, '0.0.0.0', () => resolve());
+      this.statusServer!.once('error', reject);
+    });
+
+    console.log(`[Executor] Status server listening on :${port}`);
+  }
+
+  async getStatusSnapshot(): Promise<Record<string, unknown>> {
+    const schedules = await this.safeCount('schedules');
+    const proposals = await this.safeCount('proposals');
+    const executableSchedules = await this.safeCount(
+      "schedules WHERE is_spent = FALSE AND next_unlock_timestamp <= EXTRACT(EPOCH FROM NOW())::bigint",
+    );
+    const executableProposals = await this.safeCount(
+      `proposals WHERE is_spent = FALSE AND status = '${ProposalStatus.EXECUTABLE}'`,
+    );
+
+    const status =
+      this.lastError && this.consecutiveFailures >= 3
+        ? 'critical'
+        : this.consecutiveFailures > 0
+          ? 'degraded'
+          : this.config.executorPrivateKey
+            ? 'healthy'
+            : 'manual';
+
+    return {
+      service: {
+        name: 'FlowGuard Executor',
+        kind: 'executor',
+        status,
+        running: this.isRunning,
+        startedAt: this.startedAt,
+        uptimeSeconds: Math.floor(process.uptime()),
+      },
+      chain: {
+        network: this.config.network,
+        electrumServer: this.config.electrumServer,
+        lastNetworkHeight: this.lastNetworkHeight,
+      },
+      runtime: {
+        pollIntervalMs: this.config.pollInterval,
+        pollCount: this.pollCount,
+        idlePolls: this.idlePolls,
+        consecutiveFailures: this.consecutiveFailures,
+        lastPollStartedAt: this.lastPollStartedAt,
+        lastPollCompletedAt: this.lastPollCompletedAt,
+        lastTaskAt: this.lastTaskAt,
+        lastError: this.lastError,
+      },
+      queue: {
+        knownSchedules: schedules,
+        knownProposals: proposals,
+        executableSchedules,
+        executableProposals,
+        tasksSeen: this.tasksSeen,
+        tasksExecuted: this.tasksExecuted,
+        manualExecutionsRequired: this.manualExecutionsRequired,
+      },
+      capabilities: {
+        automaticSigningConfigured: Boolean(this.config.executorPrivateKey),
+        canBroadcast: false,
+        canExecuteSchedulesAutomatically: false,
+        canExecuteProposalsAutomatically: false,
+      },
+      resources: {
+        memoryRssMB: Number((process.memoryUsage().rss / 1024 / 1024).toFixed(2)),
+        heapUsedMB: Number((process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)),
+        nodeVersion: process.version,
+      },
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /**
@@ -136,21 +269,39 @@ export class FlowGuardExecutor {
   private async pollTasks(): Promise<void> {
     while (this.isRunning) {
       try {
+        this.pollCount += 1;
+        this.lastPollStartedAt = new Date().toISOString();
+        this.lastNetworkHeight = await this.provider.getBlockHeight();
+
         // Scan for executable tasks
         const tasks = await this.scanExecutableTasks();
+        this.tasksSeen += tasks.length;
 
         if (tasks.length > 0) {
+          this.idlePolls = 0;
           console.log(`[Executor] Found ${tasks.length} executable tasks`);
 
           for (const task of tasks) {
             await this.executeTask(task);
           }
+        } else {
+          this.idlePolls += 1;
+          if (this.idlePolls === 1 || this.idlePolls % 10 === 0) {
+            console.log('[Executor] Heartbeat: no executable tasks found');
+          }
         }
+
+        this.consecutiveFailures = 0;
+        this.lastError = null;
+        this.lastPollCompletedAt = new Date().toISOString();
 
         // Wait before next poll
         await this.sleep(this.config.pollInterval);
       } catch (error) {
         console.error('[Executor] Polling error:', error);
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.consecutiveFailures += 1;
+        this.lastPollCompletedAt = new Date().toISOString();
         await this.sleep(this.config.pollInterval);
       }
     }
@@ -220,9 +371,12 @@ export class FlowGuardExecutor {
           break;
       }
 
+      this.tasksExecuted += 1;
+      this.lastTaskAt = new Date().toISOString();
       console.log(`[Executor] ✓ ${task.type} executed successfully`);
     } catch (error) {
       console.error(`[Executor] ✗ ${task.type} execution failed:`, error);
+      this.lastError = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -270,6 +424,7 @@ export class FlowGuardExecutor {
       } else {
         console.log(`[Executor]   ⚠ No executor key configured - cannot sign/broadcast`);
         console.log(`[Executor]   Manual execution required`);
+        this.manualExecutionsRequired += 1;
       }
     } catch (error) {
       console.error(`[Executor]   ✗ Failed to build tx:`, error);
@@ -355,6 +510,7 @@ export class FlowGuardExecutor {
       } else {
         console.log(`[Executor]   ⚠ No executor key configured - cannot sign/broadcast`);
         console.log(`[Executor]   Manual execution required`);
+        this.manualExecutionsRequired += 1;
       }
     } catch (error) {
       console.error(`[Executor]   ✗ Failed to execute proposal:`, error);
@@ -377,6 +533,15 @@ export class FlowGuardExecutor {
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+
+  private async safeCount(tableExpression: string): Promise<number> {
+    try {
+      const result = await this.db.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${tableExpression}`);
+      return Number(result.rows[0]?.count || 0);
+    } catch {
+      return 0;
+    }
+  }
 }
 
 /**
@@ -386,7 +551,7 @@ const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].repla
 if (isMain) {
   const config: ExecutorConfig = {
     databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost:5432/flowguard',
-    network: (process.env.NETWORK as 'mainnet' | 'chipnet') || 'chipnet',
+    network: ((process.env.BCH_NETWORK || process.env.NETWORK) as 'mainnet' | 'chipnet') || 'chipnet',
     electrumServer: process.env.ELECTRUM_SERVER || 'chipnet.imaginary.cash',
     pollInterval: parseInt(process.env.POLL_INTERVAL || '60000', 10), // 1 minute
     maxGasPrice: parseInt(process.env.MAX_GAS_PRICE || '2', 10), // 2 sats/byte
@@ -394,6 +559,7 @@ if (isMain) {
   };
 
   const executor = new FlowGuardExecutor(config);
+  const statusPort = parseInt(process.env.PORT || '3202', 10);
 
   // Graceful shutdown
   process.on('SIGINT', async () => {
@@ -402,8 +568,17 @@ if (isMain) {
     process.exit(0);
   });
 
+  process.on('SIGTERM', async () => {
+    console.log('\n[Executor] Received SIGTERM, shutting down gracefully...');
+    await executor.stop();
+    process.exit(0);
+  });
+
   // Start executor
-  executor.start().catch((error) => {
+  Promise.all([
+    executor.start(),
+    executor.startStatusServer(statusPort),
+  ]).catch((error) => {
     console.error('[Executor] Fatal error:', error);
     process.exit(1);
   });
