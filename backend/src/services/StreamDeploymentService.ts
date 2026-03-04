@@ -15,12 +15,18 @@ export interface StreamDeploymentParams {
   totalAmount: number; // Amount (BCH or tokens)
   startTime: number; // Unix timestamp
   endTime: number; // Unix timestamp
-  streamType: 'LINEAR' | 'STEP' | 'RECURRING';
+  streamType: 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID';
   cliffTime?: number; // For vesting
   intervalSeconds?: number; // For recurring payments
   amountPerInterval?: number; // For recurring payments
   stepInterval?: number; // For step vesting
   stepAmount?: number; // For step vesting
+  hybridUnlockTime?: number; // For hybrid upfront unlock + linear remainder
+  hybridUpfrontAmount?: number; // Display amount unlocked at hybrid unlock time
+  trancheSchedule?: Array<{
+    unlockTime: number;
+    cumulativeAmount: number;
+  }>;
   cancelable?: boolean;
   transferable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'; // Token type
@@ -325,6 +331,160 @@ export class StreamDeploymentService {
       streamId: binToHex(streamId),
       constructorParams,
       initialCommitment: binToHex(commitment),
+      fundingTxRequired: fundingTx,
+    };
+  }
+
+  async deployHybridStream(params: StreamDeploymentParams): Promise<StreamDeployment> {
+    if (!params.hybridUnlockTime || params.hybridUpfrontAmount === undefined) {
+      throw new Error('hybridUnlockTime and hybridUpfrontAmount are required for hybrid vesting');
+    }
+    if (params.tokenType === 'FUNGIBLE_TOKEN' && !params.tokenCategory) {
+      throw new Error('tokenCategory is required for FUNGIBLE_TOKEN streams');
+    }
+
+    const artifact = ContractFactory.getArtifact('HybridVestingCovenant');
+    const vaultId = hexToBin(params.vaultId);
+    const senderHash = this.addressToHash160(params.sender);
+    const streamId = this.generateStreamId(params);
+
+    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType);
+    const totalAmountSat = BigInt(totalAmountOnChain);
+    const startTimestamp = BigInt(params.startTime);
+    const unlockTimestamp = BigInt(params.hybridUnlockTime);
+    const endTimestamp = BigInt(params.endTime);
+    const upfrontAmountSat = BigInt(this.toOnChainAmount(params.hybridUpfrontAmount, params.tokenType));
+
+    const constructorArgs = [
+      vaultId,
+      senderHash,
+      totalAmountSat,
+      startTimestamp,
+      unlockTimestamp,
+      endTimestamp,
+      upfrontAmountSat,
+    ];
+
+    const contract = new Contract(artifact, constructorArgs, { provider: this.provider });
+    const initialCommitment = this.createVestingCommitment(params);
+    const constructorParams: ConstructorParam[] = [
+      { type: 'bytes', value: binToHex(vaultId) },
+      { type: 'bytes', value: binToHex(senderHash) },
+      { type: 'bigint', value: totalAmountSat.toString() },
+      { type: 'bigint', value: startTimestamp.toString() },
+      { type: 'bigint', value: unlockTimestamp.toString() },
+      { type: 'bigint', value: endTimestamp.toString() },
+      { type: 'bigint', value: upfrontAmountSat.toString() },
+    ];
+
+    const fundingTx: StreamDeployment['fundingTxRequired'] = {
+      toAddress: contract.address,
+      amount: params.tokenType === 'FUNGIBLE_TOKEN'
+        ? 1000
+        : totalAmountOnChain,
+      withNFT: {
+        commitment: binToHex(initialCommitment),
+        capability: 'mutable',
+      },
+    };
+
+    if (params.tokenType === 'FUNGIBLE_TOKEN') {
+      fundingTx.tokenType = 'FUNGIBLE_TOKEN';
+      fundingTx.tokenCategory = params.tokenCategory;
+      fundingTx.tokenAmount = totalAmountOnChain;
+    }
+
+    return {
+      contractAddress: contract.address,
+      streamId: binToHex(streamId),
+      constructorParams,
+      initialCommitment: binToHex(initialCommitment),
+      fundingTxRequired: fundingTx,
+    };
+  }
+
+  /**
+   * Deploy a TrancheVestingCovenant
+   */
+  async deployTrancheStream(params: StreamDeploymentParams): Promise<StreamDeployment> {
+    if (!params.trancheSchedule || params.trancheSchedule.length < 1) {
+      throw new Error('trancheSchedule is required for tranche vesting');
+    }
+    if (params.trancheSchedule.length > 8) {
+      throw new Error('Tranche vesting supports at most 8 unlock points');
+    }
+    if (params.tokenType === 'FUNGIBLE_TOKEN' && !params.tokenCategory) {
+      throw new Error('tokenCategory is required for FUNGIBLE_TOKEN streams');
+    }
+
+    const artifact = ContractFactory.getArtifact('TrancheVestingCovenant');
+    const vaultId = hexToBin(params.vaultId);
+    const senderHash = this.addressToHash160(params.sender);
+    const streamId = this.generateStreamId(params);
+
+    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType);
+    const totalAmountSat = BigInt(totalAmountOnChain);
+    const startTimestamp = BigInt(params.startTime);
+    const scheduleCount = BigInt(params.trancheSchedule.length);
+
+    const paddedSchedule = [...params.trancheSchedule];
+    while (paddedSchedule.length < 8) {
+      paddedSchedule.push({
+        unlockTime: params.trancheSchedule[params.trancheSchedule.length - 1].unlockTime,
+        cumulativeAmount: params.trancheSchedule[params.trancheSchedule.length - 1].cumulativeAmount,
+      });
+    }
+
+    const constructorArgs: Array<Uint8Array | bigint> = [
+      vaultId,
+      senderHash,
+      totalAmountSat,
+      startTimestamp,
+      scheduleCount,
+    ];
+    for (const tranche of paddedSchedule) {
+      constructorArgs.push(BigInt(tranche.unlockTime));
+      constructorArgs.push(BigInt(this.toOnChainAmount(tranche.cumulativeAmount, params.tokenType)));
+    }
+
+    const contract = new Contract(artifact, constructorArgs, { provider: this.provider });
+    const initialCommitment = this.createVestingCommitment(params);
+
+    const constructorParams: ConstructorParam[] = [
+      { type: 'bytes', value: binToHex(vaultId) },
+      { type: 'bytes', value: binToHex(senderHash) },
+      { type: 'bigint', value: totalAmountSat.toString() },
+      { type: 'bigint', value: startTimestamp.toString() },
+      { type: 'bigint', value: scheduleCount.toString() },
+    ];
+    for (const tranche of paddedSchedule) {
+      constructorParams.push({ type: 'bigint', value: BigInt(tranche.unlockTime).toString() });
+      constructorParams.push({
+        type: 'bigint',
+        value: BigInt(this.toOnChainAmount(tranche.cumulativeAmount, params.tokenType)).toString(),
+      });
+    }
+
+    const fundingTx: StreamDeployment['fundingTxRequired'] = {
+      toAddress: contract.address,
+      amount: params.tokenType === 'FUNGIBLE_TOKEN' ? 1000 : totalAmountOnChain,
+      withNFT: {
+        commitment: binToHex(initialCommitment),
+        capability: 'mutable',
+      },
+    };
+
+    if (params.tokenType === 'FUNGIBLE_TOKEN') {
+      fundingTx.tokenType = 'FUNGIBLE_TOKEN';
+      fundingTx.tokenCategory = params.tokenCategory;
+      fundingTx.tokenAmount = totalAmountOnChain;
+    }
+
+    return {
+      contractAddress: contract.address,
+      streamId: binToHex(streamId),
+      constructorParams,
+      initialCommitment: binToHex(initialCommitment),
       fundingTxRequired: fundingTx,
     };
   }

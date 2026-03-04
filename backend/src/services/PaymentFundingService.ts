@@ -6,7 +6,14 @@
 import { ElectrumNetworkProvider, type WcTransactionObject } from 'cashscript';
 import { buildFundingWcTransaction } from '../utils/wcFundingBuilder.js';
 import { toNonNegativeBigInt } from '../utils/bigint.js';
-import { getTokenFundingSatoshis, getTokenOutputDustSatoshis } from '../utils/fundingConfig.js';
+import {
+  getRequiredContractFundingSatoshis,
+  getTokenOutputDustSatoshis,
+} from '../utils/fundingConfig.js';
+import {
+  getAuthorityCommitmentHex,
+  selectTokenFundingInputs,
+} from '../utils/tokenMintAuthority.js';
 
 export interface TransactionOutput {
   to: string;
@@ -87,48 +94,69 @@ export class PaymentFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis();
     const amountOnChain = toNonNegativeBigInt(amount, 'amount');
+    const contractOutput = getRequiredContractFundingSatoshis('payment', tokenType, amountOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
+    let authorityChangeOutput: TransactionOutput | null = null;
 
     if (tokenType === 'FUNGIBLE_TOKEN') {
       if (!tokenCategory) {
         throw new Error('Token category required for FUNGIBLE_TOKEN type');
       }
       stateTokenCategory = tokenCategory;
+      const selection = selectTokenFundingInputs(utxos, tokenCategory, amountOnChain, 'payment');
+      selectedUtxos = [selection.authorityUtxo, ...selection.fungibleUtxos];
+      totalTokenInputAmount = selection.totalTokenAmount;
+      totalInputValue = selection.totalInputSatoshis;
+      authorityChangeOutput = {
+        to: senderAddress,
+        amount: dustAmount.toString(),
+        token: {
+          category: tokenCategory,
+          amount: (selection.totalTokenAmount - amountOnChain).toString(),
+          nft: {
+            capability: selection.authorityUtxo.token!.nft!.capability as 'none' | 'mutable' | 'minting',
+            commitment: getAuthorityCommitmentHex(selection.authorityUtxo),
+          },
+        },
+      };
 
-      const tokenUtxos = utxos.filter(
-        (utxo: any) =>
-          utxo.token?.category === tokenCategory &&
-          utxo.token?.amount &&
-          !utxo.token?.nft
-      );
+      const preliminaryOutputs: TransactionOutput[] = [
+        {
+          to: contractAddress,
+          amount: contractOutput.toString(),
+          token: {
+            category: tokenCategory,
+            amount: amountOnChain.toString(),
+            nft: {
+              commitment: nftCommitment,
+              capability: nftCapability,
+            },
+          },
+        },
+        authorityChangeOutput,
+        { to: senderAddress, amount: '0' },
+      ];
 
-      if (tokenUtxos.length === 0) {
-        throw new Error(`No fungible token UTXOs found for category ${tokenCategory}`);
-      }
-
-      let totalTokenAmount = 0n;
-      for (const utxo of tokenUtxos) {
-        const tokenAmount = toNonNegativeBigInt(utxo.token?.amount ?? 0n, 'token input amount');
-        totalTokenAmount += tokenAmount;
-        totalTokenInputAmount += tokenAmount;
-        totalInputValue += toNonNegativeBigInt(utxo.satoshis, 'input satoshis');
-        selectedUtxos.push(utxo);
-
-        if (totalTokenAmount >= amountOnChain) {
-          break;
+      const bchUtxos = utxos.filter((utxo: any) => !utxo.token);
+      let estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+      const requiredAmount = () => contractOutput + dustAmount + estimatedFee;
+      if (totalInputValue < requiredAmount()) {
+        for (const utxo of bchUtxos) {
+          selectedUtxos.push(utxo);
+          totalInputValue += toNonNegativeBigInt(utxo.satoshis, 'fee input satoshis');
+          estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+          if (totalInputValue >= requiredAmount()) {
+            break;
+          }
         }
       }
 
-      if (totalTokenAmount < amountOnChain) {
+      if (totalInputValue < requiredAmount()) {
+        const neededBch = (Number(requiredAmount()) / 1e8).toFixed(8);
+        const haveBch = (Number(totalInputValue) / 1e8).toFixed(8);
         throw new Error(
-          `Insufficient token balance. Required: ${amountOnChain.toString()}, Available: ${totalTokenAmount.toString()}`
+          `Insufficient BCH balance: need ${neededBch} BCH, wallet has ${haveBch} BCH`,
         );
-      }
-
-      const bchUtxos = utxos.filter((utxo: any) => !utxo.token);
-      if (bchUtxos.length > 0) {
-        selectedUtxos.push(bchUtxos[0]);
-        totalInputValue += toNonNegativeBigInt(bchUtxos[0].satoshis, 'fee input satoshis');
       }
     } else {
       const nonTokenUtxos = utxos.filter((utxo: any) => !utxo.token);
@@ -140,7 +168,7 @@ export class PaymentFundingService {
       }
       stateTokenCategory = categoryAnchor.txid;
 
-      const requiredAmount = amountOnChain + 2000n;
+      const requiredAmount = contractOutput + 2000n;
 
       const orderedUtxos = [
         categoryAnchor,
@@ -174,15 +202,13 @@ export class PaymentFundingService {
       tokenCategory: utxo.token?.category,
       tokenAmount: utxo.token?.amount !== undefined ? toNonNegativeBigInt(utxo.token.amount, 'source token amount').toString() : undefined,
       tokenNftCapability: utxo.token?.nft?.capability,
-      tokenNftCommitment: utxo.token?.nft?.commitment,
+      tokenNftCommitment: utxo.token?.nft ? getAuthorityCommitmentHex(utxo) : undefined,
     }));
 
     const tokenChangeAmount =
       tokenType === 'FUNGIBLE_TOKEN' && totalTokenInputAmount > amountOnChain
         ? totalTokenInputAmount - amountOnChain
         : 0n;
-    const tokenContractSatoshis = getTokenFundingSatoshis('payment');
-    const contractOutput = tokenType === 'FUNGIBLE_TOKEN' ? tokenContractSatoshis : amountOnChain;
 
     if (!stateTokenCategory) {
       throw new Error('Missing state token category for payment funding output');
@@ -212,15 +238,9 @@ export class PaymentFundingService {
       },
     ];
 
-    if (tokenChangeAmount > 0n) {
-      preliminaryOutputs.push({
-        to: senderAddress,
-        amount: dustAmount.toString(),
-        token: {
-          category: tokenCategory!,
-          amount: tokenChangeAmount.toString(),
-        },
-      });
+    if (tokenType === 'FUNGIBLE_TOKEN' && authorityChangeOutput) {
+      authorityChangeOutput.token!.amount = tokenChangeAmount.toString();
+      preliminaryOutputs.push(authorityChangeOutput);
     }
 
     // Add a placeholder change output for fee estimation
@@ -229,7 +249,7 @@ export class PaymentFundingService {
     const estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
     const bchBudgetAfterContractAndFee = totalInputValue - contractOutput - estimatedFee;
     const bchBudgetAfterTokenChange =
-      tokenChangeAmount > 0n ? bchBudgetAfterContractAndFee - dustAmount : bchBudgetAfterContractAndFee;
+      tokenType === 'FUNGIBLE_TOKEN' ? bchBudgetAfterContractAndFee - dustAmount : bchBudgetAfterContractAndFee;
 
     if (bchBudgetAfterTokenChange < 0n) {
       const neededBch = (Number(contractOutput + estimatedFee + (tokenChangeAmount > 0n ? dustAmount : 0n)) / 1e8).toFixed(8);

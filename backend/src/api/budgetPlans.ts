@@ -19,6 +19,7 @@ import {
   isFungibleTokenType,
   onChainAmountToDisplay,
 } from '../utils/amounts.js';
+import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 
 const router = Router();
 
@@ -262,12 +263,17 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
 
     const fundingAmountOnChain = displayAmountToOnChain(plan.total_amount, plan.token_type);
     const isTokenBudget = isFungibleTokenType(plan.token_type);
+    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
+      'budget',
+      isTokenBudget ? 'FUNGIBLE_TOKEN' : 'BCH',
+      BigInt(fundingAmountOnChain),
+    );
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
       {
         address: plan.contract_address,
-        minimumSatoshis: BigInt(isTokenBudget ? 546 : Math.max(546, fundingAmountOnChain)),
+        minimumSatoshis: minimumContractSatoshis,
         ...(isTokenBudget && plan.token_category
           ? {
               tokenCategory: plan.token_category,
@@ -314,7 +320,7 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
 router.post('/budget-plans/:id/release', async (req, res) => {
   try {
     const { id } = req.params;
-    const { recipientAddress } = req.body;
+    const { recipientAddress, signerAddress } = req.body;
 
     const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
@@ -361,6 +367,7 @@ router.post('/budget-plans/:id/release', async (req, res) => {
       currentTime: now,
       tokenType: normalizeBudgetTokenType(plan.token_type),
       tokenCategory: plan.token_category,
+      feePayerAddress: signerAddress || recipientAddress,
       constructorParams: constructorParams.map((p: any) => {
         if (p.type === 'bytes') return Buffer.from(p.value, 'hex');
         if (p.type === 'bigint') return BigInt(p.value);

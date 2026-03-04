@@ -151,6 +151,33 @@ contract RecurringPaymentCovenant(
     }
 
     /**
+     * refill() — Add more runway to an open-ended recurring stream
+     *
+     * Sender-only. Only valid for open-ended streams where totalAmount == 0.
+     * Preserves cadence, recipient, and state commitment while allowing the
+     * sender to add more BCH/tokens to the state UTXO.
+     */
+    function refill(sig senderSig, pubkey senderPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status = int(c.split(1)[0]);
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require(totalAmount == 0);
+        require(status == 0 || status == 1);
+
+        require(tx.outputs[0].nftCommitment == c);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if (tx.inputs[0].tokenCategory != 0x) {
+            require(tx.outputs[0].tokenAmount > tx.inputs[0].tokenAmount);
+        } else {
+            require(tx.outputs[0].value > tx.inputs[0].value);
+        }
+    }
+
+    /**
      * cancel() — Cancel and return remaining pool to sender
      *
      * Sender-only. Entire remaining pool returns (no split — not earned like vesting).

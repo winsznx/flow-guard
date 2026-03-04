@@ -25,6 +25,7 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
+import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 
 const router = Router();
 
@@ -690,12 +691,17 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
     const fundedPeriods = fundingExpectation.fundedPeriods;
     const fundingAmountOnChain = fundingExpectation.fundingAmountOnChain;
     const isTokenPayment = isFungibleTokenType(payment.token_type);
+    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
+      'payment',
+      isTokenPayment ? 'FUNGIBLE_TOKEN' : 'BCH',
+      BigInt(fundingAmountOnChain),
+    );
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
       {
         address: payment.contract_address,
-        minimumSatoshis: BigInt(isTokenPayment ? 546 : Math.max(546, fundingAmountOnChain)),
+        minimumSatoshis: minimumContractSatoshis,
         ...(isTokenPayment && payment.token_category
           ? {
             tokenCategory: payment.token_category,
@@ -756,7 +762,7 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
 router.post('/payments/:id/claim', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { recipientAddress } = req.body;
+    const { recipientAddress, signerAddress } = req.body;
 
     const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
@@ -802,6 +808,7 @@ router.post('/payments/:id/claim', async (req: Request, res: Response) => {
       endTime: payment.end_date,
       tokenType: normalizePaymentTokenType(payment.token_type),
       tokenCategory: payment.token_category,
+      feePayerAddress: signerAddress || recipientAddress,
       constructorParams: constructorParams.map((p: any) => {
         if (p.type === 'bytes') return Buffer.from(p.value, 'hex');
         if (p.type === 'bigint') return BigInt(p.value);

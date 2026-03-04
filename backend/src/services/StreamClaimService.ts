@@ -2,12 +2,14 @@ import {
   Contract,
   ElectrumNetworkProvider,
   TransactionBuilder,
+  placeholderP2PKHUnlocker,
   placeholderPublicKey,
   placeholderSignature,
   type WcTransactionObject,
 } from 'cashscript';
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { resolveFeePayer } from '../utils/feePayer.js';
 
 export interface ClaimTransactionParams {
   streamId: string;
@@ -18,11 +20,18 @@ export interface ClaimTransactionParams {
   startTime: number;
   endTime: number;
   currentTime: number;
-  streamType: 'LINEAR' | 'STEP';
+  streamType: 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID';
   stepInterval?: number;
   stepAmount?: number;
+  hybridUnlockTime?: number;
+  hybridUpfrontAmount?: number;
+  trancheSchedule?: Array<{
+    unlockTime: number;
+    cumulativeAmount: number;
+  }>;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  feePayerAddress?: string;
   constructorParams: any[];
   currentCommitment: string;
 }
@@ -42,10 +51,24 @@ export class StreamClaimService {
   }
 
   calculateClaimableAmount(params: ClaimTransactionParams): number {
-    const { totalAmount, totalReleased, startTime, endTime, currentTime, streamType, stepInterval, stepAmount } = params;
+    const {
+      totalAmount,
+      totalReleased,
+      startTime,
+      endTime,
+      currentTime,
+      streamType,
+      stepInterval,
+      stepAmount,
+      hybridUnlockTime,
+      hybridUpfrontAmount,
+      trancheSchedule,
+      currentCommitment,
+    } = params;
 
-    const elapsed = currentTime - startTime;
-    const duration = endTime - startTime;
+    const effectiveStart = this.readUint40LEFromHex(currentCommitment, 10) || startTime;
+    const elapsed = currentTime - effectiveStart;
+    const duration = endTime - effectiveStart;
 
     let vestedTotal = 0;
 
@@ -61,6 +84,38 @@ export class StreamClaimService {
       }
       const completedSteps = Math.floor(elapsed / stepInterval);
       vestedTotal = Math.min(completedSteps * stepAmount, totalAmount);
+    } else if (streamType === 'HYBRID') {
+      if (hybridUnlockTime === undefined || hybridUpfrontAmount === undefined) {
+        throw new Error('Hybrid unlock time and upfront amount are required for HYBRID vesting');
+      }
+      const timeShift = effectiveStart - startTime;
+      const effectiveNow = currentTime - timeShift;
+      if (effectiveNow >= endTime) {
+        vestedTotal = totalAmount;
+      } else if (effectiveNow >= hybridUnlockTime) {
+        const remainingAmount = Math.max(0, totalAmount - hybridUpfrontAmount);
+        const linearDuration = endTime - hybridUnlockTime;
+        if (linearDuration <= 0) {
+          vestedTotal = totalAmount;
+        } else {
+          vestedTotal = Math.min(
+            totalAmount,
+            hybridUpfrontAmount + Math.floor((remainingAmount * (effectiveNow - hybridUnlockTime)) / linearDuration),
+          );
+        }
+      }
+    } else if (streamType === 'TRANCHE') {
+      if (!trancheSchedule || trancheSchedule.length === 0) {
+        throw new Error('Tranche schedule required for TRANCHE vesting');
+      }
+
+      const timeShift = effectiveStart - startTime;
+      const effectiveNow = currentTime - timeShift;
+      for (const tranche of trancheSchedule) {
+        if (effectiveNow >= tranche.unlockTime) {
+          vestedTotal = tranche.cumulativeAmount;
+        }
+      }
     }
 
     return Math.max(0, vestedTotal - totalReleased);
@@ -79,12 +134,19 @@ export class StreamClaimService {
       totalReleased,
       tokenType,
       tokenCategory,
+      feePayerAddress,
       constructorParams,
       currentCommitment,
       currentTime,
     } = params;
 
-    const artifact = ContractFactory.getArtifact('VestingCovenant');
+    const artifact = ContractFactory.getArtifact(
+      params.streamType === 'TRANCHE'
+        ? 'TrancheVestingCovenant'
+        : params.streamType === 'HYBRID'
+          ? 'HybridVestingCovenant'
+          : 'VestingCovenant',
+    );
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     const contractUtxos = await this.provider.getUtxos(contractAddress);
@@ -112,8 +174,10 @@ export class StreamClaimService {
 
     const claimAmountBig = BigInt(claimableAmount);
     const fee = 1500n;
+    const resolvedFeePayerAddress = feePayerAddress || recipient;
+    const feePayer = await resolveFeePayer(this.provider, this.network, resolvedFeePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    const remainingAmount = contractBalance - recipientOutputSatoshis - fee;
+    const remainingAmount = contractBalance - recipientOutputSatoshis;
     const minimumStateOutput = 546n;
 
     if (remainingAmount < minimumStateOutput) {
@@ -130,6 +194,9 @@ export class StreamClaimService {
         placeholderPublicKey(),
       ),
     );
+    for (const utxo of feePayer.utxos) {
+      txBuilder.addInput(utxo, feePayer.unlocker);
+    }
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       const tokenAmount = contractUtxo.token.amount ?? 0n;
@@ -167,6 +234,14 @@ export class StreamClaimService {
       });
     }
 
+    const feeChange = feePayer.total - fee;
+    if (feeChange > 546n) {
+      txBuilder.addOutput({
+        to: feePayer.address,
+        amount: feeChange,
+      });
+    }
+
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim vested funds',
@@ -177,6 +252,8 @@ export class StreamClaimService {
       claimableAmount,
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
+      feePayerAddress: feePayer.address,
+      feeSponsored: feePayer.sponsored,
       inputSatoshis: contractUtxo.satoshis.toString(),
     });
 
@@ -184,9 +261,10 @@ export class StreamClaimService {
   }
 
   validateClaim(params: ClaimTransactionParams): { valid: boolean; error?: string } {
-    const { currentTime, startTime, endTime } = params;
+    const { currentTime, startTime, endTime, currentCommitment } = params;
+    const effectiveStart = this.readUint40LEFromHex(currentCommitment, 10) || startTime;
 
-    if (currentTime < startTime) {
+    if (currentTime < effectiveStart) {
       return { valid: false, error: 'Vesting has not started yet' };
     }
 
@@ -200,5 +278,19 @@ export class StreamClaimService {
     }
 
     return { valid: true };
+  }
+
+  private readUint40LEFromHex(commitmentHex: string, offset: number): number {
+    try {
+      const commitment = hexToBin(commitmentHex);
+      if (commitment.length < offset + 5) return 0;
+      return commitment[offset]
+        + (commitment[offset + 1] << 8)
+        + (commitment[offset + 2] << 16)
+        + (commitment[offset + 3] << 24)
+        + commitment[offset + 4] * 0x100000000;
+    } catch {
+      return 0;
+    }
   }
 }

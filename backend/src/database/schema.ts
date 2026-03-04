@@ -115,6 +115,7 @@ const createTablesSQL = `
     id TEXT PRIMARY KEY,
     stream_id TEXT UNIQUE NOT NULL,
     vault_id TEXT,
+    batch_id TEXT,
     sender TEXT NOT NULL,
     recipient TEXT NOT NULL,
     token_type TEXT NOT NULL DEFAULT 'BCH',
@@ -128,7 +129,13 @@ const createTablesSQL = `
     cliff_timestamp INTEGER,
     cancelable INTEGER DEFAULT 1,
     transferable INTEGER DEFAULT 0,
+    refillable INTEGER DEFAULT 0,
     status TEXT DEFAULT 'ACTIVE',
+    schedule_template TEXT,
+    launch_source TEXT,
+    launch_title TEXT,
+    launch_description TEXT,
+    preferred_lane TEXT,
     description TEXT,
     contract_address TEXT,
     constructor_params TEXT,
@@ -152,7 +159,33 @@ const createTablesSQL = `
   CREATE INDEX IF NOT EXISTS idx_streams_recipient ON streams(recipient);
   CREATE INDEX IF NOT EXISTS idx_streams_sender ON streams(sender);
   CREATE INDEX IF NOT EXISTS idx_streams_status ON streams(status);
+  CREATE INDEX IF NOT EXISTS idx_streams_vault_context ON streams(vault_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_streams_launch_source ON streams(launch_source, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_streams_batch_id ON streams(batch_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_claims_stream ON stream_claims(stream_id);
+
+  CREATE TABLE IF NOT EXISTS stream_batches (
+    id TEXT PRIMARY KEY,
+    vault_id TEXT,
+    sender TEXT NOT NULL,
+    token_type TEXT NOT NULL DEFAULT 'BCH',
+    token_category TEXT,
+    stream_count INTEGER NOT NULL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    tx_hash TEXT,
+    launch_source TEXT,
+    launch_title TEXT,
+    launch_description TEXT,
+    preferred_lane TEXT,
+    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stream_batches_vault ON stream_batches(vault_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_stream_batches_sender ON stream_batches(sender, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_stream_batches_status ON stream_batches(status, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_stream_batches_launch_source ON stream_batches(launch_source, created_at DESC);
 
   CREATE VIEW IF NOT EXISTS streams_with_vested AS
   SELECT
@@ -399,8 +432,15 @@ try {
   addIfMissing(streamCols, 'streams', 'token_category',     'ALTER TABLE streams ADD COLUMN token_category TEXT');
   addIfMissing(streamCols, 'streams', 'nft_commitment',     'ALTER TABLE streams ADD COLUMN nft_commitment TEXT');
   addIfMissing(streamCols, 'streams', 'nft_capability',     "ALTER TABLE streams ADD COLUMN nft_capability TEXT DEFAULT 'mutable'");
+  addIfMissing(streamCols, 'streams', 'schedule_template',  'ALTER TABLE streams ADD COLUMN schedule_template TEXT');
+  addIfMissing(streamCols, 'streams', 'launch_source',      'ALTER TABLE streams ADD COLUMN launch_source TEXT');
+  addIfMissing(streamCols, 'streams', 'launch_title',       'ALTER TABLE streams ADD COLUMN launch_title TEXT');
+  addIfMissing(streamCols, 'streams', 'launch_description', 'ALTER TABLE streams ADD COLUMN launch_description TEXT');
+  addIfMissing(streamCols, 'streams', 'preferred_lane',     'ALTER TABLE streams ADD COLUMN preferred_lane TEXT');
   addIfMissing(streamCols, 'streams', 'description',        'ALTER TABLE streams ADD COLUMN description TEXT');
   addIfMissing(streamCols, 'streams', 'tx_hash',            'ALTER TABLE streams ADD COLUMN tx_hash TEXT');
+  addIfMissing(streamCols, 'streams', 'refillable',         'ALTER TABLE streams ADD COLUMN refillable INTEGER DEFAULT 0');
+  addIfMissing(streamCols, 'streams', 'batch_id',           'ALTER TABLE streams ADD COLUMN batch_id TEXT');
 
   const paymentCols = db.prepare('PRAGMA table_info(payments)').all() as Array<{ name: string }>;
   addIfMissing(paymentCols, 'payments', 'constructor_params', 'ALTER TABLE payments ADD COLUMN constructor_params TEXT');

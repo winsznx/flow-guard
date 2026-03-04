@@ -12,7 +12,12 @@ import { StreamDeploymentService } from '../services/StreamDeploymentService.js'
 import { StreamFundingService } from '../services/StreamFundingService.js';
 import { StreamClaimService } from '../services/StreamClaimService.js';
 import { StreamCancelService } from '../services/StreamCancelService.js';
+import { StreamControlService } from '../services/StreamControlService.js';
 import { PaymentClaimService } from '../services/PaymentClaimService.js';
+import {
+  isValidStreamScheduleTemplate,
+  streamScheduleTemplates,
+} from '../services/streamShapeCatalog.js';
 import { ContractService } from '../services/contract-service.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
@@ -27,8 +32,42 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
+import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 
 const router = Router();
+const DAY_SECONDS = 24 * 60 * 60;
+
+interface StreamLaunchContext {
+  source: string;
+  title?: string;
+  description?: string;
+  preferredLane?: string;
+}
+
+interface StreamBatchRow {
+  id: string;
+  vault_id?: string | null;
+  sender: string;
+  token_type: 'BCH' | 'CASHTOKENS';
+  token_category?: string | null;
+  stream_count: number;
+  total_amount: number;
+  status: 'PENDING' | 'ACTIVE' | 'PARTIAL' | 'FAILED';
+  tx_hash?: string | null;
+  launch_source?: string | null;
+  launch_title?: string | null;
+  launch_description?: string | null;
+  preferred_lane?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+router.get('/streams/templates', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    templates: streamScheduleTemplates,
+  });
+});
 
 /**
  * GET /api/streams
@@ -37,31 +76,64 @@ const router = Router();
  */
 router.get('/streams', async (req: Request, res: Response) => {
   try {
-    const { recipient, sender, address, status } = req.query;
+    const { recipient, sender, address, status, vaultId, contextSource, treasury, limit, page } = req.query;
+    const hasContextOnlyQuery = Boolean(vaultId || contextSource || treasury === 'true');
+    const safeLimit = Math.max(1, Math.min(100, Math.trunc(Number(limit) || 20)));
+    const currentPage = Math.max(1, Math.trunc(Number(page) || 1));
+    const offset = (currentPage - 1) * safeLimit;
 
-    if (!recipient && !sender && !address) {
+    if (!recipient && !sender && !address && !hasContextOnlyQuery) {
       return res.status(400).json({
-        error: 'Must provide either recipient, sender, or address parameter',
+        error: 'Must provide either recipient, sender, address, or a treasury/context filter',
       });
     }
 
-    let rows: any[];
-    if (sender && recipient) {
-      rows = db!.prepare('SELECT * FROM streams WHERE sender = ? AND recipient = ? ORDER BY created_at DESC').all(sender, recipient);
-    } else if (sender) {
-      rows = db!.prepare('SELECT * FROM streams WHERE sender = ? ORDER BY created_at DESC').all(sender);
-    } else if (recipient) {
-      rows = db!.prepare('SELECT * FROM streams WHERE recipient = ? ORDER BY created_at DESC').all(recipient);
-    } else {
-      // address param: get all streams where user is sender OR recipient
-      rows = db!.prepare('SELECT * FROM streams WHERE sender = ? OR recipient = ? ORDER BY created_at DESC').all(address, address);
-    }
+    const conditions: string[] = [];
+    const params: unknown[] = [];
 
-    let streams = rows.map(rowToStream);
+    if (sender && recipient) {
+      conditions.push('sender = ?', 'recipient = ?');
+      params.push(sender, recipient);
+    } else if (sender) {
+      conditions.push('sender = ?');
+      params.push(sender);
+    } else if (recipient) {
+      conditions.push('recipient = ?');
+      params.push(recipient);
+    } else if (address) {
+      conditions.push('(sender = ? OR recipient = ?)');
+      params.push(address, address);
+    }
 
     if (status) {
-      streams = streams.filter(s => s.status === status);
+      conditions.push('status = ?');
+      params.push(status);
     }
+    if (vaultId) {
+      conditions.push('vault_id = ?');
+      params.push(vaultId);
+    }
+    if (contextSource) {
+      conditions.push('launch_source = ?');
+      params.push(contextSource);
+    }
+    if (treasury === 'true') {
+      conditions.push('vault_id IS NOT NULL');
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const totalRow = db!.prepare(`SELECT COUNT(*) as count FROM streams ${whereClause}`).get(...params) as { count: number };
+    const total = Number(totalRow?.count || 0);
+    const rows = db!.prepare(`
+      SELECT *
+      FROM streams
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ?
+      OFFSET ?
+    `).all(...params, safeLimit, offset);
+
+    const streams = rows.map(rowToStream);
 
     const enrichedStreams = streamService.enrichStreams(streams);
     const latestByStreamId = getLatestActivityEvents(
@@ -76,11 +148,314 @@ router.get('/streams', async (req: Request, res: Response) => {
     res.json({
       success: true,
       streams: responseStreams,
-      total: responseStreams.length,
+      total,
+      page: currentPage,
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      hasNextPage: offset + responseStreams.length < total,
+      hasPreviousPage: currentPage > 1,
     });
   } catch (error: any) {
     console.error('GET /streams error:', error);
     res.status(500).json({ error: 'Failed to fetch streams', message: error.message });
+  }
+});
+
+router.get('/streams/activity', async (req: Request, res: Response) => {
+  try {
+    const { address, vaultId, contextSource, treasury, limit, page, eventType, dateFrom, dateTo } = req.query;
+    const safeLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 50)));
+    const currentPage = Math.max(1, Math.trunc(Number(page) || 1));
+    const offset = (currentPage - 1) * safeLimit;
+    const conditions = [`ae.entity_type = 'stream'`];
+    const params: unknown[] = [];
+
+    if (address) {
+      conditions.push('(s.sender = ? OR s.recipient = ?)');
+      params.push(address, address);
+    }
+    if (vaultId) {
+      conditions.push('s.vault_id = ?');
+      params.push(vaultId);
+    }
+    if (contextSource) {
+      conditions.push('s.launch_source = ?');
+      params.push(contextSource);
+    }
+    if (treasury === 'true') {
+      conditions.push('s.vault_id IS NOT NULL');
+    }
+    if (eventType) {
+      conditions.push('ae.event_type = ?');
+      params.push(eventType);
+    }
+    if (dateFrom) {
+      const parsedDateFrom = Math.trunc(Number(dateFrom));
+      if (Number.isFinite(parsedDateFrom) && parsedDateFrom > 0) {
+        conditions.push('ae.created_at >= ?');
+        params.push(parsedDateFrom);
+      }
+    }
+    if (dateTo) {
+      const parsedDateTo = Math.trunc(Number(dateTo));
+      if (Number.isFinite(parsedDateTo) && parsedDateTo > 0) {
+        conditions.push('ae.created_at <= ?');
+        params.push(parsedDateTo);
+      }
+    }
+
+    const whereClause = conditions.join(' AND ');
+    const countRow = db!.prepare(`
+      SELECT COUNT(*) as count
+      FROM activity_events ae
+      INNER JOIN streams s ON s.id = ae.entity_id
+      WHERE ${whereClause}
+    `).get(...params) as { count: number };
+    const total = Number(countRow?.count || 0);
+
+    const rows = db!.prepare(`
+      SELECT
+        ae.id,
+        ae.entity_type,
+        ae.entity_id,
+        ae.event_type,
+        ae.actor,
+        ae.amount,
+        ae.status,
+        ae.tx_hash,
+        ae.details,
+        ae.created_at,
+        s.stream_id,
+        s.vault_id,
+        s.sender,
+        s.recipient,
+        s.stream_type,
+        s.schedule_template,
+        s.launch_source,
+        s.launch_title,
+        s.launch_description,
+        s.preferred_lane
+      FROM activity_events ae
+      INNER JOIN streams s ON s.id = ae.entity_id
+      WHERE ${whereClause}
+      ORDER BY ae.created_at DESC
+      LIMIT ?
+      OFFSET ?
+    `).all(...params, safeLimit, offset) as Array<Record<string, unknown>>;
+
+    const events = rows.map((row) => ({
+      id: row.id,
+      entity_type: row.entity_type,
+      entity_id: row.entity_id,
+      event_type: row.event_type,
+      actor: row.actor,
+      amount: row.amount,
+      status: row.status,
+      tx_hash: row.tx_hash,
+      details: typeof row.details === 'string' ? safeParseJson(row.details) : row.details,
+      created_at: row.created_at,
+      stream: {
+        stream_id: row.stream_id,
+        vault_id: row.vault_id,
+        sender: row.sender,
+        recipient: row.recipient,
+        stream_type: row.stream_type,
+        schedule_template: row.schedule_template,
+        launch_context: row.launch_source
+          ? {
+              source: row.launch_source,
+              title: row.launch_title || undefined,
+              description: row.launch_description || undefined,
+              preferredLane: row.preferred_lane || undefined,
+            }
+          : null,
+      },
+    }));
+
+    res.json({
+      success: true,
+      events,
+      total,
+      page: currentPage,
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      hasNextPage: offset + events.length < total,
+      hasPreviousPage: currentPage > 1,
+    });
+  } catch (error: any) {
+    console.error('GET /streams/activity error:', error);
+    res.status(500).json({ error: 'Failed to fetch stream activity', message: error.message });
+  }
+});
+
+router.get('/streams/batch-runs', async (req: Request, res: Response) => {
+  try {
+    const { sender, address, vaultId, contextSource, treasury, status, limit, page } = req.query;
+    const safeLimit = Math.max(1, Math.min(100, Math.trunc(Number(limit) || 20)));
+    const currentPage = Math.max(1, Math.trunc(Number(page) || 1));
+    const offset = (currentPage - 1) * safeLimit;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (sender) {
+      conditions.push('sb.sender = ?');
+      params.push(sender);
+    } else if (address) {
+      conditions.push(`(
+        sb.sender = ?
+        OR EXISTS (
+          SELECT 1 FROM streams sx
+          WHERE sx.batch_id = sb.id
+            AND (sx.sender = ? OR sx.recipient = ?)
+        )
+      )`);
+      params.push(address, address, address);
+    }
+
+    if (vaultId) {
+      conditions.push('sb.vault_id = ?');
+      params.push(vaultId);
+    }
+    if (contextSource) {
+      conditions.push('sb.launch_source = ?');
+      params.push(contextSource);
+    }
+    if (treasury === 'true') {
+      conditions.push('sb.vault_id IS NOT NULL');
+    }
+    if (status) {
+      conditions.push('sb.status = ?');
+      params.push(status);
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const countRow = db!.prepare(`
+      SELECT COUNT(*) as count
+      FROM stream_batches sb
+      ${whereClause}
+    `).get(...params) as { count: number };
+    const total = Number(countRow?.count || 0);
+
+    const rows = db!.prepare(`
+      SELECT
+        sb.*,
+        SUM(CASE WHEN s.status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_streams,
+        SUM(CASE WHEN s.status = 'PENDING' THEN 1 ELSE 0 END) AS pending_streams,
+        SUM(CASE WHEN s.status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_streams,
+        SUM(CASE WHEN s.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_streams
+      FROM stream_batches sb
+      LEFT JOIN streams s ON s.batch_id = sb.id
+      ${whereClause}
+      GROUP BY sb.id
+      ORDER BY sb.created_at DESC
+      LIMIT ?
+      OFFSET ?
+    `).all(...params, safeLimit, offset) as Array<Record<string, unknown>>;
+
+    res.json({
+      success: true,
+      batches: rows.map(rowToStreamBatch),
+      total,
+      page: currentPage,
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      hasNextPage: offset + rows.length < total,
+      hasPreviousPage: currentPage > 1,
+    });
+  } catch (error: any) {
+    console.error('GET /streams/batch-runs error:', error);
+    res.status(500).json({ error: 'Failed to fetch stream batch runs', message: error.message });
+  }
+});
+
+router.get('/streams/batch-runs/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const batchRow = db!.prepare(`
+      SELECT
+        sb.*,
+        SUM(CASE WHEN s.status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_streams,
+        SUM(CASE WHEN s.status = 'PENDING' THEN 1 ELSE 0 END) AS pending_streams,
+        SUM(CASE WHEN s.status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_streams,
+        SUM(CASE WHEN s.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_streams
+      FROM stream_batches sb
+      LEFT JOIN streams s ON s.batch_id = sb.id
+      WHERE sb.id = ?
+      GROUP BY sb.id
+    `).get(id) as Record<string, unknown> | undefined;
+
+    if (!batchRow) {
+      return res.status(404).json({ error: 'Stream batch not found' });
+    }
+
+    const streamRows = db!.prepare(`
+      SELECT *
+      FROM streams
+      WHERE batch_id = ?
+      ORDER BY created_at ASC, stream_id ASC
+    `).all(id) as any[];
+
+    const events = listBatchActivityEvents(streamRows.map((row) => String(row.id)), 500);
+
+    res.json({
+      success: true,
+      batch: rowToStreamBatch(batchRow),
+      streams: streamRows.map((row) => streamService.enrichStream(rowToStream(row))),
+      events,
+    });
+  } catch (error: any) {
+    console.error(`GET /streams/batch-runs/${req.params.id} error:`, error);
+    res.status(500).json({ error: 'Failed to fetch stream batch', message: error.message });
+  }
+});
+
+router.get('/streams/batch-runs/:id/export', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const batchRow = db!.prepare('SELECT * FROM stream_batches WHERE id = ?').get(id) as StreamBatchRow | undefined;
+    if (!batchRow) {
+      return res.status(404).json({ error: 'Stream batch not found' });
+    }
+
+    const rows = db!.prepare(`
+      SELECT *
+      FROM streams
+      WHERE batch_id = ?
+      ORDER BY created_at ASC, stream_id ASC
+    `).all(id) as any[];
+
+    const csvHeader = [
+      'streamId',
+      'recipient',
+      'amount',
+      'description',
+      'scheduleTemplate',
+      'streamType',
+      'startDate',
+      'durationDays',
+      'intervalDays',
+      'cliffDays',
+      'unlockPercent',
+      'unlockDay',
+      'trancheOffsetsDays',
+      'tranchePercentages',
+      'status',
+      'contractAddress',
+      'txHash',
+    ];
+
+    const csvRows = rows.map((row) => buildBatchExportRow(row));
+    const csv = [
+      csvHeader.join(','),
+      ...csvRows.map((row) => csvHeader.map((column) => escapeCsvValue(String((row as Record<string, string>)[column] ?? ''))).join(',')),
+    ].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="flowguard-stream-batch-${id}.csv"`);
+    res.send(csv);
+  } catch (error: any) {
+    console.error(`GET /streams/batch-runs/${req.params.id}/export error:`, error);
+    res.status(500).json({ error: 'Failed to export stream batch', message: error.message });
   }
 });
 
@@ -144,6 +519,13 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       cancelable,
       description,
       vaultId,
+      intervalSeconds,
+      scheduleTemplate,
+      refillable,
+      hybridUnlockTimestamp,
+      hybridUpfrontPercentage,
+      trancheSchedule,
+      launchContext,
     } = req.body;
 
     if (!sender || !recipient) {
@@ -152,7 +534,7 @@ router.post('/streams/create', async (req: Request, res: Response) => {
     if (!totalAmount || totalAmount <= 0) {
       return res.status(400).json({ error: 'Total amount must be greater than 0' });
     }
-    if (!streamType || !['LINEAR', 'RECURRING', 'STEP'].includes(streamType)) {
+    if (!streamType || !['LINEAR', 'RECURRING', 'STEP', 'TRANCHE', 'HYBRID'].includes(streamType)) {
       return res.status(400).json({ error: 'Invalid stream type' });
     }
     if (!isP2pkhAddress(sender) || !isP2pkhAddress(recipient)) {
@@ -165,9 +547,23 @@ router.post('/streams/create', async (req: Request, res: Response) => {
     const normalizedTokenType: 'BCH' | 'FUNGIBLE_TOKEN' = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
+    const normalizedLaunchContext = normalizeLaunchContext(launchContext);
     if (normalizedTokenType === 'FUNGIBLE_TOKEN' && !tokenCategory) {
       return res.status(400).json({ error: 'Token category required for CashTokens' });
     }
+    if (scheduleTemplate && !isValidStreamScheduleTemplate(scheduleTemplate)) {
+      return res.status(400).json({ error: 'Invalid schedule template' });
+    }
+    const refillableRequested = Boolean(refillable);
+    if (refillableRequested && streamType !== 'RECURRING') {
+      return res.status(400).json({
+        error: 'Only recurring streams can be configured as refillable',
+      });
+    }
+    const hybridUnlockTimestampValue = hybridUnlockTimestamp ? Number(hybridUnlockTimestamp) : undefined;
+    const hybridUpfrontPercentageValue = hybridUpfrontPercentage !== undefined
+      ? Number(hybridUpfrontPercentage)
+      : undefined;
 
     const id = randomUUID();
     const now = Math.floor(Date.now() / 1000);
@@ -188,7 +584,10 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       }
     }
 
-    const resolvedEndTime = endTime || startTime + 86400 * 365;
+    const scheduleEndTime = endTime || startTime + 86400 * 365;
+    const resolvedEndTime = refillableRequested && streamType === 'RECURRING'
+      ? 0
+      : scheduleEndTime;
     const deploymentParams = {
       vaultId: actualVaultId,
       sender,
@@ -196,7 +595,7 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       totalAmount,
       startTime,
       endTime: resolvedEndTime,
-      streamType: streamType as 'LINEAR' | 'STEP' | 'RECURRING',
+      streamType: streamType as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
       cliffTime: cliffTimestamp,
       cancelable: cancelableRequested,
       tokenType: normalizedTokenType,
@@ -204,26 +603,143 @@ router.post('/streams/create', async (req: Request, res: Response) => {
     };
 
     let intervalSecondsForRow: number | null = null;
+    let hybridUnlockTimestampForRow: number | null = null;
+    let hybridUpfrontAmountDisplayForRow: number | null = null;
+    let normalizedTrancheSchedule: Array<{ unlockTime: number; cumulativeAmountDisplay: number }> = [];
+    let cliffTimestampForRow = cliffTimestamp || null;
     let deployment;
     if (streamType === 'RECURRING') {
-      const baseIntervalSeconds = 30 * 24 * 60 * 60;
-      const durationSeconds = Math.max(baseIntervalSeconds, resolvedEndTime - startTime);
-      const maxIntervals = Math.max(1, Math.floor(durationSeconds / baseIntervalSeconds));
+      const durationSeconds = Math.max(1, scheduleEndTime - startTime);
+      const explicitIntervalSeconds = Number(intervalSeconds);
+      if (!Number.isFinite(explicitIntervalSeconds) || explicitIntervalSeconds <= 0) {
+        return res.status(400).json({
+          error: 'Recurring streams require a valid intervalSeconds value',
+        });
+      }
+      if (explicitIntervalSeconds > durationSeconds) {
+        return res.status(400).json({
+          error: 'Recurring interval must be shorter than or equal to the total schedule duration',
+        });
+      }
+      if (durationSeconds % explicitIntervalSeconds !== 0) {
+        return res.status(400).json({
+          error: 'Recurring interval must divide the total schedule duration evenly',
+        });
+      }
+      const intervalCount = Math.max(1, Math.floor(durationSeconds / explicitIntervalSeconds));
       const totalOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
       if (totalOnChain <= 0) {
         return res.status(400).json({ error: 'Recurring stream total amount must be greater than zero' });
       }
-      let intervalCount = maxIntervals;
-      while (intervalCount > 1 && totalOnChain % intervalCount !== 0) {
-        intervalCount -= 1;
+      if (intervalCount < 1) {
+        return res.status(400).json({
+          error: 'Recurring stream must include at least one unlock interval',
+        });
       }
-      intervalSecondsForRow = Math.max(1, Math.floor(durationSeconds / intervalCount));
+      if (totalOnChain % intervalCount !== 0) {
+        return res.status(400).json({
+          error:
+            'Recurring stream total amount must divide evenly across the selected cadence. ' +
+            'Adjust the amount, duration, or interval.',
+        });
+      }
+      intervalSecondsForRow = explicitIntervalSeconds;
       const amountPerIntervalOnChain = Math.floor(totalOnChain / intervalCount);
       const amountPerIntervalDisplay = onChainAmountToDisplay(amountPerIntervalOnChain, normalizedTokenType);
       deployment = await deploymentService.deployRecurringStream({
         ...deploymentParams,
+        totalAmount: refillableRequested ? 0 : Number(totalAmount),
+        endTime: resolvedEndTime,
         intervalSeconds: intervalSecondsForRow,
         amountPerInterval: amountPerIntervalDisplay,
+      });
+    } else if (streamType === 'STEP') {
+      const durationSeconds = Math.max(1, resolvedEndTime - startTime);
+      const explicitStepIntervalSeconds = Number(intervalSeconds);
+      if (!Number.isFinite(explicitStepIntervalSeconds) || explicitStepIntervalSeconds <= 0) {
+        return res.status(400).json({
+          error: 'Step vesting requires a valid intervalSeconds value',
+        });
+      }
+      if (explicitStepIntervalSeconds > durationSeconds) {
+        return res.status(400).json({
+          error: 'Step interval must be shorter than or equal to the total vesting duration',
+        });
+      }
+      if (durationSeconds % explicitStepIntervalSeconds !== 0) {
+        return res.status(400).json({
+          error: 'Step interval must divide the total vesting duration evenly',
+        });
+      }
+      const stepCount = Math.max(1, Math.floor(durationSeconds / explicitStepIntervalSeconds));
+      const totalOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
+      if (totalOnChain <= 0) {
+        return res.status(400).json({ error: 'Step vesting total amount must be greater than zero' });
+      }
+      const stepAmountOnChain = Math.floor((totalOnChain + stepCount - 1) / stepCount);
+      const stepAmountDisplay = onChainAmountToDisplay(stepAmountOnChain, normalizedTokenType);
+      intervalSecondsForRow = explicitStepIntervalSeconds;
+      deployment = await deploymentService.deployVestingStream({
+        ...deploymentParams,
+        stepInterval: intervalSecondsForRow,
+        stepAmount: stepAmountDisplay,
+      });
+    } else if (streamType === 'TRANCHE') {
+      const normalized = normalizeTrancheSchedule({
+        trancheSchedule,
+        totalAmount: Number(totalAmount),
+        tokenType: normalizedTokenType,
+        startTime,
+      });
+      normalizedTrancheSchedule = normalized.schedule;
+      cliffTimestampForRow = normalized.schedule[0].unlockTime > startTime
+        ? normalized.schedule[0].unlockTime
+        : null;
+      deployment = await deploymentService.deployTrancheStream({
+        ...deploymentParams,
+        endTime: normalized.finalUnlockTime,
+        trancheSchedule: normalized.schedule.map((tranche) => ({
+          unlockTime: tranche.unlockTime,
+          cumulativeAmount: tranche.cumulativeAmountDisplay,
+        })),
+      });
+    } else if (streamType === 'HYBRID') {
+      if (!Number.isFinite(hybridUnlockTimestampValue) || !hybridUnlockTimestampValue) {
+        return res.status(400).json({
+          error: 'Hybrid streams require a valid hybridUnlockTimestamp value',
+        });
+      }
+      const resolvedHybridUpfrontPercentage = hybridUpfrontPercentageValue ?? Number.NaN;
+      if (!Number.isFinite(resolvedHybridUpfrontPercentage) || resolvedHybridUpfrontPercentage <= 0 || resolvedHybridUpfrontPercentage >= 100) {
+        return res.status(400).json({
+          error: 'Hybrid streams require a hybridUpfrontPercentage between 0 and 100',
+        });
+      }
+      if (hybridUnlockTimestampValue <= startTime) {
+        return res.status(400).json({
+          error: 'Hybrid unlock timestamp must be after the stream start time',
+        });
+      }
+      if (hybridUnlockTimestampValue >= resolvedEndTime) {
+        return res.status(400).json({
+          error: 'Hybrid unlock timestamp must be before the stream end time',
+        });
+      }
+
+      const totalOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
+      const hybridUpfrontAmountOnChain = Math.max(
+        1,
+        Math.floor((totalOnChain * resolvedHybridUpfrontPercentage) / 100),
+      );
+      hybridUnlockTimestampForRow = hybridUnlockTimestampValue;
+      hybridUpfrontAmountDisplayForRow = onChainAmountToDisplay(hybridUpfrontAmountOnChain, normalizedTokenType);
+      cliffTimestampForRow = hybridUnlockTimestampForRow;
+
+      deployment = await deploymentService.deployHybridStream({
+        ...deploymentParams,
+        endTime: resolvedEndTime,
+        hybridUnlockTime: hybridUnlockTimestampForRow,
+        hybridUpfrontAmount: hybridUpfrontAmountDisplayForRow,
       });
     } else {
       deployment = await deploymentService.deployVestingStream(deploymentParams);
@@ -239,15 +755,33 @@ router.post('/streams/create', async (req: Request, res: Response) => {
     db!.prepare(`
       INSERT INTO streams (id, stream_id, vault_id, sender, recipient, token_type, token_category,
         total_amount, withdrawn_amount, stream_type, start_time, end_time, interval_seconds, cliff_timestamp,
-        cancelable, transferable, status, description, created_at, updated_at,
-        contract_address, constructor_params, nft_commitment, nft_capability)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
+        cancelable, transferable, refillable, status, schedule_template, launch_source, launch_title,
+        launch_description, preferred_lane, description, created_at, updated_at, contract_address,
+        constructor_params, nft_commitment, nft_capability)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, streamId, vaultId || null, sender, recipient,
       normalizedTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
       tokenCategory || null,
-      totalAmount, streamType, startTime, resolvedEndTime || null, intervalSecondsForRow, cliffTimestamp || null,
+      totalAmount,
+      streamType,
+      startTime,
+      streamType === 'TRANCHE'
+        ? normalizedTrancheSchedule[normalizedTrancheSchedule.length - 1]?.unlockTime || null
+        : refillableRequested
+          ? null
+          : resolvedEndTime || null,
+      intervalSecondsForRow,
+      streamType === 'TRANCHE' || streamType === 'HYBRID'
+        ? cliffTimestampForRow
+        : cliffTimestamp || null,
       cancelableRequested ? 1 : 0,
+      refillableRequested ? 1 : 0,
+      scheduleTemplate || null,
+      normalizedLaunchContext?.source || null,
+      normalizedLaunchContext?.title || null,
+      normalizedLaunchContext?.description || null,
+      normalizedLaunchContext?.preferredLane || null,
       description || null, now, now,
       deployment.contractAddress,
       JSON.stringify(deployment.constructorParams),
@@ -264,9 +798,21 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       details: {
         streamId,
         streamType,
+        scheduleTemplate: scheduleTemplate || null,
         startTime,
-        endTime: resolvedEndTime || null,
-        cliffTimestamp: cliffTimestamp || null,
+        endTime: streamType === 'TRANCHE'
+          ? normalizedTrancheSchedule[normalizedTrancheSchedule.length - 1]?.unlockTime || null
+          : refillableRequested
+            ? null
+            : resolvedEndTime || null,
+        cliffTimestamp: streamType === 'TRANCHE' || streamType === 'HYBRID'
+          ? cliffTimestampForRow
+          : cliffTimestamp || null,
+        refillable: refillableRequested,
+        launchContext: normalizedLaunchContext,
+        hybridUnlockTimestamp: hybridUnlockTimestampForRow,
+        hybridUpfrontAmount: hybridUpfrontAmountDisplayForRow,
+        trancheSchedule: streamType === 'TRANCHE' ? normalizedTrancheSchedule : undefined,
       },
       createdAt: now,
     });
@@ -385,19 +931,23 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Stream is not pending' });
     }
 
+    const isTokenStream = row.token_type === 'CASHTOKENS';
+    const fundingAmountOnChain = displayAmountToOnChain(Number(row.total_amount), row.token_type);
+    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
+      'stream',
+      isTokenStream ? 'FUNGIBLE_TOKEN' : 'BCH',
+      BigInt(fundingAmountOnChain),
+    );
+
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
       {
         address: row.contract_address,
-        minimumSatoshis: BigInt(
-          row.token_type === 'CASHTOKENS'
-            ? 546
-            : Math.max(546, displayAmountToOnChain(Number(row.total_amount), row.token_type)),
-        ),
-        ...(row.token_type === 'CASHTOKENS' && row.token_category
+        minimumSatoshis: minimumContractSatoshis,
+        ...(isTokenStream && row.token_category
           ? {
               tokenCategory: row.token_category,
-              minimumTokenAmount: BigInt(Math.max(0, Math.trunc(Number(row.total_amount)))),
+              minimumTokenAmount: BigInt(Math.max(0, Math.trunc(fundingAmountOnChain))),
             }
           : {}),
         requireNft: true,
@@ -459,7 +1009,7 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
 router.post('/streams/:id/claim', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { recipientAddress } = req.body;
+    const { recipientAddress, signerAddress } = req.body;
 
     if (!recipientAddress) {
       return res.status(400).json({ error: 'Recipient address required' });
@@ -509,6 +1059,7 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
         endTime: row.end_time || undefined,
         tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH',
         tokenCategory: row.token_category || undefined,
+        feePayerAddress: signerAddress || recipientAddress,
         constructorParams,
         currentCommitment,
       });
@@ -528,12 +1079,7 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
     const totalReleasedOnChain = isTokenStream
       ? Math.max(0, Math.trunc(Number(row.withdrawn_amount || 0)))
       : bchToSatoshis(Number(row.withdrawn_amount || 0));
-    const computedStepCount = row.interval_seconds && row.end_time
-      ? Math.max(1, Math.floor((row.end_time - row.start_time) / row.interval_seconds))
-      : 0;
-    const stepAmountOnChain = computedStepCount > 0
-      ? Math.floor(totalAmountOnChain / computedStepCount)
-      : undefined;
+    const scheduleDetails = getStreamScheduleDetails(row);
 
     // Build claim parameters
     const claimParams = {
@@ -545,11 +1091,15 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
       startTime: row.start_time,
       endTime: row.end_time || row.start_time + 86400 * 365,
       currentTime: Math.floor(Date.now() / 1000),
-      streamType: row.stream_type as 'LINEAR' | 'STEP',
-      stepInterval: row.interval_seconds,
-      stepAmount: stepAmountOnChain,
+      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID',
+      stepInterval: scheduleDetails.intervalSeconds,
+      stepAmount: scheduleDetails.stepAmountOnChain,
+      hybridUnlockTime: scheduleDetails.hybridUnlockTime,
+      hybridUpfrontAmount: scheduleDetails.hybridUpfrontAmountOnChain,
+      trancheSchedule: scheduleDetails.trancheScheduleOnChain,
       tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' as const : 'BCH' as const,
       tokenCategory: row.token_category,
+      feePayerAddress: signerAddress || recipientAddress,
       constructorParams,
       currentCommitment,
     };
@@ -746,12 +1296,7 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
     const totalReleasedOnChain = isTokenStream
       ? Math.max(0, Math.trunc(Number(row.withdrawn_amount || 0)))
       : bchToSatoshis(Number(row.withdrawn_amount || 0));
-    const computedStepCount = row.interval_seconds && row.end_time
-      ? Math.max(1, Math.floor((row.end_time - row.start_time) / row.interval_seconds))
-      : 0;
-    const stepAmountOnChain = computedStepCount > 0
-      ? Math.floor(totalAmountOnChain / computedStepCount)
-      : undefined;
+    const scheduleDetails = getStreamScheduleDetails(row);
 
     // Build claim parameters
     const claimParams = {
@@ -763,9 +1308,12 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
       startTime: row.start_time,
       endTime: row.end_time || row.start_time + 86400 * 365,
       currentTime: Math.floor(Date.now() / 1000),
-      streamType: row.stream_type as 'LINEAR' | 'STEP',
-      stepInterval: row.interval_seconds,
-      stepAmount: stepAmountOnChain,
+      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID',
+      stepInterval: scheduleDetails.intervalSeconds,
+      stepAmount: scheduleDetails.stepAmountOnChain,
+      hybridUnlockTime: scheduleDetails.hybridUnlockTime,
+      hybridUpfrontAmount: scheduleDetails.hybridUpfrontAmountOnChain,
+      trancheSchedule: scheduleDetails.trancheScheduleOnChain,
       tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' as const : 'BCH' as const,
       tokenCategory: row.token_category,
       constructorParams,
@@ -799,6 +1347,619 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error(`GET /streams/${req.params.id}/claim-info error:`, error);
     res.status(500).json({ error: 'Failed to get claim info', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/pause
+ * Pause an active stream (sender only)
+ */
+router.post('/streams/:id/pause', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.sender).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the stream sender can pause this stream' });
+    }
+    if (String(row.status) !== 'ACTIVE') {
+      return res.status(400).json({ error: 'Only ACTIVE streams can be paused' });
+    }
+    if (!row.cancelable) {
+      return res.status(400).json({ error: 'This stream is not configured as pausable' });
+    }
+    if (!row.contract_address || !row.constructor_params) {
+      return res.status(400).json({ error: 'Stream contract is not fully configured' });
+    }
+
+    const contractService = new ContractService('chipnet');
+    const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || '00'.repeat(40);
+
+    const controlService = new StreamControlService('chipnet');
+    const pauseTx = await controlService.buildPauseTransaction({
+      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
+      contractAddress: row.contract_address,
+      constructorParams: deserializeConstructorParams(row.constructor_params),
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenCategory: row.token_category || undefined,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Pause transaction ready',
+      wcTransaction: serializeWcTransaction(pauseTx.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/pause error:`, error);
+    return res.status(500).json({ error: 'Failed to build pause transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/confirm-pause
+ * Confirm stream pause after on-chain tx broadcast
+ */
+router.post('/streams/:id/confirm-pause', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, 'chipnet'))) {
+      return res.status(400).json({ error: 'Transaction hash not found on chipnet' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.sender).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the stream sender can confirm pause' });
+    }
+    if (String(row.status) !== 'ACTIVE') {
+      return res.status(400).json({ error: `Cannot confirm pause for stream status ${row.status}` });
+    }
+
+    const hasStateOutput = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: row.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 32,
+      },
+      'chipnet',
+    );
+    if (!hasStateOutput) {
+      return res.status(400).json({
+        error: 'Pause transaction does not include the expected stream state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const contractService = new ContractService('chipnet');
+    const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || null;
+    db!.prepare(`
+      UPDATE streams
+      SET status = 'PAUSED', tx_hash = ?, nft_commitment = ?, updated_at = ?
+      WHERE id = ?
+    `).run(txHash, nextCommitment, now, id);
+    recordActivityEvent({
+      entityType: 'stream',
+      entityId: id,
+      eventType: 'paused',
+      actor: signerAddress,
+      status: 'PAUSED',
+      txHash,
+      createdAt: now,
+    });
+
+    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const stream = streamService.enrichStream(rowToStream(updatedRow));
+
+    return res.json({
+      success: true,
+      message: 'Stream pause confirmed',
+      txHash,
+      stream,
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/confirm-pause error:`, error);
+    return res.status(500).json({ error: 'Failed to confirm stream pause', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/resume
+ * Resume a paused stream (sender only)
+ */
+router.post('/streams/:id/resume', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.sender).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the stream sender can resume this stream' });
+    }
+    if (String(row.status) !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only PAUSED streams can be resumed' });
+    }
+    if (!row.contract_address || !row.constructor_params) {
+      return res.status(400).json({ error: 'Stream contract is not fully configured' });
+    }
+
+    const contractService = new ContractService('chipnet');
+    const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || '00'.repeat(40);
+
+    const controlService = new StreamControlService('chipnet');
+    const resumeTx = await controlService.buildResumeTransaction({
+      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
+      contractAddress: row.contract_address,
+      constructorParams: deserializeConstructorParams(row.constructor_params),
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenCategory: row.token_category || undefined,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Resume transaction ready',
+      wcTransaction: serializeWcTransaction(resumeTx.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/resume error:`, error);
+    return res.status(500).json({ error: 'Failed to build resume transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/confirm-resume
+ * Confirm stream resume after on-chain tx broadcast
+ */
+router.post('/streams/:id/confirm-resume', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, 'chipnet'))) {
+      return res.status(400).json({ error: 'Transaction hash not found on chipnet' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.sender).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the stream sender can confirm resume' });
+    }
+    if (String(row.status) !== 'PAUSED') {
+      return res.status(400).json({ error: `Cannot confirm resume for stream status ${row.status}` });
+    }
+
+    const hasStateOutput = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: row.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 32,
+      },
+      'chipnet',
+    );
+    if (!hasStateOutput) {
+      return res.status(400).json({
+        error: 'Resume transaction does not include the expected stream state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const contractService = new ContractService('chipnet');
+    const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || null;
+    db!.prepare(`
+      UPDATE streams
+      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, updated_at = ?
+      WHERE id = ?
+    `).run(txHash, nextCommitment, now, id);
+    recordActivityEvent({
+      entityType: 'stream',
+      entityId: id,
+      eventType: 'resumed',
+      actor: signerAddress,
+      status: 'ACTIVE',
+      txHash,
+      createdAt: now,
+    });
+
+    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const stream = streamService.enrichStream(rowToStream(updatedRow));
+
+    return res.json({
+      success: true,
+      message: 'Stream resume confirmed',
+      txHash,
+      stream,
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/confirm-resume error:`, error);
+    return res.status(500).json({ error: 'Failed to confirm stream resume', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/refill
+ * Refill an open-ended recurring stream runway (sender only)
+ */
+router.post('/streams/:id/refill', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { refillAmount } = req.body;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const refillAmountDisplay = Number(refillAmount);
+    if (!Number.isFinite(refillAmountDisplay) || refillAmountDisplay <= 0) {
+      return res.status(400).json({ error: 'Refill amount must be greater than zero' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.sender).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the stream sender can refill this stream' });
+    }
+    if (String(row.stream_type) !== 'RECURRING') {
+      return res.status(400).json({ error: 'Only recurring streams support refill' });
+    }
+    if (!row.refillable) {
+      return res.status(400).json({ error: 'This recurring stream is not configured as refillable' });
+    }
+    if (String(row.status) !== 'ACTIVE' && String(row.status) !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only ACTIVE or PAUSED recurring streams can be refilled' });
+    }
+    if (!row.contract_address || !row.constructor_params) {
+      return res.status(400).json({ error: 'Stream contract is not fully configured' });
+    }
+
+    const refillAmountOnChain = displayAmountToOnChain(
+      refillAmountDisplay,
+      row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH',
+    );
+    if (refillAmountOnChain <= 0) {
+      return res.status(400).json({ error: 'Refill amount is too small for this asset type' });
+    }
+
+    const contractService = new ContractService('chipnet');
+    const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || '00'.repeat(40);
+
+    const controlService = new StreamControlService('chipnet');
+    const refillTx = await controlService.buildRefillTransaction({
+      streamType: 'RECURRING',
+      contractAddress: row.contract_address,
+      constructorParams: deserializeConstructorParams(row.constructor_params),
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenCategory: row.token_category || undefined,
+      senderAddress: signerAddress,
+      refillAmount: BigInt(refillAmountOnChain),
+    });
+
+    return res.json({
+      success: true,
+      message: 'Refill transaction ready',
+      refillAmount: refillAmountDisplay,
+      wcTransaction: serializeWcTransaction(refillTx.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/refill error:`, error);
+    return res.status(500).json({ error: 'Failed to build refill transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/confirm-refill
+ * Confirm recurring stream refill after on-chain tx broadcast
+ */
+router.post('/streams/:id/confirm-refill', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash, refillAmount } = req.body;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    const refillAmountDisplay = Number(refillAmount);
+    if (!Number.isFinite(refillAmountDisplay) || refillAmountDisplay <= 0) {
+      return res.status(400).json({ error: 'Refill amount must be greater than zero' });
+    }
+    if (!(await transactionExists(txHash, 'chipnet'))) {
+      return res.status(400).json({ error: 'Transaction hash not found on chipnet' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.sender).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the stream sender can confirm refill' });
+    }
+    if (String(row.stream_type) !== 'RECURRING' || !row.refillable) {
+      return res.status(400).json({ error: 'This stream does not support refill confirmation' });
+    }
+
+    const hasStateOutput = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: row.contract_address,
+        minimumSatoshis: 546n,
+        ...(row.token_type === 'CASHTOKENS' && row.token_category
+          ? {
+              tokenCategory: row.token_category,
+              minimumTokenAmount: 1n,
+            }
+          : {}),
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 32,
+      },
+      'chipnet',
+    );
+    if (!hasStateOutput) {
+      return res.status(400).json({
+        error: 'Refill transaction does not include the expected recurring stream state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const contractService = new ContractService('chipnet');
+    const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || null;
+    const newTotalAmount = Number(row.total_amount || 0) + refillAmountDisplay;
+
+    db!.prepare(`
+      UPDATE streams
+      SET total_amount = ?, tx_hash = ?, nft_commitment = ?, updated_at = ?
+      WHERE id = ?
+    `).run(newTotalAmount, txHash, nextCommitment, now, id);
+    recordActivityEvent({
+      entityType: 'stream',
+      entityId: id,
+      eventType: 'refilled',
+      actor: signerAddress,
+      amount: refillAmountDisplay,
+      status: String(row.status || 'ACTIVE'),
+      txHash,
+      details: {
+        totalAmountAfterRefill: newTotalAmount,
+      },
+      createdAt: now,
+    });
+
+    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const stream = streamService.enrichStream(rowToStream(updatedRow));
+
+    return res.json({
+      success: true,
+      message: 'Recurring stream refill confirmed',
+      txHash,
+      stream,
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/confirm-refill error:`, error);
+    return res.status(500).json({ error: 'Failed to confirm refill', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/transfer
+ * Transfer a transferable vesting stream to a new recipient
+ */
+router.post('/streams/:id/transfer', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { newRecipientAddress } = req.body;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!newRecipientAddress) {
+      return res.status(400).json({ error: 'New recipient address is required' });
+    }
+    if (!isP2pkhAddress(newRecipientAddress)) {
+      return res.status(400).json({ error: 'New recipient must be a P2PKH cash address' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (String(row.stream_type) === 'RECURRING') {
+      return res.status(400).json({
+        error: 'Recurring streams currently do not support recipient transfer',
+      });
+    }
+    if (!row.transferable) {
+      return res.status(400).json({ error: 'This stream is not transferable' });
+    }
+    if (String(row.status) !== 'ACTIVE') {
+      return res.status(400).json({ error: 'Only ACTIVE streams can transfer recipients' });
+    }
+    if (String(row.recipient).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the current recipient can transfer this stream' });
+    }
+    if (String(row.recipient).toLowerCase() === String(newRecipientAddress).toLowerCase()) {
+      return res.status(400).json({ error: 'New recipient must differ from current recipient' });
+    }
+    if (!row.contract_address || !row.constructor_params) {
+      return res.status(400).json({ error: 'Stream contract is not fully configured' });
+    }
+
+    const contractService = new ContractService('chipnet');
+    const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || '00'.repeat(40);
+
+    const controlService = new StreamControlService('chipnet');
+    const transferTx = await controlService.buildTransferTransaction({
+      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID',
+      contractAddress: row.contract_address,
+      constructorParams: deserializeConstructorParams(row.constructor_params),
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      currentRecipient: signerAddress,
+      newRecipient: newRecipientAddress,
+      tokenType: row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenCategory: row.token_category || undefined,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Transfer transaction ready',
+      nextRecipient: transferTx.nextRecipient,
+      wcTransaction: serializeWcTransaction(transferTx.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/transfer error:`, error);
+    return res.status(500).json({ error: 'Failed to build transfer transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/streams/:id/confirm-transfer
+ * Confirm vesting stream transfer after on-chain tx broadcast
+ */
+router.post('/streams/:id/confirm-transfer', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash, newRecipientAddress } = req.body;
+    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash || !newRecipientAddress) {
+      return res.status(400).json({ error: 'Transaction hash and new recipient address are required' });
+    }
+    if (!(await transactionExists(txHash, 'chipnet'))) {
+      return res.status(400).json({ error: 'Transaction hash not found on chipnet' });
+    }
+
+    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'Stream not found' });
+    }
+    if (!row.transferable) {
+      return res.status(400).json({ error: 'This stream is not transferable' });
+    }
+    if (String(row.stream_type) === 'RECURRING') {
+      return res.status(400).json({ error: 'Recurring streams do not support recipient transfer' });
+    }
+    if (String(row.status) !== 'ACTIVE') {
+      return res.status(400).json({ error: `Cannot confirm transfer for stream status ${row.status}` });
+    }
+    if (String(row.recipient).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the current recipient can confirm this transfer' });
+    }
+
+    const hasStateOutput = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: row.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 32,
+      },
+      'chipnet',
+    );
+    if (!hasStateOutput) {
+      return res.status(400).json({
+        error: 'Transfer transaction does not include the expected stream state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const contractService = new ContractService('chipnet');
+    const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || null;
+    db!.prepare(`
+      UPDATE streams
+      SET recipient = ?, tx_hash = ?, nft_commitment = ?, updated_at = ?
+      WHERE id = ?
+    `).run(newRecipientAddress, txHash, nextCommitment, now, id);
+    recordActivityEvent({
+      entityType: 'stream',
+      entityId: id,
+      eventType: 'transferred',
+      actor: signerAddress,
+      status: String(row.status || 'ACTIVE'),
+      txHash,
+      details: {
+        previousRecipient: row.recipient,
+        newRecipient: newRecipientAddress,
+      },
+      createdAt: now,
+    });
+
+    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const stream = streamService.enrichStream(rowToStream(updatedRow));
+
+    return res.json({
+      success: true,
+      message: 'Stream transfer confirmed',
+      txHash,
+      stream,
+    });
+  } catch (error: any) {
+    console.error(`POST /streams/${req.params.id}/confirm-transfer error:`, error);
+    return res.status(500).json({ error: 'Failed to confirm stream transfer', message: error.message });
   }
 });
 
@@ -841,7 +2002,7 @@ router.post('/streams/:id/cancel', async (req: Request, res: Response) => {
 
     const cancelService = new StreamCancelService('chipnet');
     const cancelTx = await cancelService.buildCancelTransaction({
-      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING',
+      streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
       contractAddress: row.contract_address,
       sender: signerAddress,
       recipient: row.recipient,
@@ -958,76 +2119,360 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
 
 /**
  * POST /api/treasuries/:vaultId/batch-create
- * Batch create multiple streams from a treasury
+ * Batch create multiple streams from a treasury and return one funding tx.
  */
 router.post('/treasuries/:vaultId/batch-create', async (req: Request, res: Response) => {
   try {
     const { vaultId } = req.params;
-    const { recipients } = req.body;
+    const {
+      senderAddress,
+      tokenType = 'BCH',
+      tokenCategory,
+      entries,
+      launchContext,
+    } = req.body;
 
-    if (!Array.isArray(recipients) || recipients.length === 0) {
-      return res.status(400).json({ error: 'Recipients array is required' });
+    if (!senderAddress || !isP2pkhAddress(senderAddress)) {
+      return res.status(400).json({
+        error: 'A valid senderAddress is required for batch stream creation',
+      });
     }
 
-    const errors: string[] = [];
-    recipients.forEach((r, idx) => {
-      if (!r.address) errors.push(`Recipient ${idx + 1}: Missing address`);
-      if (!r.amount || r.amount <= 0) errors.push(`Recipient ${idx + 1}: Invalid amount`);
-      if (!r.duration || r.duration <= 0) errors.push(`Recipient ${idx + 1}: Invalid duration`);
-    });
-
-    if (errors.length > 0) {
-      return res.status(400).json({ error: 'Validation failed', errors });
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: 'entries array is required' });
     }
 
-    const totalAmount = recipients.reduce((sum: number, r: any) => sum + r.amount, 0);
+    if (entries.length > 100) {
+      return res.status(400).json({
+        error: 'Batch stream creation is limited to 100 rows per transaction',
+      });
+    }
+
+    const normalizedBatchTokenType: 'BCH' | 'FUNGIBLE_TOKEN' =
+      tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH';
+    const normalizedLaunchContext = normalizeLaunchContext(launchContext);
+
+    if (normalizedBatchTokenType === 'FUNGIBLE_TOKEN' && !tokenCategory) {
+      return res.status(400).json({
+        error: 'tokenCategory is required for CashToken batch stream lanes',
+      });
+    }
+
+    const batchId = randomUUID();
+    const countRow = db!.prepare('SELECT COUNT(*) as cnt FROM streams').get() as any;
+    const sequenceBase = Number(countRow?.cnt || 0) + 1;
     const now = Math.floor(Date.now() / 1000);
 
-    const countRow = db!.prepare('SELECT COUNT(*) as cnt FROM streams').get() as any;
-    let sequence = (countRow?.cnt ?? 0) + 1;
+    const preparedStreams: Array<Awaited<ReturnType<typeof preparePendingStreamRecord>>> = [];
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
 
+      if (!entry?.recipient || !isP2pkhAddress(entry.recipient)) {
+        return res.status(400).json({
+          error: `Entry ${index + 1} must include a valid P2PKH recipient address`,
+        });
+      }
+
+      if (!entry.totalAmount || Number(entry.totalAmount) <= 0) {
+        return res.status(400).json({
+          error: `Entry ${index + 1} must include a positive totalAmount`,
+        });
+      }
+
+      if (!entry.streamType || !['LINEAR', 'RECURRING', 'STEP', 'TRANCHE', 'HYBRID'].includes(entry.streamType)) {
+        return res.status(400).json({
+          error: `Entry ${index + 1} must include a valid streamType`,
+        });
+      }
+
+      if (entry.scheduleTemplate && !isValidStreamScheduleTemplate(entry.scheduleTemplate)) {
+        return res.status(400).json({
+          error: `Entry ${index + 1} includes an invalid schedule template`,
+        });
+      }
+
+      const prepared = await preparePendingStreamRecord({
+        vaultId,
+        sender: senderAddress,
+        recipient: entry.recipient,
+        tokenType: normalizedBatchTokenType,
+        tokenCategory,
+        totalAmount: Number(entry.totalAmount),
+        streamType: entry.streamType,
+        startTime: Number(entry.startTime),
+        endTime: Number(entry.endTime),
+        cliffTimestamp: entry.cliffTimestamp ? Number(entry.cliffTimestamp) : undefined,
+        cancelable: entry.cancelable !== false,
+        description: entry.description || null,
+        intervalSeconds: entry.intervalSeconds ? Number(entry.intervalSeconds) : undefined,
+        scheduleTemplate: entry.scheduleTemplate || null,
+        refillable: Boolean(entry.refillable),
+        hybridUnlockTimestamp: entry.hybridUnlockTimestamp ? Number(entry.hybridUnlockTimestamp) : undefined,
+        hybridUpfrontPercentage: entry.hybridUpfrontPercentage !== undefined
+          ? Number(entry.hybridUpfrontPercentage)
+          : undefined,
+        trancheSchedule: entry.trancheSchedule,
+        launchContext: normalizedLaunchContext,
+        sequenceNumber: sequenceBase + index,
+        createdAt: now,
+      });
+      preparedStreams.push(prepared);
+    }
+
+    const insertBatchStmt = db!.prepare(`
+      INSERT INTO stream_batches (
+        id, vault_id, sender, token_type, token_category, stream_count, total_amount, status,
+        launch_source, launch_title, launch_description, preferred_lane, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)
+    `);
     const insertStmt = db!.prepare(`
-      INSERT INTO streams (id, stream_id, vault_id, sender, recipient, token_type, token_category,
-        total_amount, withdrawn_amount, stream_type, start_time, end_time, cliff_timestamp,
-        cancelable, transferable, status, created_at, updated_at, constructor_params)
-      VALUES (?, ?, ?, ?, ?, 'BCH', NULL, ?, 0, ?, ?, ?, NULL, ?, ?, 'ACTIVE', ?, ?, ?)
+      INSERT INTO streams (id, stream_id, vault_id, batch_id, sender, recipient, token_type, token_category,
+        total_amount, withdrawn_amount, stream_type, start_time, end_time, interval_seconds, cliff_timestamp,
+        cancelable, transferable, refillable, status, schedule_template, launch_source, launch_title,
+        launch_description, preferred_lane, description, created_at, updated_at, contract_address,
+        constructor_params, nft_commitment, nft_capability)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const createdStreams = db!.transaction(() => {
-      return recipients.map((r: any) => {
-        const id = randomUUID();
-        const streamId = streamService.generateStreamId('BCH', sequence++);
+    db!.transaction(() => {
+      insertBatchStmt.run(
+        batchId,
+        vaultId,
+        senderAddress,
+        normalizedBatchTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
+        tokenCategory || null,
+        preparedStreams.length,
+        preparedStreams.reduce((sum, prepared) => sum + Number(prepared.totalAmount || 0), 0),
+        normalizedLaunchContext?.source || null,
+        normalizedLaunchContext?.title || null,
+        normalizedLaunchContext?.description || null,
+        normalizedLaunchContext?.preferredLane || null,
+        now,
+        now,
+      );
 
-        // Constructor params for each stream
-        const constructorParams = [
-          r.address, // recipient
-          'vault_address', // sender
-          { type: 'bigint', value: displayAmountToOnChain(Number(r.amount), 'BCH').toString() },
-          { type: 'bigint', value: now.toString() },
-          { type: 'bigint', value: (now + r.duration).toString() },
-          r.type || 'LINEAR',
-          r.cancelable !== false,
-        ];
-
+      for (const prepared of preparedStreams) {
         insertStmt.run(
-          id, streamId, vaultId, 'vault_address', r.address,
-          r.amount, r.type || 'LINEAR', now, now + r.duration,
-          r.cancelable !== false ? 1 : 0, r.transferable === true ? 1 : 0,
-          now, now, JSON.stringify(constructorParams)
+          prepared.id,
+          prepared.streamId,
+          prepared.vaultId,
+          batchId,
+          prepared.sender,
+          prepared.recipient,
+          prepared.tokenType,
+          prepared.tokenCategory,
+          prepared.totalAmount,
+          prepared.streamType,
+          prepared.startTime,
+          prepared.endTime,
+          prepared.intervalSeconds,
+          prepared.cliffTimestamp,
+          prepared.cancelable ? 1 : 0,
+          prepared.refillable ? 1 : 0,
+          prepared.scheduleTemplate,
+          prepared.launchSource,
+          prepared.launchTitle,
+          prepared.launchDescription,
+          prepared.preferredLane,
+          prepared.description,
+          prepared.createdAt,
+          prepared.createdAt,
+          prepared.contractAddress,
+          JSON.stringify(prepared.constructorParams),
+          prepared.nftCommitment,
+          'mutable',
         );
-        return { id, stream_id: streamId, recipient: r.address, amount: r.amount };
-      });
+
+        recordActivityEvent({
+          entityType: 'stream',
+          entityId: prepared.id,
+          eventType: 'created',
+          actor: prepared.sender,
+          amount: prepared.totalAmount,
+          status: 'PENDING',
+          details: prepared.activityDetails,
+          createdAt: prepared.createdAt,
+        });
+      }
     })();
+
+    const fundingService = new StreamFundingService('chipnet');
+    const fundingTx = await fundingService.buildBatchFundingTransaction({
+      senderAddress,
+      items: preparedStreams.map((prepared) => ({
+        contractAddress: prepared.contractAddress,
+        amount: displayAmountToOnChain(prepared.totalAmount, prepared.tokenType as 'BCH' | 'CASHTOKENS'),
+        tokenType: prepared.tokenType === 'BCH' ? 'BCH' : 'FUNGIBLE_TOKEN',
+        tokenCategory: prepared.tokenCategory || undefined,
+        nftCommitment: prepared.nftCommitment,
+        nftCapability: 'mutable',
+      })),
+    });
+
+    const createdRows = preparedStreams.map((prepared) => {
+      const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(prepared.id) as any;
+      return streamService.enrichStream(rowToStream(row));
+    });
 
     res.json({
       success: true,
-      message: `Created ${createdStreams.length} streams`,
-      streams: createdStreams,
-      totalAmount,
+      message: `Created ${createdRows.length} pending streams. Sign once to fund the full payroll run.`,
+      streams: createdRows,
+      batch: {
+        id: batchId,
+        streamCount: createdRows.length,
+        totalAmount: createdRows.reduce((sum, stream) => sum + Number(stream.total_amount || 0), 0),
+        sender: senderAddress,
+        tokenType: normalizedBatchTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
+        tokenCategory: tokenCategory || null,
+      },
+      fundingInfo: {
+        inputs: fundingTx.inputs,
+        outputs: fundingTx.outputs,
+        fee: fundingTx.fee,
+      },
+      wcTransaction: serializeWcTransaction(fundingTx.wcTransaction),
     });
   } catch (error: any) {
     console.error(`POST /treasuries/${req.params.vaultId}/batch-create error:`, error);
     res.status(500).json({ error: 'Failed to create streams', message: error.message });
+  }
+});
+
+router.post('/treasuries/:vaultId/batch-create/confirm', async (req: Request, res: Response) => {
+  try {
+    const { vaultId } = req.params;
+    const { txHash, streamIds, batchId } = req.body;
+
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash required' });
+    }
+
+    if (!Array.isArray(streamIds) || streamIds.length === 0) {
+      return res.status(400).json({ error: 'streamIds array is required' });
+    }
+
+    if (!(await transactionExists(txHash, 'chipnet'))) {
+      return res.status(400).json({ error: 'Transaction hash not found on chipnet' });
+    }
+
+    const placeholders = streamIds.map(() => '?').join(', ');
+    const rows = db!
+      .prepare(`SELECT * FROM streams WHERE id IN (${placeholders}) AND vault_id = ?`)
+      .all(...streamIds, vaultId) as any[];
+
+    if (rows.length !== streamIds.length) {
+      return res.status(404).json({
+        error: 'One or more streams were not found for this treasury batch',
+      });
+    }
+
+    const uniqueBatchIds = Array.from(new Set(rows.map((row) => row.batch_id).filter(Boolean)));
+    if (batchId && uniqueBatchIds.length > 0 && !uniqueBatchIds.includes(batchId)) {
+      return res.status(400).json({
+        error: 'Provided batchId does not match the selected streams',
+      });
+    }
+
+    const missingOutputs: string[] = [];
+    for (const row of rows) {
+      if (row.status !== 'PENDING') {
+        return res.status(400).json({
+          error: `Stream ${row.stream_id} is not pending and cannot be batch-confirmed`,
+        });
+      }
+
+      const isTokenStream = row.token_type === 'CASHTOKENS';
+      const fundingAmountOnChain = displayAmountToOnChain(Number(row.total_amount), row.token_type);
+      const minimumContractSatoshis = getRequiredContractFundingSatoshis(
+        'stream',
+        isTokenStream ? 'FUNGIBLE_TOKEN' : 'BCH',
+        BigInt(fundingAmountOnChain),
+      );
+
+      const expectedContractOutput = await transactionHasExpectedOutput(
+        txHash,
+        {
+          address: row.contract_address,
+          minimumSatoshis: minimumContractSatoshis,
+          ...(isTokenStream && row.token_category
+            ? {
+                tokenCategory: row.token_category,
+                minimumTokenAmount: BigInt(Math.max(0, Math.trunc(fundingAmountOnChain))),
+              }
+            : {}),
+          requireNft: true,
+          requiredNftCapability: 'mutable',
+          minimumNftCommitmentBytes: 32,
+        },
+        'chipnet',
+      );
+
+      if (!expectedContractOutput) {
+        missingOutputs.push(row.stream_id);
+      }
+    }
+
+    if (missingOutputs.length > 0) {
+      return res.status(400).json({
+        error: 'Funding transaction does not include all expected stream outputs',
+        streamIds: missingOutputs,
+      });
+    }
+
+    const updatedAt = Math.floor(Date.now() / 1000);
+    const updateStmt = db!.prepare(`
+      UPDATE streams
+      SET status = 'ACTIVE', tx_hash = ?, updated_at = ?
+      WHERE id = ?
+    `);
+
+    db!.transaction(() => {
+      for (const row of rows) {
+        updateStmt.run(txHash, updatedAt, row.id);
+        recordActivityEvent({
+          entityType: 'stream',
+          entityId: row.id,
+          eventType: 'funded',
+          actor: row.sender,
+          amount: Number(row.total_amount),
+          status: 'ACTIVE',
+          txHash,
+          details: {
+            contractAddress: row.contract_address,
+            tokenType: row.token_type,
+            tokenCategory: row.token_category || null,
+            batchFunding: true,
+          },
+          createdAt: updatedAt,
+        });
+      }
+
+      const resolvedBatchId = (batchId as string | undefined) || uniqueBatchIds[0];
+      if (resolvedBatchId) {
+        db!.prepare(`
+          UPDATE stream_batches
+          SET status = 'ACTIVE', tx_hash = ?, updated_at = ?
+          WHERE id = ?
+        `).run(txHash, updatedAt, resolvedBatchId);
+      }
+    })();
+
+    const updatedRows = db!
+      .prepare(`SELECT * FROM streams WHERE id IN (${placeholders})`)
+      .all(...streamIds) as any[];
+
+    res.json({
+      success: true,
+      message: `Funded ${updatedRows.length} streams successfully`,
+      txHash,
+      batchId: (batchId as string | undefined) || uniqueBatchIds[0] || null,
+      streams: updatedRows.map((row) => streamService.enrichStream(rowToStream(row))),
+    });
+  } catch (error: any) {
+    console.error(`POST /treasuries/${req.params.vaultId}/batch-create/confirm error:`, error);
+    res.status(500).json({ error: 'Failed to confirm batch funding', message: error.message });
   }
 });
 
@@ -1067,10 +2512,23 @@ router.get('/explorer/streams', async (req: Request, res: Response) => {
 });
 
 function rowToStream(row: any): Stream {
+  const scheduleDetails = getStreamScheduleDetails(row);
+  const vestingState = row.stream_type === 'RECURRING'
+    ? null
+    : parseVestingCommitmentState(row.nft_commitment);
+  let recurringState: { totalPaid: bigint; nextPaymentTime: number; pauseStart: number } | null = null;
+  if (row.stream_type === 'RECURRING' && row.nft_commitment) {
+    try {
+      recurringState = parseRecurringCommitment(row.nft_commitment);
+    } catch {
+      recurringState = null;
+    }
+  }
   return {
     id: row.id,
     stream_id: row.stream_id,
     vault_id: row.vault_id,
+    batch_id: row.batch_id || undefined,
     sender: row.sender,
     recipient: row.recipient,
     token_type: row.token_type,
@@ -1080,13 +2538,517 @@ function rowToStream(row: any): Stream {
     stream_type: row.stream_type,
     start_time: row.start_time,
     end_time: row.end_time || undefined,
-    interval_seconds: row.interval_seconds || undefined,
+    interval_seconds: scheduleDetails.intervalSeconds,
+    amount_per_interval: scheduleDetails.amountPerIntervalDisplay,
+    step_amount: scheduleDetails.stepAmountDisplay,
+    hybrid_unlock_time: scheduleDetails.hybridUnlockTime,
+    hybrid_upfront_amount: scheduleDetails.hybridUpfrontAmountDisplay,
+    schedule_count: scheduleDetails.scheduleCount,
+    tranche_schedule: scheduleDetails.trancheScheduleDisplay,
     cliff_timestamp: row.cliff_timestamp || undefined,
+    effective_start_time: vestingState?.cursor,
+    pause_started_at: vestingState?.pauseStart || recurringState?.pauseStart,
+    next_payment_time: recurringState?.nextPaymentTime,
+    schedule_template: row.schedule_template || undefined,
+    launch_source: row.launch_source || undefined,
+    launch_title: row.launch_title || undefined,
+    launch_description: row.launch_description || undefined,
+    preferred_lane: row.preferred_lane || undefined,
+    launch_context: row.launch_source
+      ? {
+          source: row.launch_source,
+          title: row.launch_title || undefined,
+          description: row.launch_description || undefined,
+          preferredLane: row.preferred_lane || undefined,
+        }
+      : undefined,
     cancelable: Boolean(row.cancelable),
     transferable: Boolean(row.transferable),
+    refillable: Boolean(row.refillable),
     status: row.status,
     created_at: row.created_at,
     updated_at: row.updated_at,
+  };
+}
+
+function rowToStreamBatch(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    vault_id: row.vault_id ? String(row.vault_id) : null,
+    sender: String(row.sender),
+    token_type: String(row.token_type || 'BCH'),
+    token_category: row.token_category ? String(row.token_category) : null,
+    stream_count: Number(row.stream_count || 0),
+    total_amount: Number(row.total_amount || 0),
+    status: String(row.status || 'PENDING'),
+    tx_hash: row.tx_hash ? String(row.tx_hash) : null,
+    launch_context: row.launch_source
+      ? {
+          source: String(row.launch_source),
+          title: row.launch_title ? String(row.launch_title) : undefined,
+          description: row.launch_description ? String(row.launch_description) : undefined,
+          preferredLane: row.preferred_lane ? String(row.preferred_lane) : undefined,
+        }
+      : null,
+    active_streams: Number(row.active_streams || 0),
+    pending_streams: Number(row.pending_streams || 0),
+    cancelled_streams: Number(row.cancelled_streams || 0),
+    completed_streams: Number(row.completed_streams || 0),
+    created_at: Number(row.created_at || 0),
+    updated_at: Number(row.updated_at || 0),
+  };
+}
+
+function listBatchActivityEvents(streamIds: string[], limit = 300) {
+  const ids = streamIds.filter((id) => typeof id === 'string' && id.length > 0);
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = db!.prepare(`
+    SELECT id, entity_type, entity_id, event_type, actor, amount, status, tx_hash, details, created_at
+    FROM activity_events
+    WHERE entity_type = 'stream' AND entity_id IN (${placeholders})
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(...ids, Math.max(1, Math.min(500, Math.trunc(limit)))) as Array<{
+    id: string;
+    entity_type: 'stream';
+    entity_id: string;
+    event_type: string;
+    actor: string | null;
+    amount: number | null;
+    status: string | null;
+    tx_hash: string | null;
+    details: string | null;
+    created_at: number;
+  }>;
+
+  return rows.map((row) => ({
+    ...row,
+    details: row.details ? safeParseJson(row.details) : null,
+  }));
+}
+
+function escapeCsvValue(value: string) {
+  if (/[",\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function formatBatchExportDate(timestamp?: number | null) {
+  if (!timestamp || !Number.isFinite(timestamp)) return '';
+  return new Date(timestamp * 1000).toISOString().slice(0, 10);
+}
+
+function buildBatchExportRow(row: any) {
+  const constructorParams = row.constructor_params ? deserializeConstructorParams(row.constructor_params) : [];
+  const intervalSeconds = row.interval_seconds
+    ? Number(row.interval_seconds)
+    : row.stream_type === 'RECURRING'
+      ? Number(toBigIntParam(constructorParams[4], 'intervalSeconds'))
+      : row.stream_type === 'STEP'
+        ? Number(toBigIntParam(constructorParams[7], 'stepInterval'))
+        : 0;
+  const durationDays = row.end_time && row.start_time
+    ? Math.max(0, Math.round((Number(row.end_time) - Number(row.start_time)) / DAY_SECONDS))
+    : '';
+  const cliffDays = row.cliff_timestamp && row.start_time
+    ? Math.max(0, Math.round((Number(row.cliff_timestamp) - Number(row.start_time)) / DAY_SECONDS))
+    : '';
+
+  let unlockPercent = '';
+  let unlockDay = '';
+  let trancheOffsetsDays = '';
+  let tranchePercentages = '';
+
+  if (row.stream_type === 'TRANCHE' && constructorParams.length > 0) {
+    const tranches = parseTrancheScheduleFromConstructorParams(constructorParams);
+    trancheOffsetsDays = tranches
+      .map((tranche) => Math.max(0, Math.round((tranche.unlockTime - Number(row.start_time)) / DAY_SECONDS)))
+      .join('|');
+    tranchePercentages = tranches
+      .map((tranche) => row.total_amount > 0 ? ((tranche.amount / Number(row.total_amount)) * 100).toFixed(4).replace(/\.?0+$/, '') : '0')
+      .join('|');
+  }
+
+  if (row.stream_type === 'HYBRID' && constructorParams.length > 0) {
+    const unlockTimestamp = Number(toBigIntParam(constructorParams[4], 'unlockTimestamp'));
+    const upfrontAmountOnChain = Number(toBigIntParam(constructorParams[6], 'upfrontAmount'));
+    const upfrontAmountDisplay = onChainAmountToDisplay(upfrontAmountOnChain, row.token_type);
+    unlockDay = Math.max(0, Math.round((unlockTimestamp - Number(row.start_time)) / DAY_SECONDS)).toString();
+    unlockPercent = row.total_amount > 0
+      ? ((upfrontAmountDisplay / Number(row.total_amount)) * 100).toFixed(2).replace(/\.?0+$/, '')
+      : '';
+  }
+
+  return {
+    streamId: String(row.stream_id || ''),
+    recipient: String(row.recipient || ''),
+    amount: String(row.total_amount ?? ''),
+    description: String(row.description || ''),
+    scheduleTemplate: String(row.schedule_template || ''),
+    streamType: String(row.stream_type || ''),
+    startDate: formatBatchExportDate(Number(row.start_time || 0)),
+    durationDays: String(durationDays),
+    intervalDays: intervalSeconds ? String(Math.round(intervalSeconds / DAY_SECONDS)) : '',
+    cliffDays: String(cliffDays),
+    unlockPercent,
+    unlockDay,
+    trancheOffsetsDays,
+    tranchePercentages,
+    status: String(row.status || ''),
+    contractAddress: String(row.contract_address || ''),
+    txHash: String(row.tx_hash || ''),
+  };
+}
+
+function getStreamScheduleDetails(row: any): {
+  intervalSeconds?: number;
+  amountPerIntervalOnChain?: number;
+  amountPerIntervalDisplay?: number;
+  stepAmountOnChain?: number;
+  stepAmountDisplay?: number;
+  hybridUnlockTime?: number;
+  hybridUpfrontAmountOnChain?: number;
+  hybridUpfrontAmountDisplay?: number;
+  scheduleCount?: number;
+  trancheScheduleOnChain?: Array<{
+    unlockTime: number;
+    amount: number;
+    cumulativeAmount: number;
+  }>;
+  trancheScheduleDisplay?: Array<{
+    unlock_time: number;
+    amount: number;
+    cumulative_amount: number;
+  }>;
+} {
+  let intervalSeconds = Number(row.interval_seconds || 0) || undefined;
+  let amountPerIntervalOnChain: number | undefined;
+  let stepAmountOnChain: number | undefined;
+  let hybridUnlockTime: number | undefined;
+  let hybridUpfrontAmountOnChain: number | undefined;
+  let trancheScheduleOnChain: Array<{ unlockTime: number; amount: number; cumulativeAmount: number }> | undefined;
+
+  if (row.constructor_params) {
+    try {
+      const constructorParams = deserializeConstructorParams(row.constructor_params);
+      if (row.stream_type === 'RECURRING') {
+        intervalSeconds = Number(toBigIntParam(constructorParams[4], 'intervalSeconds'));
+        amountPerIntervalOnChain = Number(toBigIntParam(constructorParams[3], 'amountPerInterval'));
+      } else if (row.stream_type === 'STEP') {
+        intervalSeconds = Number(toBigIntParam(constructorParams[7], 'stepInterval'));
+        stepAmountOnChain = Number(toBigIntParam(constructorParams[8], 'stepAmount'));
+      } else if (row.stream_type === 'HYBRID') {
+        hybridUnlockTime = Number(toBigIntParam(constructorParams[4], 'unlockTimestamp'));
+        hybridUpfrontAmountOnChain = Number(toBigIntParam(constructorParams[6], 'upfrontAmount'));
+      } else if (row.stream_type === 'TRANCHE') {
+        trancheScheduleOnChain = parseTrancheScheduleFromConstructorParams(constructorParams);
+      }
+    } catch (error) {
+      console.warn('[streams] Failed to parse constructor params for schedule details', {
+        streamId: row.id,
+        error,
+      });
+    }
+  }
+
+  const scheduleCount = intervalSeconds
+    ? row.end_time
+      ? Math.max(1, Math.floor((row.end_time - row.start_time) / intervalSeconds))
+        : amountPerIntervalOnChain && amountPerIntervalOnChain > 0
+        ? Math.max(
+            1,
+            Math.floor(
+              displayAmountToOnChain(Number(row.total_amount), row.token_type) / amountPerIntervalOnChain,
+            ),
+          )
+        : undefined
+    : row.stream_type === 'HYBRID'
+      ? 2
+      : trancheScheduleOnChain?.length || undefined;
+
+  return {
+    intervalSeconds,
+    amountPerIntervalOnChain,
+    amountPerIntervalDisplay: amountPerIntervalOnChain !== undefined
+      ? onChainAmountToDisplay(amountPerIntervalOnChain, row.token_type)
+      : undefined,
+    stepAmountOnChain,
+    stepAmountDisplay: stepAmountOnChain !== undefined
+      ? onChainAmountToDisplay(stepAmountOnChain, row.token_type)
+      : undefined,
+    hybridUnlockTime,
+    hybridUpfrontAmountOnChain,
+    hybridUpfrontAmountDisplay: hybridUpfrontAmountOnChain !== undefined
+      ? onChainAmountToDisplay(hybridUpfrontAmountOnChain, row.token_type)
+      : undefined,
+    scheduleCount,
+    trancheScheduleOnChain,
+    trancheScheduleDisplay: trancheScheduleOnChain?.map((tranche) => ({
+      unlock_time: tranche.unlockTime,
+      amount: onChainAmountToDisplay(tranche.amount, row.token_type),
+      cumulative_amount: onChainAmountToDisplay(tranche.cumulativeAmount, row.token_type),
+    })),
+  };
+}
+
+async function preparePendingStreamRecord(params: {
+  vaultId?: string | null;
+  sender: string;
+  recipient: string;
+  tokenType?: 'BCH' | 'FUNGIBLE_TOKEN' | 'CASHTOKENS';
+  tokenCategory?: string | null;
+  totalAmount: number;
+  streamType: 'LINEAR' | 'RECURRING' | 'STEP' | 'TRANCHE' | 'HYBRID';
+  startTime: number;
+  endTime?: number;
+  cliffTimestamp?: number | null;
+  cancelable?: boolean;
+  description?: string | null;
+  intervalSeconds?: number;
+  scheduleTemplate?: string | null;
+  refillable?: boolean;
+  hybridUnlockTimestamp?: number;
+  hybridUpfrontPercentage?: number;
+  trancheSchedule?: unknown;
+  launchContext?: StreamLaunchContext | null;
+  sequenceNumber: number;
+  createdAt: number;
+}) {
+  const {
+    vaultId,
+    sender,
+    recipient,
+    tokenType,
+    tokenCategory,
+    totalAmount,
+    streamType,
+    startTime,
+    endTime,
+    cliffTimestamp,
+    cancelable,
+    description,
+    intervalSeconds,
+    scheduleTemplate,
+    refillable,
+    hybridUnlockTimestamp,
+    hybridUpfrontPercentage,
+    trancheSchedule,
+    launchContext,
+    sequenceNumber,
+    createdAt,
+  } = params;
+
+  const id = randomUUID();
+  const normalizedTokenType: 'BCH' | 'FUNGIBLE_TOKEN' =
+    tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH';
+  const cancelableRequested = cancelable !== false;
+  const refillableRequested = Boolean(refillable);
+  const scheduleEndTime = endTime || startTime + 86400 * 365;
+  const resolvedEndTime = refillableRequested && streamType === 'RECURRING' ? 0 : scheduleEndTime;
+  const deploymentService = new StreamDeploymentService('chipnet');
+
+  let actualVaultId = deriveStandaloneVaultId(`${id}:${sender}:${recipient}:${createdAt}`);
+  if (vaultId) {
+    const vaultRow = db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
+    if (vaultRow?.constructor_params) {
+      const vaultParams = JSON.parse(vaultRow.constructor_params);
+      if (vaultParams[0]?.type === 'bytes') {
+        actualVaultId = vaultParams[0].value;
+      }
+    }
+  }
+
+  const deploymentParams = {
+    vaultId: actualVaultId,
+    sender,
+    recipient,
+    totalAmount,
+    startTime,
+    endTime: resolvedEndTime,
+    streamType,
+    cliffTime: cliffTimestamp || undefined,
+    cancelable: cancelableRequested,
+    tokenType: normalizedTokenType,
+    tokenCategory: tokenCategory || undefined,
+  } as const;
+
+  let intervalSecondsForRow: number | null = null;
+  let hybridUnlockTimestampForRow: number | null = null;
+  let hybridUpfrontAmountDisplayForRow: number | null = null;
+  let normalizedTrancheSchedule: Array<{ unlockTime: number; cumulativeAmountDisplay: number }> = [];
+  let cliffTimestampForRow = cliffTimestamp || null;
+  let deployment;
+
+  if (streamType === 'RECURRING') {
+    const durationSeconds = Math.max(1, scheduleEndTime - startTime);
+    const explicitIntervalSeconds = Number(intervalSeconds);
+    if (!Number.isFinite(explicitIntervalSeconds) || explicitIntervalSeconds <= 0) {
+      throw new Error('Recurring streams require a valid intervalSeconds value');
+    }
+    if (explicitIntervalSeconds > durationSeconds) {
+      throw new Error('Recurring interval must be shorter than or equal to the total schedule duration');
+    }
+    if (durationSeconds % explicitIntervalSeconds !== 0) {
+      throw new Error('Recurring interval must divide the total schedule duration evenly');
+    }
+
+    const intervalCount = Math.max(1, Math.floor(durationSeconds / explicitIntervalSeconds));
+    const totalOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
+    if (totalOnChain <= 0) {
+      throw new Error('Recurring stream total amount must be greater than zero');
+    }
+    if (totalOnChain % intervalCount !== 0) {
+      throw new Error(
+        'Recurring stream total amount must divide evenly across the selected cadence. ' +
+          'Adjust the amount, duration, or interval.',
+      );
+    }
+
+    intervalSecondsForRow = explicitIntervalSeconds;
+    const amountPerIntervalOnChain = Math.floor(totalOnChain / intervalCount);
+    const amountPerIntervalDisplay = onChainAmountToDisplay(amountPerIntervalOnChain, normalizedTokenType);
+    deployment = await deploymentService.deployRecurringStream({
+      ...deploymentParams,
+      totalAmount: refillableRequested ? 0 : Number(totalAmount),
+      endTime: resolvedEndTime,
+      intervalSeconds: intervalSecondsForRow,
+      amountPerInterval: amountPerIntervalDisplay,
+    });
+  } else if (streamType === 'STEP') {
+    const durationSeconds = Math.max(1, resolvedEndTime - startTime);
+    const explicitStepIntervalSeconds = Number(intervalSeconds);
+    if (!Number.isFinite(explicitStepIntervalSeconds) || explicitStepIntervalSeconds <= 0) {
+      throw new Error('Step vesting requires a valid intervalSeconds value');
+    }
+    if (explicitStepIntervalSeconds > durationSeconds) {
+      throw new Error('Step interval must be shorter than or equal to the total vesting duration');
+    }
+    if (durationSeconds % explicitStepIntervalSeconds !== 0) {
+      throw new Error('Step interval must divide the total vesting duration evenly');
+    }
+
+    const stepCount = Math.max(1, Math.floor(durationSeconds / explicitStepIntervalSeconds));
+    const totalOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
+    if (totalOnChain <= 0) {
+      throw new Error('Step vesting total amount must be greater than zero');
+    }
+
+    const stepAmountOnChain = Math.floor((totalOnChain + stepCount - 1) / stepCount);
+    const stepAmountDisplay = onChainAmountToDisplay(stepAmountOnChain, normalizedTokenType);
+    intervalSecondsForRow = explicitStepIntervalSeconds;
+    deployment = await deploymentService.deployVestingStream({
+      ...deploymentParams,
+      stepInterval: intervalSecondsForRow,
+      stepAmount: stepAmountDisplay,
+    });
+  } else if (streamType === 'TRANCHE') {
+    const normalized = normalizeTrancheSchedule({
+      trancheSchedule,
+      totalAmount: Number(totalAmount),
+      tokenType: normalizedTokenType,
+      startTime,
+    });
+
+    normalizedTrancheSchedule = normalized.schedule;
+    cliffTimestampForRow =
+      normalized.schedule[0].unlockTime > startTime ? normalized.schedule[0].unlockTime : null;
+      deployment = await deploymentService.deployTrancheStream({
+        ...deploymentParams,
+        endTime: normalized.finalUnlockTime,
+        trancheSchedule: normalized.schedule.map((tranche) => ({
+          unlockTime: tranche.unlockTime,
+          cumulativeAmount: tranche.cumulativeAmountDisplay,
+        })),
+      });
+  } else if (streamType === 'HYBRID') {
+    const hybridUnlockTimestampValue = Number(hybridUnlockTimestamp);
+    const hybridUpfrontPercentageValue = Number(hybridUpfrontPercentage);
+    if (!Number.isFinite(hybridUnlockTimestampValue) || hybridUnlockTimestampValue <= startTime) {
+      throw new Error('Hybrid streams require a valid unlock timestamp after the stream start time');
+    }
+    if (!Number.isFinite(hybridUpfrontPercentageValue) || hybridUpfrontPercentageValue <= 0 || hybridUpfrontPercentageValue >= 100) {
+      throw new Error('Hybrid streams require an upfront percentage between 0 and 100');
+    }
+    if (hybridUnlockTimestampValue >= resolvedEndTime) {
+      throw new Error('Hybrid unlock timestamp must be before the stream end time');
+    }
+
+    const totalOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
+    const hybridUpfrontAmountOnChain = Math.max(
+      1,
+      Math.floor((totalOnChain * hybridUpfrontPercentageValue) / 100),
+    );
+    hybridUnlockTimestampForRow = hybridUnlockTimestampValue;
+    hybridUpfrontAmountDisplayForRow = onChainAmountToDisplay(hybridUpfrontAmountOnChain, normalizedTokenType);
+    cliffTimestampForRow = hybridUnlockTimestampForRow;
+
+    deployment = await deploymentService.deployHybridStream({
+      ...deploymentParams,
+      endTime: resolvedEndTime,
+      hybridUnlockTime: hybridUnlockTimestampForRow,
+      hybridUpfrontAmount: hybridUpfrontAmountDisplayForRow,
+    });
+  } else {
+    deployment = await deploymentService.deployVestingStream(deploymentParams);
+  }
+
+  const streamId = streamService.generateStreamId(
+    normalizedTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
+    sequenceNumber,
+  );
+
+  const effectiveEndTime =
+    streamType === 'TRANCHE'
+      ? normalizedTrancheSchedule[normalizedTrancheSchedule.length - 1]?.unlockTime || null
+      : refillableRequested
+        ? null
+        : resolvedEndTime || null;
+
+  return {
+    id,
+    streamId,
+    vaultId: vaultId || null,
+    sender,
+    recipient,
+    tokenType: normalizedTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
+    tokenCategory: tokenCategory || null,
+    totalAmount,
+    streamType,
+    startTime,
+    endTime: effectiveEndTime,
+    intervalSeconds: intervalSecondsForRow,
+    cliffTimestamp: streamType === 'TRANCHE' || streamType === 'HYBRID'
+      ? cliffTimestampForRow
+      : cliffTimestamp || null,
+    cancelable: cancelableRequested,
+    refillable: refillableRequested,
+    scheduleTemplate: scheduleTemplate || null,
+    launchSource: launchContext?.source || null,
+    launchTitle: launchContext?.title || null,
+    launchDescription: launchContext?.description || null,
+    preferredLane: launchContext?.preferredLane || null,
+    description: description || null,
+    contractAddress: deployment.contractAddress,
+    constructorParams: deployment.constructorParams,
+    nftCommitment: deployment.initialCommitment,
+    createdAt,
+    activityDetails: {
+      streamId,
+      streamType,
+      scheduleTemplate: scheduleTemplate || null,
+      startTime,
+      endTime: effectiveEndTime,
+      cliffTimestamp: streamType === 'TRANCHE' || streamType === 'HYBRID'
+        ? cliffTimestampForRow
+        : cliffTimestamp || null,
+      refillable: refillableRequested,
+      launchContext: launchContext || null,
+      hybridUnlockTimestamp: hybridUnlockTimestampForRow,
+      hybridUpfrontAmount: hybridUpfrontAmountDisplayForRow,
+      trancheSchedule: streamType === 'TRANCHE' ? normalizedTrancheSchedule : undefined,
+    },
   };
 }
 
@@ -1158,6 +3120,21 @@ function buildFallbackStreamEvents(row: any, claimRows: any[]): Array<{
     });
   }
 
+  if (row.status === 'PAUSED') {
+    events.push({
+      id: `fallback-stream-paused-${row.id}`,
+      entity_type: 'stream',
+      entity_id: row.id,
+      event_type: 'paused',
+      actor: row.sender || null,
+      amount: null,
+      status: 'PAUSED',
+      tx_hash: row.tx_hash || null,
+      details: null,
+      created_at: Number(row.updated_at || row.created_at || Math.floor(Date.now() / 1000)),
+    });
+  }
+
   claimRows.forEach((claim: any) => {
     events.push({
       id: `fallback-stream-claim-${claim.id}`,
@@ -1176,6 +3153,33 @@ function buildFallbackStreamEvents(row: any, claimRows: any[]): Array<{
   return events.sort((a, b) => b.created_at - a.created_at);
 }
 
+function parseVestingCommitmentState(commitmentHex: string | null | undefined): {
+  cursor: number;
+  pauseStart: number;
+} | null {
+  if (!commitmentHex) return null;
+  try {
+    const bytes = hexToBin(commitmentHex);
+    if (bytes.length < 20) return null;
+    return {
+      cursor:
+        bytes[10]
+        + (bytes[11] << 8)
+        + (bytes[12] << 16)
+        + (bytes[13] << 24)
+        + (bytes[14] * 0x100000000),
+      pauseStart:
+        bytes[15]
+        + (bytes[16] << 8)
+        + (bytes[17] << 16)
+        + (bytes[18] << 24)
+        + (bytes[19] * 0x100000000),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function deserializeConstructorParams(rawParams: string): any[] {
   const parsed = JSON.parse(rawParams || '[]');
   return parsed.map((p: any) => {
@@ -1185,7 +3189,7 @@ function deserializeConstructorParams(rawParams: string): any[] {
   });
 }
 
-function parseRecurringCommitment(commitmentHex: string): { totalPaid: bigint; nextPaymentTime: number } {
+function parseRecurringCommitment(commitmentHex: string): { totalPaid: bigint; nextPaymentTime: number; pauseStart: number } {
   const bytes = hexToBin(commitmentHex || '');
   if (bytes.length < 23) {
     throw new Error(`Invalid recurring stream commitment length: expected >=23, got ${bytes.length}`);
@@ -1197,7 +3201,15 @@ function parseRecurringCommitment(commitmentHex: string): { totalPaid: bigint; n
     + (bytes[20] << 16)
     + (bytes[21] << 24)
     + (bytes[22] * 0x100000000);
-  return { totalPaid, nextPaymentTime };
+  const pauseStart =
+    bytes.length >= 28
+      ? bytes[23]
+        + (bytes[24] << 8)
+        + (bytes[25] << 16)
+        + (bytes[26] << 24)
+        + (bytes[27] * 0x100000000)
+      : 0;
+  return { totalPaid, nextPaymentTime, pauseStart };
 }
 
 function toBigIntParam(value: unknown, name: string): bigint {
@@ -1205,6 +3217,123 @@ function toBigIntParam(value: unknown, name: string): bigint {
   if (typeof value === 'number') return BigInt(Math.trunc(value));
   if (typeof value === 'string' && value.length > 0) return BigInt(value);
   throw new Error(`Invalid ${name} in constructor parameters`);
+}
+
+function parseTrancheScheduleFromConstructorParams(constructorParams: any[]): Array<{
+  unlockTime: number;
+  amount: number;
+  cumulativeAmount: number;
+}> {
+  const scheduleCount = Number(toBigIntParam(constructorParams[4], 'scheduleCount'));
+  const tranches: Array<{ unlockTime: number; amount: number; cumulativeAmount: number }> = [];
+  let previousCumulative = 0;
+
+  for (let index = 0; index < Math.min(scheduleCount, 8); index += 1) {
+    const timeParamIndex = 5 + index * 2;
+    const cumulativeParamIndex = 6 + index * 2;
+    const unlockTime = Number(toBigIntParam(constructorParams[timeParamIndex], `tranche${index + 1}Timestamp`));
+    const cumulativeAmount = Number(toBigIntParam(constructorParams[cumulativeParamIndex], `tranche${index + 1}Cumulative`));
+    tranches.push({
+      unlockTime,
+      amount: cumulativeAmount - previousCumulative,
+      cumulativeAmount,
+    });
+    previousCumulative = cumulativeAmount;
+  }
+
+  return tranches;
+}
+
+function normalizeTrancheSchedule(params: {
+  trancheSchedule: unknown;
+  totalAmount: number;
+  tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
+  startTime: number;
+}): {
+  schedule: Array<{ unlockTime: number; cumulativeAmountDisplay: number }>;
+  finalUnlockTime: number;
+} {
+  const { trancheSchedule, totalAmount, tokenType, startTime } = params;
+  if (!Array.isArray(trancheSchedule)) {
+    throw new Error('Tranche streams require a trancheSchedule array');
+  }
+  if (trancheSchedule.length < 1 || trancheSchedule.length > 8) {
+    throw new Error('Tranche streams support between 1 and 8 unlock points');
+  }
+
+  const normalized = trancheSchedule.map((raw, index) => {
+    const unlockTime = Number((raw as any)?.unlockTime);
+    const amount = Number((raw as any)?.amount);
+    if (!Number.isFinite(unlockTime) || unlockTime <= startTime) {
+      throw new Error(`Tranche ${index + 1} must unlock after the stream start time`);
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(`Tranche ${index + 1} must have a positive amount`);
+    }
+    return { unlockTime: Math.floor(unlockTime), amount };
+  });
+
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (normalized[index].unlockTime <= normalized[index - 1].unlockTime) {
+      throw new Error('Tranche unlock times must be strictly increasing');
+    }
+  }
+
+  const totalAmountOnChain = displayAmountToOnChain(totalAmount, tokenType);
+  let runningTotalOnChain = 0;
+  const schedule = normalized.map((tranche, index) => {
+    const trancheAmountOnChain = displayAmountToOnChain(tranche.amount, tokenType);
+    if (trancheAmountOnChain <= 0) {
+      throw new Error(`Tranche ${index + 1} rounds to zero on-chain amount`);
+    }
+    runningTotalOnChain += trancheAmountOnChain;
+    return {
+      unlockTime: tranche.unlockTime,
+      cumulativeAmountDisplay: onChainAmountToDisplay(runningTotalOnChain, tokenType === 'FUNGIBLE_TOKEN' ? 'CASHTOKENS' : 'BCH'),
+    };
+  });
+
+  if (runningTotalOnChain !== totalAmountOnChain) {
+    throw new Error('Tranche amounts must add up exactly to the total stream amount');
+  }
+
+  return {
+    schedule,
+    finalUnlockTime: normalized[normalized.length - 1].unlockTime,
+  };
+}
+
+function normalizeLaunchContext(raw: unknown): StreamLaunchContext | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  const source = typeof candidate.source === 'string' ? candidate.source.trim() : '';
+  if (!source) {
+    return null;
+  }
+
+  const title = typeof candidate.title === 'string' ? candidate.title.trim() : '';
+  const description = typeof candidate.description === 'string' ? candidate.description.trim() : '';
+  const preferredLane = typeof candidate.preferredLane === 'string'
+    ? candidate.preferredLane.trim()
+    : '';
+
+  return {
+    source,
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
+    ...(preferredLane ? { preferredLane } : {}),
+  };
+}
+
+function safeParseJson(raw: string) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function isP2pkhAddress(address: string): boolean {

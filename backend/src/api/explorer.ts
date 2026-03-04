@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import db from '../database/schema.js';
+import { streamService } from '../services/streamService.js';
 
 const router = Router();
 
@@ -13,17 +14,27 @@ router.get('/explorer/activity', (req, res) => {
 
     // Fetch streams
     if (!type || type === 'vesting') {
-      let sql = `SELECT id, stream_id, sender, recipient, token_type, total_amount,
-        vested_amount,
-        CASE WHEN total_amount > 0 THEN ROUND(vested_amount * 100.0 / total_amount) ELSE 0 END as progress_percentage,
-        stream_type, status, created_at, 'STREAM' as activity_type
-        FROM streams_with_vested WHERE 1=1`;
+      let sql = `SELECT * FROM streams WHERE 1=1`;
       const params: any[] = [];
       if (token && token !== 'ALL') { sql += ' AND token_type = ?'; params.push(token); }
       if (status && status !== 'ALL') { sql += ' AND status = ?'; params.push(status); }
       sql += ` ORDER BY created_at DESC LIMIT ${pageLimit}`;
       const rows = db!.prepare(sql).all(...params) as any[];
-      results.push(...rows.map(r => ({ ...r, created_at: Number(new Date(r.created_at)) / 1000 })));
+      const enriched = streamService.enrichStreams(rows.map(rowToExplorerStream));
+      results.push(...enriched.map((stream) => ({
+        id: stream.id,
+        stream_id: stream.stream_id,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        token_type: stream.token_type,
+        total_amount: stream.total_amount,
+        vested_amount: stream.vested_amount,
+        progress_percentage: stream.progress_percentage,
+        stream_type: stream.stream_type,
+        status: stream.status,
+        created_at: Number(stream.created_at),
+        activity_type: 'STREAM',
+      })));
     }
 
     // Fetch payments
@@ -97,3 +108,77 @@ router.get('/explorer/activity', (req, res) => {
 // Comprehensive stats moved to explorer-advanced.ts
 
 export default router;
+
+function rowToExplorerStream(row: any) {
+  let amountPerInterval: number | undefined;
+  let stepAmount: number | undefined;
+  let trancheSchedule: Array<{ unlock_time: number; amount: number; cumulative_amount: number }> | undefined;
+  if (row.constructor_params) {
+    try {
+      const params = JSON.parse(row.constructor_params);
+      if (row.stream_type === 'RECURRING') {
+        amountPerInterval = parseOnChainDisplayAmount(params[3]?.value, row.token_type);
+      }
+      if (row.stream_type === 'STEP') {
+        stepAmount = parseOnChainDisplayAmount(params[8]?.value, row.token_type);
+      }
+      if (row.stream_type === 'TRANCHE') {
+        const scheduleCount = Number(params[4]?.value || 0);
+        let previousCumulative = 0;
+        trancheSchedule = [];
+        for (let index = 0; index < Math.min(scheduleCount, 8); index += 1) {
+          const unlockTime = Number(params[5 + index * 2]?.value || 0);
+          const cumulativeAmount = parseOnChainDisplayAmount(params[6 + index * 2]?.value, row.token_type) ?? 0;
+          trancheSchedule.push({
+            unlock_time: unlockTime,
+            amount: cumulativeAmount - previousCumulative,
+            cumulative_amount: cumulativeAmount,
+          });
+          previousCumulative = cumulativeAmount;
+        }
+      }
+    } catch (error) {
+      console.warn('[explorer] Failed to parse stream constructor params', { streamId: row.id, error });
+    }
+  }
+
+  return {
+    id: row.id,
+    stream_id: row.stream_id,
+    vault_id: row.vault_id || '',
+    sender: row.sender,
+    recipient: row.recipient,
+    token_type: row.token_type,
+    token_category: row.token_category || undefined,
+    total_amount: row.total_amount,
+    withdrawn_amount: row.withdrawn_amount,
+    stream_type: row.stream_type,
+    start_time: row.start_time,
+    end_time: row.end_time || undefined,
+    interval_seconds: row.interval_seconds || undefined,
+    amount_per_interval: amountPerInterval,
+    step_amount: stepAmount,
+    tranche_schedule: trancheSchedule,
+    cliff_timestamp: row.cliff_timestamp || undefined,
+    cancelable: Boolean(row.cancelable),
+    transferable: Boolean(row.transferable),
+    refillable: Boolean(row.refillable),
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function parseOnChainDisplayAmount(rawValue: unknown, tokenType: 'BCH' | 'CASHTOKENS') {
+  const normalized = typeof rawValue === 'string'
+    ? Number(rawValue)
+    : typeof rawValue === 'number'
+      ? rawValue
+      : rawValue !== undefined
+        ? Number(rawValue)
+        : undefined;
+  if (normalized === undefined || !Number.isFinite(normalized)) {
+    return undefined;
+  }
+  return tokenType === 'BCH' ? normalized / 100_000_000 : normalized;
+}

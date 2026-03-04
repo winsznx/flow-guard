@@ -3,10 +3,11 @@ import {
   ElectrumNetworkProvider,
   TransactionBuilder,
   placeholderPublicKey,
+  placeholderP2PKHUnlocker,
   placeholderSignature,
   type WcTransactionObject,
 } from 'cashscript';
-import { binToHex, hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import { binToHex, cashAddressToLockingBytecode, hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 
 export interface PaymentControlBuildParams {
@@ -16,6 +17,11 @@ export interface PaymentControlBuildParams {
   currentTime: number;
   tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+}
+
+export interface PaymentRefillBuildParams extends PaymentControlBuildParams {
+  senderAddress: string;
+  refillAmount: bigint;
 }
 
 export interface PaymentControlBuildResult {
@@ -230,6 +236,177 @@ export class PaymentControlService {
     };
   }
 
+  async buildRefillTransaction(params: PaymentRefillBuildParams): Promise<PaymentControlBuildResult> {
+    if (params.refillAmount <= 0n) {
+      throw new Error('Refill amount must be greater than zero');
+    }
+
+    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
+    const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
+
+    const status = commitment[0] ?? 0;
+    if (status !== 0 && status !== 1) {
+      throw new Error('Only ACTIVE or PAUSED recurring streams can be refilled');
+    }
+
+    const totalAmount = this.toBigIntParam(params.constructorParams[5], 'totalAmount');
+    if (totalAmount !== 0n) {
+      throw new Error('Only open-ended recurring streams can be refilled');
+    }
+
+    const senderHash = this.readBytes20(params.constructorParams[1], 'senderHash');
+    const expectedSenderHash = this.addressToHash160(params.senderAddress);
+    if (!this.bytesEqual(senderHash, expectedSenderHash)) {
+      throw new Error('Only the recurring stream sender can refill this stream');
+    }
+
+    const senderUtxos = await this.provider.getUtxos(params.senderAddress);
+    if (!senderUtxos || senderUtxos.length === 0) {
+      throw new Error(`No UTXOs found for sender ${params.senderAddress}`);
+    }
+
+    const feeReserve = 2000n;
+    const senderUnlocker = placeholderP2PKHUnlocker(params.senderAddress);
+    const txBuilder = new TransactionBuilder({ provider: this.provider });
+    txBuilder.setLocktime(params.currentTime);
+    txBuilder.addInput(
+      contractUtxo,
+      contract.unlock.refill(
+        placeholderSignature(),
+        placeholderPublicKey(),
+      ),
+    );
+
+    let totalSenderInputSatoshis = 0n;
+
+    if (params.tokenType === 'FUNGIBLE_TOKEN') {
+      const tokenCategory = params.tokenCategory || contractUtxo.token?.category;
+      if (!tokenCategory) {
+        throw new Error('Token category is required to refill token recurring streams');
+      }
+
+      const existingTokenAmount = contractUtxo.token?.amount ?? 0n;
+      const tokenUtxos = senderUtxos.filter(
+        (utxo: any) =>
+          utxo.token?.category === tokenCategory &&
+          utxo.token?.amount &&
+          !utxo.token?.nft,
+      );
+      if (tokenUtxos.length === 0) {
+        throw new Error(`No refillable token UTXOs found for category ${tokenCategory}`);
+      }
+
+      const selectedTokenUtxos: any[] = [];
+      let totalTokenInput = 0n;
+      for (const utxo of tokenUtxos) {
+        selectedTokenUtxos.push(utxo);
+        totalTokenInput += this.toBigIntParam(utxo.token?.amount ?? 0n, 'token refill amount');
+        totalSenderInputSatoshis += this.toBigIntParam(utxo.satoshis, 'token refill satoshis');
+        txBuilder.addInput(utxo, senderUnlocker);
+        if (totalTokenInput >= params.refillAmount) {
+          break;
+        }
+      }
+
+      if (totalTokenInput < params.refillAmount) {
+        throw new Error('Insufficient token balance to refill recurring stream');
+      }
+
+      const tokenChange = totalTokenInput - params.refillAmount;
+      const tokenChangeDust = tokenChange > 0n ? 1000n : 0n;
+      if (totalSenderInputSatoshis < feeReserve + tokenChangeDust) {
+        const bchUtxos = senderUtxos.filter((utxo: any) => !utxo.token);
+        for (const utxo of bchUtxos) {
+          txBuilder.addInput(utxo, senderUnlocker);
+          totalSenderInputSatoshis += this.toBigIntParam(utxo.satoshis, 'refill fee satoshis');
+          if (totalSenderInputSatoshis >= feeReserve + tokenChangeDust) {
+            break;
+          }
+        }
+      }
+
+      if (totalSenderInputSatoshis < feeReserve + tokenChangeDust) {
+        throw new Error('Insufficient BCH balance to pay refill transaction fee');
+      }
+
+      txBuilder.addOutput({
+        to: contract.tokenAddress,
+        amount: contractUtxo.satoshis,
+        token: {
+          category: tokenCategory,
+          amount: existingTokenAmount + params.refillAmount,
+          nft: {
+            capability: contractUtxo.token.nft.capability as 'none' | 'mutable' | 'minting',
+            commitment: binToHex(commitment),
+          },
+        },
+      });
+
+      if (tokenChange > 0n) {
+        txBuilder.addOutput({
+          to: params.senderAddress,
+          amount: tokenChangeDust,
+          token: {
+            category: tokenCategory,
+            amount: tokenChange,
+          },
+        });
+      }
+
+      const bchChange = totalSenderInputSatoshis - feeReserve - tokenChangeDust;
+      if (bchChange > 546n) {
+        txBuilder.addOutput({
+          to: params.senderAddress,
+          amount: bchChange,
+        });
+      }
+    } else {
+      const nonTokenUtxos = senderUtxos.filter((utxo: any) => !utxo.token);
+      const requiredExternalSatoshis = params.refillAmount + feeReserve;
+      for (const utxo of nonTokenUtxos) {
+        txBuilder.addInput(utxo, senderUnlocker);
+        totalSenderInputSatoshis += this.toBigIntParam(utxo.satoshis, 'refill input satoshis');
+        if (totalSenderInputSatoshis >= requiredExternalSatoshis) {
+          break;
+        }
+      }
+
+      if (totalSenderInputSatoshis < requiredExternalSatoshis) {
+        throw new Error('Insufficient BCH balance to refill recurring stream');
+      }
+
+      txBuilder.addOutput({
+        to: contract.tokenAddress,
+        amount: contractUtxo.satoshis + params.refillAmount,
+        token: {
+          category: contractUtxo.token.category,
+          amount: contractUtxo.token.amount ?? 0n,
+          nft: {
+            capability: contractUtxo.token.nft.capability as 'none' | 'mutable' | 'minting',
+            commitment: binToHex(commitment),
+          },
+        },
+      });
+
+      const change = totalSenderInputSatoshis - params.refillAmount - feeReserve;
+      if (change > 546n) {
+        txBuilder.addOutput({
+          to: params.senderAddress,
+          amount: change,
+        });
+      }
+    }
+
+    return {
+      wcTransaction: txBuilder.generateWcTransactionObject({
+        broadcast: true,
+        userPrompt: 'Refill recurring stream runway',
+      }),
+      nextStatus: status === 1 ? 'PAUSED' : 'ACTIVE',
+    };
+  }
+
   private async getContractState(contractAddress: string, fallbackCommitment: string): Promise<{
     contractUtxo: any;
     commitment: Uint8Array;
@@ -321,6 +498,33 @@ export class PaymentControlService {
       throw new Error(`Failed to encode sender P2PKH address: ${encoded}`);
     }
     return encoded.address;
+  }
+
+  private addressToHash160(address: string): Uint8Array {
+    const decoded = cashAddressToLockingBytecode(address);
+    if (typeof decoded === 'string') {
+      throw new Error(`Invalid sender address: ${decoded}`);
+    }
+    const b = decoded.bytecode;
+    const isP2pkh =
+      b.length === 25 &&
+      b[0] === 0x76 &&
+      b[1] === 0xa9 &&
+      b[2] === 0x14 &&
+      b[23] === 0x88 &&
+      b[24] === 0xac;
+    if (!isP2pkh) {
+      throw new Error('Recurring refill sender must be a P2PKH address');
+    }
+    return b.slice(3, 23);
+  }
+
+  private bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+      if (left[i] !== right[i]) return false;
+    }
+    return true;
   }
 
   private clampToZero(value: bigint): bigint {

@@ -3,18 +3,17 @@ import {
   ElectrumNetworkProvider,
   SignatureTemplate,
   TransactionBuilder,
-  placeholderP2PKHUnlocker,
-  placeholderPublicKey,
-  placeholderSignature,
   type WcTransactionObject,
 } from 'cashscript';
 import { hexToBin, binToHex, hash160, secp256k1 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { resolveFeePayer } from '../utils/feePayer.js';
 
 export interface ClaimTransactionParams {
   airdropId: string;
   contractAddress: string;
   claimer: string;
+  signer?: string;
   claimAmount: number;
   totalClaimed?: number;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
@@ -43,6 +42,7 @@ export class AirdropClaimService {
     const {
       contractAddress,
       claimer,
+      signer,
       claimAmount,
       tokenType,
       tokenCategory,
@@ -174,9 +174,10 @@ export class AirdropClaimService {
     const claimerHash = b.slice(3, 23);
 
     const fee = 1500n;
-    const feePayer = await this.selectFeePayerInputs(claimer, fee);
+    const feePayerAddress = signer || claimer;
+    const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    const remainingAmount = contractBalance - recipientOutputSatoshis - (feePayer ? 0n : fee);
+    const remainingAmount = contractBalance - recipientOutputSatoshis;
     const minimumStateOutput = 546n;
 
     if (remainingAmount < minimumStateOutput) {
@@ -188,19 +189,14 @@ export class AirdropClaimService {
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.claim(
-        placeholderSignature(),           // claimer sig — wallet fills in
-        placeholderPublicKey(),           // claimer pubkey — wallet fills in
         claimerHash,                      // bytes20
         new SignatureTemplate(authPrivKey), // authority co-sig — server signs now
         authPubKey,                       // authority pubkey
       ),
       { sequence: 0xffffffff },
     );
-    if (feePayer) {
-      const unlocker = placeholderP2PKHUnlocker(claimer);
-      for (const utxo of feePayer.utxos) {
-        txBuilder.addInput(utxo, unlocker, { sequence: 0xffffffff });
-      }
+    for (const utxo of feePayer.utxos) {
+      txBuilder.addInput(utxo, feePayer.unlocker, { sequence: 0xffffffff });
     }
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
@@ -236,14 +232,12 @@ export class AirdropClaimService {
         },
       });
     }
-    if (feePayer) {
-      const feeChange = feePayer.total - fee;
-      if (feeChange > 546n) {
-        txBuilder.addOutput({
-          to: claimer,
-          amount: feeChange,
-        });
-      }
+    const feeChange = feePayer.total - fee;
+    if (feeChange > 546n) {
+      txBuilder.addOutput({
+        to: feePayer.address,
+        amount: feeChange,
+      });
     }
 
     const wcTransaction = txBuilder.generateWcTransactionObject({
@@ -256,6 +250,8 @@ export class AirdropClaimService {
       claimAmount,
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
+      signer: feePayer.address,
+      feeSponsored: feePayer.sponsored,
       inputSatoshis: contractUtxo.satoshis.toString(),
       locktime: locktime.toString(),
     });
@@ -283,39 +279,6 @@ export class AirdropClaimService {
       return hexToBin(fallbackHex);
     }
     return new Uint8Array(40);
-  }
-
-  private async selectFeePayerInputs(address: string, requiredFee: bigint): Promise<{
-    utxos: any[];
-    total: bigint;
-  } | null> {
-    const utxos = await this.provider.getUtxos(address);
-    const spendable = utxos
-      .filter((utxo: any) => !utxo.token)
-      .sort((a: any, b: any) => {
-        const aSats = BigInt(a.satoshis);
-        const bSats = BigInt(b.satoshis);
-        if (aSats < bSats) return 1;
-        if (aSats > bSats) return -1;
-        return 0;
-      });
-
-    const singleInput = spendable.find((utxo: any) => BigInt(utxo.satoshis) >= requiredFee);
-    if (singleInput) {
-      return { utxos: [singleInput], total: BigInt(singleInput.satoshis) };
-    }
-
-    const selected: any[] = [];
-    let total = 0n;
-    for (const utxo of spendable) {
-      selected.push(utxo);
-      total += BigInt(utxo.satoshis);
-      if (total >= requiredFee) {
-        return { utxos: selected, total };
-      }
-    }
-
-    return null;
   }
 
   private resolveClaimLocktime(constructorParams: any[], now: bigint): bigint {

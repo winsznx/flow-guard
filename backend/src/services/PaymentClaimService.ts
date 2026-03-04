@@ -2,10 +2,12 @@ import {
   Contract,
   ElectrumNetworkProvider,
   TransactionBuilder,
+  placeholderP2PKHUnlocker,
   type WcTransactionObject,
 } from 'cashscript';
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { resolveFeePayer } from '../utils/feePayer.js';
 
 export interface ClaimTransactionParams {
   paymentId: string;
@@ -19,6 +21,7 @@ export interface ClaimTransactionParams {
   endTime?: number;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  feePayerAddress?: string;
   constructorParams: any[];
   currentCommitment: string;
 }
@@ -67,6 +70,7 @@ export class PaymentClaimService {
       intervalSeconds,
       tokenType,
       tokenCategory,
+      feePayerAddress,
       constructorParams,
       currentCommitment,
       currentTime,
@@ -122,8 +126,10 @@ export class PaymentClaimService {
 
     const claimAmountBig = BigInt(claimableAmount);
     const fee = 1500n;
+    const resolvedFeePayerAddress = feePayerAddress || recipient;
+    const feePayer = await resolveFeePayer(this.provider, this.network, resolvedFeePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    const remainingAmount = contractBalance - recipientOutputSatoshis - fee;
+    const remainingAmount = contractBalance - recipientOutputSatoshis;
     const minimumStateOutput = 546n;
 
     if (remainingAmount < minimumStateOutput) {
@@ -133,6 +139,9 @@ export class PaymentClaimService {
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(currentTime);
     txBuilder.addInput(contractUtxo, contract.unlock.pay());
+    for (const utxo of feePayer.utxos) {
+      txBuilder.addInput(utxo, feePayer.unlocker);
+    }
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       const tokenAmount = contractUtxo.token.amount ?? 0n;
@@ -170,6 +179,14 @@ export class PaymentClaimService {
       });
     }
 
+    const feeChange = feePayer.total - fee;
+    if (feeChange > 546n) {
+      txBuilder.addOutput({
+        to: feePayer.address,
+        amount: feeChange,
+      });
+    }
+
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim recurring payment',
@@ -181,6 +198,8 @@ export class PaymentClaimService {
       intervalsClaimable: intervals,
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
+      feePayerAddress: feePayer.address,
+      feeSponsored: feePayer.sponsored,
       inputSatoshis: contractUtxo.satoshis.toString(),
     });
 

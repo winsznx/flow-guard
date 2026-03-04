@@ -9,7 +9,15 @@ import {
 } from 'cashscript';
 import { buildFundingWcTransaction } from '../utils/wcFundingBuilder.js';
 import { toNonNegativeBigInt } from '../utils/bigint.js';
-import { getTokenFundingSatoshis, getTokenOutputDustSatoshis } from '../utils/fundingConfig.js';
+import {
+  getRequiredContractFundingSatoshis,
+  getTokenOutputDustSatoshis,
+} from '../utils/fundingConfig.js';
+import {
+  getAuthorityCommitmentHex,
+  getTokenAmountFromUtxo,
+  selectTokenFundingInputs,
+} from '../utils/tokenMintAuthority.js';
 
 export interface FundingTransactionParams {
   contractAddress: string;
@@ -31,6 +39,20 @@ export interface FundingTransactionParams {
     stepInterval: string; // bigint as string
     stepAmount: string; // bigint as string
   };
+}
+
+export interface BatchFundingItem {
+  contractAddress: string;
+  amount: number | string | bigint;
+  tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
+  tokenCategory?: string;
+  nftCommitment: string;
+  nftCapability: 'minting' | 'mutable' | 'none';
+}
+
+export interface BatchFundingTransactionParams {
+  senderAddress: string;
+  items: BatchFundingItem[];
 }
 
 export interface TransactionOutput {
@@ -119,52 +141,69 @@ export class StreamFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis(); // Minimum BCH for token outputs
     const amountOnChain = toNonNegativeBigInt(amount, 'amount');
+    const contractOutput = getRequiredContractFundingSatoshis('stream', tokenType, amountOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
+    let authorityChangeOutput: TransactionOutput | null = null;
 
     if (tokenType === 'FUNGIBLE_TOKEN') {
       if (!tokenCategory) {
         throw new Error('Token category required for FUNGIBLE_TOKEN type');
       }
       stateTokenCategory = tokenCategory;
+      const selection = selectTokenFundingInputs(utxos, tokenCategory, amountOnChain, 'stream');
+      selectedUtxos = [selection.authorityUtxo, ...selection.fungibleUtxos];
+      totalTokenInputAmount = selection.totalTokenAmount;
+      totalInputValue = selection.totalInputSatoshis;
+      authorityChangeOutput = {
+        to: senderAddress,
+        amount: dustAmount.toString(),
+        token: {
+          category: tokenCategory,
+          amount: (selection.totalTokenAmount - amountOnChain).toString(),
+          nft: {
+            capability: selection.authorityUtxo.token!.nft!.capability as 'none' | 'mutable' | 'minting',
+            commitment: getAuthorityCommitmentHex(selection.authorityUtxo),
+          },
+        },
+      };
 
-      // Find token UTXOs with matching category
-      const tokenUtxos = utxos.filter(
-        (utxo: any) =>
-          utxo.token?.category === tokenCategory &&
-          utxo.token?.amount &&
-          !utxo.token?.nft
-      );
+      const bchUtxos = utxos.filter((utxo: any) => !utxo.token);
+      const preliminaryOutputs: TransactionOutput[] = [
+        {
+          to: contractAddress,
+          amount: contractOutput.toString(),
+          token: {
+            category: tokenCategory,
+            amount: amountOnChain.toString(),
+            nft: {
+              commitment: nftCommitment,
+              capability: nftCapability,
+            },
+          },
+        },
+        authorityChangeOutput,
+        { to: senderAddress, amount: '0' },
+      ];
 
-      if (tokenUtxos.length === 0) {
-        throw new Error(`No fungible token UTXOs found for category ${tokenCategory}`);
-      }
-
-      // Calculate total token amount available
-      let totalTokenAmount = 0n;
-      for (const utxo of tokenUtxos) {
-        const tokenAmount = toNonNegativeBigInt(utxo.token?.amount ?? 0n, 'token input amount');
-        totalTokenAmount += tokenAmount;
-        totalTokenInputAmount += tokenAmount;
-        totalInputValue += toNonNegativeBigInt(utxo.satoshis, 'input satoshis');
-        selectedUtxos.push(utxo);
-
-        if (totalTokenAmount >= amountOnChain) {
-          break;
+      let estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+      const requiredAmount = () => contractOutput + dustAmount + estimatedFee;
+      if (totalInputValue < requiredAmount()) {
+        for (const utxo of bchUtxos) {
+          selectedUtxos.push(utxo);
+          totalInputValue += toNonNegativeBigInt(utxo.satoshis, 'fee input satoshis');
+          estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+          if (totalInputValue >= requiredAmount()) {
+            break;
+          }
         }
       }
 
-      if (totalTokenAmount < amountOnChain) {
+      if (totalInputValue < requiredAmount()) {
+        const requiredBch = (Number(requiredAmount()) / 1e8).toFixed(8);
+        const availableBch = (Number(totalInputValue) / 1e8).toFixed(8);
         throw new Error(
-          `Insufficient token balance. Required: ${amountOnChain.toString()}, Available: ${totalTokenAmount.toString()}`
+          `Insufficient BCH balance: need ${requiredBch} BCH, wallet has ${availableBch} BCH`,
         );
-      }
-
-      // Also need BCH UTXOs for fees and dust
-      const bchUtxos = utxos.filter((utxo: any) => !utxo.token);
-      if (bchUtxos.length > 0) {
-        // Add first BCH UTXO for fees
-        selectedUtxos.push(bchUtxos[0]);
-        totalInputValue += toNonNegativeBigInt(bchUtxos[0].satoshis, 'fee input satoshis');
       }
     } else {
       const nonTokenUtxos = utxos.filter((utxo: any) => !utxo.token);
@@ -177,7 +216,7 @@ export class StreamFundingService {
       stateTokenCategory = categoryAnchor.txid;
 
       // BCH only - select UTXOs to cover amount + fees
-      const requiredAmount = amountOnChain + 2000n; // amount + estimated fee
+      const requiredAmount = contractOutput + 2000n; // contract output + estimated fee
 
       const orderedUtxos = [
         categoryAnchor,
@@ -212,7 +251,7 @@ export class StreamFundingService {
       tokenCategory: utxo.token?.category,
       tokenAmount: utxo.token?.amount !== undefined ? toNonNegativeBigInt(utxo.token.amount, 'source token amount').toString() : undefined,
       tokenNftCapability: utxo.token?.nft?.capability,
-      tokenNftCommitment: utxo.token?.nft?.commitment,
+      tokenNftCommitment: utxo.token?.nft ? getAuthorityCommitmentHex(utxo) : undefined,
     }));
 
     // Calculate outputs
@@ -220,8 +259,6 @@ export class StreamFundingService {
       tokenType === 'FUNGIBLE_TOKEN' && totalTokenInputAmount > amountOnChain
         ? totalTokenInputAmount - amountOnChain
         : 0n;
-    const tokenContractSatoshis = getTokenFundingSatoshis('stream');
-    const contractOutput = tokenType === 'FUNGIBLE_TOKEN' ? tokenContractSatoshis : amountOnChain;
 
     if (!stateTokenCategory) {
       throw new Error('Missing state token category for stream funding output');
@@ -251,15 +288,9 @@ export class StreamFundingService {
       },
     ];
 
-    if (tokenChangeAmount > 0n) {
-      preliminaryOutputs.push({
-        to: senderAddress,
-        amount: dustAmount.toString(),
-        token: {
-          category: tokenCategory!,
-          amount: tokenChangeAmount.toString(),
-        },
-      });
+    if (tokenType === 'FUNGIBLE_TOKEN' && authorityChangeOutput) {
+      authorityChangeOutput.token!.amount = tokenChangeAmount.toString();
+      preliminaryOutputs.push(authorityChangeOutput);
     }
 
     preliminaryOutputs.push({ to: senderAddress, amount: '0' });
@@ -267,7 +298,7 @@ export class StreamFundingService {
     const estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
     const bchBudgetAfterContractAndFee = totalInputValue - contractOutput - estimatedFee;
     const bchBudgetAfterTokenChange =
-      tokenChangeAmount > 0n ? bchBudgetAfterContractAndFee - dustAmount : bchBudgetAfterContractAndFee;
+      tokenType === 'FUNGIBLE_TOKEN' ? bchBudgetAfterContractAndFee - dustAmount : bchBudgetAfterContractAndFee;
 
     if (bchBudgetAfterTokenChange < 0n) {
       throw new Error(
@@ -302,6 +333,236 @@ export class StreamFundingService {
       outputs,
       fee: Number(estimatedFee),
       // Deprecated fields (for backwards compat):
+      txHex: JSON.stringify({ inputs: sourceOutputs, outputs, fee: estimatedFee.toString() }),
+      sourceOutputs,
+      requiredSignatures: [senderAddress],
+      wcTransaction,
+    };
+  }
+
+  /**
+   * Build one WalletConnect funding transaction for multiple BCH stream contracts.
+   *
+   * Current BCH/UTXO constraint:
+   * - every contract state NFT is minted in the same transaction from a single
+   *   zero-index BCH UTXO category anchor
+   * - mixed-asset batch funding is rejected until token-authority handling is
+   *   implemented for fungible CashToken streams
+   */
+  async buildBatchFundingTransaction(
+    params: BatchFundingTransactionParams,
+  ): Promise<UnsignedFundingTransaction> {
+    const { senderAddress, items } = params;
+    const dustAmount = getTokenOutputDustSatoshis();
+
+    if (!items.length) {
+      throw new Error('At least one batch funding item is required');
+    }
+
+    const firstTokenType = items[0].tokenType ?? 'BCH';
+    const firstTokenCategory = items[0].tokenCategory ?? null;
+    const hasMixedAssetType = items.some((item) => (item.tokenType ?? 'BCH') !== firstTokenType);
+    const hasMixedTokenCategory = items.some(
+      (item) => (item.tokenCategory ?? null) !== firstTokenCategory,
+    );
+
+    if (hasMixedAssetType || hasMixedTokenCategory) {
+      throw new Error(
+        'Batch stream funding currently requires one asset lane per batch. ' +
+        'Create separate payroll runs for each asset or token category.',
+      );
+    }
+
+    const utxos = await this.provider.getUtxos(senderAddress);
+    if (!utxos || utxos.length === 0) {
+      throw new Error(`No UTXOs found for address ${senderAddress}`);
+    }
+
+    const contractOutputs: TransactionOutput[] = [];
+    let selectedUtxos: typeof utxos = [];
+    let totalInputValue = 0n;
+    let totalTokenInputAmount = 0n;
+    let preliminaryOutputs: TransactionOutput[] = [];
+    let estimatedFee = 0n;
+
+    if (firstTokenType === 'BCH') {
+      const nonTokenUtxos = utxos.filter((utxo: any) => !utxo.token);
+      const categoryAnchor = nonTokenUtxos.find((utxo: any) => utxo.vout === 0);
+      if (!categoryAnchor) {
+        throw new Error(
+          'Cannot mint batch stream state NFTs: sender wallet needs a spendable BCH UTXO with outpoint index 0',
+        );
+      }
+
+      const stateTokenCategory = categoryAnchor.txid;
+      for (const item of items) {
+        const amountOnChain = toNonNegativeBigInt(item.amount, 'batch stream amount');
+        const requiredSatoshis = getRequiredContractFundingSatoshis('stream', 'BCH', amountOnChain);
+        contractOutputs.push({
+          to: item.contractAddress,
+          amount: requiredSatoshis.toString(),
+          token: {
+            category: stateTokenCategory,
+            amount: 0,
+            nft: {
+              commitment: item.nftCommitment,
+              capability: item.nftCapability,
+            },
+          },
+        });
+      }
+
+      preliminaryOutputs = [...contractOutputs, { to: senderAddress, amount: '0' }];
+      const orderedUtxos = [
+        categoryAnchor,
+        ...nonTokenUtxos.filter(
+          (utxo: any) => utxo.txid !== categoryAnchor.txid || utxo.vout !== categoryAnchor.vout,
+        ),
+      ];
+
+      const totalContractOutput = contractOutputs.reduce(
+        (sum, output) => sum + toNonNegativeBigInt(output.amount, 'batch contract output'),
+        0n,
+      );
+
+      const requiredAmount = () => totalContractOutput + estimatedFee;
+      estimatedFee = this.estimateFee(1, preliminaryOutputs.length, preliminaryOutputs);
+
+      for (const utxo of orderedUtxos) {
+        selectedUtxos.push(utxo);
+        totalInputValue += toNonNegativeBigInt(utxo.satoshis, 'batch input satoshis');
+        estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+
+        if (totalInputValue >= requiredAmount()) {
+          break;
+        }
+      }
+
+      if (totalInputValue < requiredAmount()) {
+        const requiredBch = (Number(requiredAmount()) / 1e8).toFixed(8);
+        const availableBch = (Number(totalInputValue) / 1e8).toFixed(8);
+        throw new Error(
+          `Insufficient BCH balance: need ${requiredBch} BCH, wallet has ${availableBch} BCH`,
+        );
+      }
+    } else {
+      const tokenCategory = firstTokenCategory;
+      if (!tokenCategory) {
+        throw new Error('CashToken batch lanes require a token category');
+      }
+
+      const totalRequiredTokenAmount = items.reduce(
+        (sum, item) => sum + toNonNegativeBigInt(item.amount, 'batch token stream amount'),
+        0n,
+      );
+
+      const selection = selectTokenFundingInputs(utxos, tokenCategory, totalRequiredTokenAmount, 'batch stream');
+      selectedUtxos = [selection.authorityUtxo, ...selection.fungibleUtxos];
+      totalInputValue = selection.totalInputSatoshis;
+      totalTokenInputAmount = selection.totalTokenAmount;
+
+      for (const item of items) {
+        const amountOnChain = toNonNegativeBigInt(item.amount, 'batch token stream amount');
+        const requiredSatoshis = getRequiredContractFundingSatoshis('stream', 'FUNGIBLE_TOKEN', amountOnChain);
+        contractOutputs.push({
+          to: item.contractAddress,
+          amount: requiredSatoshis.toString(),
+          token: {
+            category: tokenCategory,
+            amount: amountOnChain.toString(),
+            nft: {
+              commitment: item.nftCommitment,
+              capability: item.nftCapability,
+            },
+          },
+        });
+      }
+
+      const authorityOutput: TransactionOutput = {
+        to: senderAddress,
+        amount: dustAmount.toString(),
+        token: {
+          category: tokenCategory,
+          amount: (totalTokenInputAmount - totalRequiredTokenAmount).toString(),
+          nft: {
+            capability: selection.authorityUtxo.token!.nft!.capability as 'none' | 'mutable' | 'minting',
+            commitment: getAuthorityCommitmentHex(selection.authorityUtxo),
+          },
+        },
+      };
+
+      preliminaryOutputs = [...contractOutputs, authorityOutput, { to: senderAddress, amount: '0' }];
+      estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+      const totalContractOutput = contractOutputs.reduce(
+        (sum, output) => sum + toNonNegativeBigInt(output.amount, 'batch contract output'),
+        0n,
+      );
+      const requiredAmount = () => totalContractOutput + dustAmount + estimatedFee;
+
+      const bchUtxos = utxos.filter((utxo: any) => !utxo.token);
+      if (totalInputValue < requiredAmount()) {
+        for (const utxo of bchUtxos) {
+          selectedUtxos.push(utxo);
+          totalInputValue += toNonNegativeBigInt(utxo.satoshis, 'batch fee input satoshis');
+          estimatedFee = this.estimateFee(selectedUtxos.length, preliminaryOutputs.length, preliminaryOutputs);
+          if (totalInputValue >= requiredAmount()) {
+            break;
+          }
+        }
+      }
+
+      if (totalInputValue < requiredAmount()) {
+        const requiredBch = (Number(requiredAmount()) / 1e8).toFixed(8);
+        const availableBch = (Number(totalInputValue) / 1e8).toFixed(8);
+        throw new Error(
+          `Insufficient BCH balance: need ${requiredBch} BCH, wallet has ${availableBch} BCH`,
+        );
+      }
+    }
+
+    const sourceOutputs = selectedUtxos.map((utxo: any) => ({
+      txid: utxo.txid,
+      vout: utxo.vout,
+      satoshis: Number(toNonNegativeBigInt(utxo.satoshis, 'source output satoshis')),
+      tokenCategory: utxo.token?.category,
+      tokenAmount:
+        utxo.token?.amount !== undefined
+          ? toNonNegativeBigInt(utxo.token.amount, 'source token amount').toString()
+          : undefined,
+      tokenNftCapability: utxo.token?.nft?.capability,
+      tokenNftCommitment: utxo.token?.nft ? getAuthorityCommitmentHex(utxo) : undefined,
+    }));
+
+    const totalContractOutput = contractOutputs.reduce(
+      (sum, output) => sum + toNonNegativeBigInt(output.amount, 'batch contract output'),
+      0n,
+    );
+    const nonBchReserved = firstTokenType === 'BCH' ? 0n : dustAmount;
+    const changeAmount = totalInputValue - totalContractOutput - nonBchReserved - estimatedFee;
+    const outputs: TransactionOutput[] = [];
+    if (changeAmount > 546n) {
+      outputs.push({
+        to: senderAddress,
+        amount: changeAmount.toString(),
+      });
+    }
+    if (firstTokenType !== 'BCH') {
+      outputs.push(preliminaryOutputs[contractOutputs.length]);
+    }
+    outputs.push(...contractOutputs);
+
+    const wcTransaction = buildFundingWcTransaction({
+      inputOwnerAddress: senderAddress,
+      inputs: sourceOutputs,
+      outputs,
+      userPrompt: `Fund ${items.length} stream contracts`,
+      broadcast: false,
+    });
+
+    return {
+      inputs: sourceOutputs,
+      outputs,
+      fee: Number(estimatedFee),
       txHex: JSON.stringify({ inputs: sourceOutputs, outputs, fee: estimatedFee.toString() }),
       sourceOutputs,
       requiredSignatures: [senderAddress],

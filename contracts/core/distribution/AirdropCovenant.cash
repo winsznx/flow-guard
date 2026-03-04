@@ -4,9 +4,9 @@
  * ENFORCEABILITY: [ENFORCEABLE-NOW]
  *
  * PURPOSE: Enforce mass token/BCH distribution campaigns.
- *          Claims require both claimer signature AND claim-authority co-signature.
+ *          Claims are permissionless to submit: no claimer signature is required.
  *          The claim-authority is a backend-held key that enforces eligibility and
- *          per-address limits off-chain before co-signing.
+ *          per-address limits off-chain before co-signing each claim.
  *          Authority (admin key) controls administrative paths (pause/resume/cancel).
  *
  * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):
@@ -39,18 +39,13 @@ contract AirdropCovenant(
     int startTimestamp,
     int endTimestamp
 ) {
-    function claim(
-        sig claimerSig, pubkey claimerPubkey, bytes20 claimerHash,
-        sig claimAuthSig, pubkey claimAuthPubkey
-    ) {
+    function claim(bytes20 claimerHash, sig claimAuthSig, pubkey claimAuthPubkey) {
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
         int totalClaimed = int(c.split(2)[1].split(8)[0]);
         int claimsCount  = int(c.split(10)[1].split(8)[0]);
 
-        require(hash160(claimerPubkey) == claimerHash);
-        require(checkSig(claimerSig, claimerPubkey));
         // Claim-authority co-signature: backend validates eligibility + per-address limit
         require(hash160(claimAuthPubkey) == claimAuthorityHash);
         require(checkSig(claimAuthSig, claimAuthPubkey));

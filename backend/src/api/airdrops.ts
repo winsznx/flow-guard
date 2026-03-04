@@ -25,6 +25,7 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
+import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 
 const router = Router();
 
@@ -235,7 +236,8 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
       }
     }
 
-    // Authority controls admin paths (pause/resume/cancel). Claims require claimer + claim-authority signatures.
+    // Authority controls admin paths (pause/resume/cancel). Claims are permissionless to submit,
+    // but always require claim-authority co-signing to enforce eligibility/limits.
     const deployment = await deploymentService.deployAirdrop({
       vaultId: actualVaultId,
       authorityAddress: creator,
@@ -467,12 +469,17 @@ router.post('/airdrops/:id/confirm-funding', async (req: Request, res: Response)
 
     const fundingAmountOnChain = displayAmountToOnChain(campaign.total_amount, campaign.token_type);
     const isTokenAirdrop = isFungibleTokenType(campaign.token_type);
+    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
+      'airdrop',
+      isTokenAirdrop ? 'FUNGIBLE_TOKEN' : 'BCH',
+      BigInt(fundingAmountOnChain),
+    );
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
       {
         address: campaign.contract_address,
-        minimumSatoshis: BigInt(isTokenAirdrop ? 546 : Math.max(546, fundingAmountOnChain)),
+        minimumSatoshis: minimumContractSatoshis,
         ...(isTokenAirdrop && campaign.token_category
           ? {
             tokenCategory: campaign.token_category,
@@ -587,6 +594,11 @@ router.post('/airdrops/:id/claim', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const claimerAddress = String(req.body?.claimerAddress || req.body?.claimer || '').trim();
+    const signerAddress = String(
+      req.body?.signerAddress
+      || req.headers['x-user-address']
+      || claimerAddress,
+    ).trim();
 
     if (!claimerAddress) {
       return res.status(400).json({ error: 'Claimer address is required' });
@@ -674,6 +686,7 @@ router.post('/airdrops/:id/claim', async (req: Request, res: Response) => {
       airdropId: campaign.campaign_id,
       contractAddress: campaign.contract_address,
       claimer: claimerAddress,
+      signer: signerAddress,
       claimAmount: claimAmountOnChain,
       tokenType: normalizeAirdropTokenType(campaign.token_type),
       tokenCategory: campaign.token_category,

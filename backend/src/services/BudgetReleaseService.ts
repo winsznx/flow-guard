@@ -7,12 +7,14 @@ import {
   Contract,
   ElectrumNetworkProvider,
   TransactionBuilder,
+  placeholderP2PKHUnlocker,
   placeholderPublicKey,
   placeholderSignature,
   type WcTransactionObject,
 } from 'cashscript';
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { resolveFeePayer } from '../utils/feePayer.js';
 
 export interface TransactionOutput {
   to: string;
@@ -49,6 +51,7 @@ export interface ReleaseTransactionParams {
   currentTime: number;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  feePayerAddress?: string;
   constructorParams: any[];
   currentCommitment: string;
 }
@@ -98,6 +101,7 @@ export class BudgetReleaseService {
       currentTime,
       tokenType,
       tokenCategory,
+      feePayerAddress,
       constructorParams,
       currentCommitment,
     } = params;
@@ -172,8 +176,10 @@ export class BudgetReleaseService {
     // Calculate outputs
     const releasableAmountBig = BigInt(releasableAmount);
     const estimatedFee = 1000n;
+    const resolvedFeePayerAddress = feePayerAddress || recipient;
+    const feePayer = await resolveFeePayer(this.provider, this.network, resolvedFeePayerAddress, estimatedFee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : releasableAmountBig;
-    const remainingBalance = contractBalance - recipientOutputSatoshis - estimatedFee;
+    const remainingBalance = contractBalance - recipientOutputSatoshis;
     const minimumStateOutput = 546n;
 
     if (remainingBalance < minimumStateOutput) {
@@ -181,6 +187,13 @@ export class BudgetReleaseService {
     }
 
     const outputs: TransactionOutput[] = [];
+    for (const utxo of feePayer.utxos) {
+      inputs.push({
+        txid: utxo.txid,
+        vout: utxo.vout,
+        satoshis: Number(utxo.satoshis),
+      });
+    }
 
     let remainingTokens = 0n;
     if (tokenType === 'FUNGIBLE_TOKEN') {
@@ -250,6 +263,9 @@ export class BudgetReleaseService {
         placeholderPublicKey(),
       ),
     );
+    for (const utxo of feePayer.utxos) {
+      txBuilder.addInput(utxo, feePayer.unlocker);
+    }
 
     if (tokenType === 'FUNGIBLE_TOKEN') {
       txBuilder.addOutput({
@@ -292,6 +308,18 @@ export class BudgetReleaseService {
             capability: 'mutable',
           },
         },
+      });
+    }
+
+    const feeChange = feePayer.total - estimatedFee;
+    if (feeChange > 546n) {
+      outputs.push({
+        to: feePayer.address,
+        amount: Number(feeChange),
+      });
+      txBuilder.addOutput({
+        to: feePayer.address,
+        amount: feeChange,
       });
     }
 

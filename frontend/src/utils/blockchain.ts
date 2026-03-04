@@ -3,7 +3,7 @@
  * Handles wallet signing and transaction broadcasting
  */
 
-import { binToHex, decodeTransaction, hash160, hexToBin } from '@bitauth/libauth';
+import { binToHex, decodeTransaction, hexToBin } from '@bitauth/libauth';
 import { broadcastTransaction, getDepositInfo } from './api';
 import type { Transaction, SignedTransaction, CashScriptSignOptions, CashScriptSignResponse, SourceOutput } from '../types/wallet';
 import { emitTransactionNotice, normalizeWalletNetwork } from './txNotice';
@@ -58,35 +58,6 @@ function requireSignedTransactionHex(signResult: CashScriptSignResponse, context
   return signResult.signedTransaction;
 }
 
-function readPushes(script: Uint8Array, maxPushes = 8): Uint8Array[] {
-  const pushes: Uint8Array[] = [];
-  let i = 0;
-  while (i < script.length && pushes.length < maxPushes) {
-    const opcode = script[i++];
-    let length = 0;
-    if (opcode <= 0x4b) {
-      length = opcode;
-    } else if (opcode === 0x4c) {
-      if (i >= script.length) break;
-      length = script[i++];
-    } else if (opcode === 0x4d) {
-      if (i + 1 >= script.length) break;
-      length = script[i] | (script[i + 1] << 8);
-      i += 2;
-    } else if (opcode === 0x4e) {
-      if (i + 3 >= script.length) break;
-      length = script[i] | (script[i + 1] << 8) | (script[i + 2] << 16) | (script[i + 3] << 24);
-      i += 4;
-    } else {
-      break;
-    }
-    if (length < 0 || i + length > script.length) break;
-    pushes.push(script.slice(i, i + length));
-    i += length;
-  }
-  return pushes;
-}
-
 function inspectUnsignedPlaceholderInputs(txHex: string): number[] {
   const decoded = decodeTransaction(hexToBin(txHex));
   if (typeof decoded === 'string') return [];
@@ -105,35 +76,6 @@ function inspectUnsignedPlaceholderInputs(txHex: string): number[] {
   });
 
   return failedInputs;
-}
-
-function inspectClaimSignerMismatch(txHex: string): {
-  claimerHashHex: string;
-  pubkeyHex: string;
-  pubkeyHashHex: string;
-} | null {
-  const decoded = decodeTransaction(hexToBin(txHex));
-  if (typeof decoded === 'string') return null;
-  const script = decoded.inputs[0]?.unlockingBytecode;
-  if (!script || script.length === 0) return null;
-
-  const pushes = readPushes(script, 6);
-  const claimerHashPush = pushes.find((push) => push.length === 20);
-  const pubkeyPush = pushes.find((push) => push.length === 33);
-  if (!claimerHashPush || !pubkeyPush) {
-    return null;
-  }
-
-  const claimerHashHex = binToHex(claimerHashPush);
-  const pubkeyHex = binToHex(pubkeyPush);
-  const pubkeyHashHex = binToHex(hash160(pubkeyPush));
-  if (pubkeyHashHex === claimerHashHex) return null;
-
-  return {
-    claimerHashHex,
-    pubkeyHex,
-    pubkeyHashHex,
-  };
 }
 
 async function resolveTxHashFromSignResult(
@@ -155,14 +97,6 @@ async function resolveTxHashFromSignResult(
     const oneBasedInputs = unsignedPlaceholderInputs.map((index) => index + 1).join(', ');
     throw new Error(
       `${context}: wallet did not sign all required inputs (placeholder left in input(s): ${oneBasedInputs}).`
-    );
-  }
-  const claimSignerMismatch = inspectClaimSignerMismatch(signedTxHex);
-  if (claimSignerMismatch) {
-    throw new Error(
-      `${context}: wallet signed with a pubkey that does not match claimer hash ` +
-      `(claimerHash=${claimSignerMismatch.claimerHashHex}, pubkeyHash=${claimSignerMismatch.pubkeyHashHex}). ` +
-      `Reconnect wallet and ensure the selected account matches the claim address.`
     );
   }
   const walletBroadcasts = signOptions.broadcast ?? true;
@@ -942,6 +876,107 @@ export async function fundStreamContract(
   }
 }
 
+export async function fundBatchStreamContracts(
+  wallet: WalletInterface,
+  vaultId: string,
+  payload: {
+    senderAddress: string;
+    tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
+    tokenCategory?: string;
+    launchContext?: {
+      source: string;
+      title?: string;
+      description?: string;
+      preferredLane?: string;
+    };
+    entries: Array<{
+      recipient: string;
+      totalAmount: number;
+      streamType: 'LINEAR' | 'RECURRING' | 'STEP' | 'TRANCHE' | 'HYBRID';
+      startTime: number;
+      endTime?: number;
+      cliffTimestamp?: number | null;
+      cancelable: boolean;
+      refillable?: boolean;
+      description?: string | null;
+      intervalSeconds?: number;
+      hybridUnlockTimestamp?: number;
+      hybridUpfrontPercentage?: number;
+      scheduleTemplate?: string | null;
+      trancheSchedule?: Array<{
+        unlockTime: number;
+        amount: number;
+        percentage?: number;
+      }>;
+    }>;
+  },
+): Promise<{ txId: string; streamIds: string[] }> {
+  try {
+    if (!wallet.address) {
+      throw new Error('Wallet not connected');
+    }
+
+    const response = await fetch(`/api/treasuries/${vaultId}/batch-create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || data.error || 'Failed to build batch stream transaction');
+    }
+
+    if (!data.wcTransaction || !wallet.signCashScriptTransaction) {
+      throw new Error('Batch stream funding requires a CashScript-compatible wallet');
+    }
+
+    const signOptions = {
+      ...deserializeWcSignOptions(data.wcTransaction),
+      broadcast: false,
+    };
+    const signResult = await wallet.signCashScriptTransaction(signOptions);
+    const txId = await resolveTxHashFromSignResult(
+      signResult,
+      signOptions,
+      'Batch stream funding signing failed',
+    );
+
+    const streamIds = Array.isArray(data.streams)
+      ? data.streams.map((stream: { id: string }) => stream.id)
+      : [];
+
+    const confirmResponse = await fetch(`/api/treasuries/${vaultId}/batch-create/confirm`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        txHash: txId,
+        streamIds,
+      }),
+    });
+
+    if (!confirmResponse.ok) {
+      const error = await confirmResponse.json();
+      console.error('Failed to confirm batch stream funding, but transaction was broadcast:', error);
+    }
+
+    publishTransactionNotice(txId, wallet, 'Batch streams funded');
+    return { txId, streamIds };
+  } catch (error: any) {
+    console.error('Failed to fund batch stream contracts:', error);
+
+    if (error.message.includes('user') || error.message.includes('cancel')) {
+      throw new Error('Transaction cancelled by user');
+    }
+
+    throw error;
+  }
+}
+
 /**
  * Claim vested funds from a stream
  * @param wallet The wallet hook return value
@@ -966,6 +1001,7 @@ export async function claimStreamFunds(
       },
       body: JSON.stringify({
         recipientAddress: wallet.address,
+        signerAddress: wallet.address,
       }),
     });
 
@@ -1022,6 +1058,221 @@ export async function claimStreamFunds(
 }
 
 /**
+ * Pause a stream on-chain.
+ */
+export async function pauseStreamOnChain(
+  wallet: WalletInterface,
+  streamId: string
+): Promise<string> {
+  if (!wallet.address) {
+    throw new Error('Wallet not connected');
+  }
+  if (!wallet.signCashScriptTransaction) {
+    throw new Error('Connected wallet does not support CashScript transactions');
+  }
+
+  const apiUrl = '/api';
+  const response = await fetch(`${apiUrl}/streams/${streamId}/pause`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Failed to build pause transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to build pause transaction'));
+  }
+
+  const { wcTransaction } = await response.json();
+  if (!wcTransaction) {
+    throw new Error('Backend did not return pause transaction');
+  }
+
+  const signOptions = deserializeWcSignOptions(wcTransaction);
+  const signResult = await wallet.signCashScriptTransaction(signOptions);
+  const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'Stream pause signing failed');
+
+  const confirmResponse = await fetch(`${apiUrl}/streams/${streamId}/confirm-pause`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+    body: JSON.stringify({ txHash }),
+  });
+  if (!confirmResponse.ok) {
+    const error = await confirmResponse.json().catch(() => ({ error: 'Failed to confirm pause transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to confirm pause transaction'));
+  }
+
+  return publishTransactionNotice(txHash, wallet, 'Stream paused');
+}
+
+/**
+ * Resume a paused stream on-chain.
+ */
+export async function resumeStreamOnChain(
+  wallet: WalletInterface,
+  streamId: string
+): Promise<string> {
+  if (!wallet.address) {
+    throw new Error('Wallet not connected');
+  }
+  if (!wallet.signCashScriptTransaction) {
+    throw new Error('Connected wallet does not support CashScript transactions');
+  }
+
+  const apiUrl = '/api';
+  const response = await fetch(`${apiUrl}/streams/${streamId}/resume`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Failed to build resume transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to build resume transaction'));
+  }
+
+  const { wcTransaction } = await response.json();
+  if (!wcTransaction) {
+    throw new Error('Backend did not return resume transaction');
+  }
+
+  const signOptions = deserializeWcSignOptions(wcTransaction);
+  const signResult = await wallet.signCashScriptTransaction(signOptions);
+  const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'Stream resume signing failed');
+
+  const confirmResponse = await fetch(`${apiUrl}/streams/${streamId}/confirm-resume`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+    body: JSON.stringify({ txHash }),
+  });
+  if (!confirmResponse.ok) {
+    const error = await confirmResponse.json().catch(() => ({ error: 'Failed to confirm resume transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to confirm resume transaction'));
+  }
+
+  return publishTransactionNotice(txHash, wallet, 'Stream resumed');
+}
+
+/**
+ * Refill an open-ended recurring stream with additional BCH/token runway.
+ */
+export async function refillStreamOnChain(
+  wallet: WalletInterface,
+  streamId: string,
+  refillAmount: number,
+): Promise<string> {
+  if (!wallet.address) {
+    throw new Error('Wallet not connected');
+  }
+  if (!wallet.signCashScriptTransaction) {
+    throw new Error('Connected wallet does not support CashScript transactions');
+  }
+  if (!Number.isFinite(refillAmount) || refillAmount <= 0) {
+    throw new Error('Refill amount must be greater than zero');
+  }
+
+  const apiUrl = '/api';
+  const response = await fetch(`${apiUrl}/streams/${streamId}/refill`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+    body: JSON.stringify({ refillAmount }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Failed to build refill transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to build refill transaction'));
+  }
+
+  const { wcTransaction } = await response.json();
+  if (!wcTransaction) {
+    throw new Error('Backend did not return refill transaction');
+  }
+
+  const signOptions = deserializeWcSignOptions(wcTransaction);
+  const signResult = await wallet.signCashScriptTransaction(signOptions);
+  const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'Stream refill signing failed');
+
+  const confirmResponse = await fetch(`${apiUrl}/streams/${streamId}/confirm-refill`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+    body: JSON.stringify({ txHash, refillAmount }),
+  });
+  if (!confirmResponse.ok) {
+    const error = await confirmResponse.json().catch(() => ({ error: 'Failed to confirm refill transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to confirm refill transaction'));
+  }
+
+  return publishTransactionNotice(txHash, wallet, 'Stream refilled');
+}
+
+/**
+ * Transfer a transferable vesting stream to a new recipient.
+ */
+export async function transferStreamOnChain(
+  wallet: WalletInterface,
+  streamId: string,
+  newRecipientAddress: string
+): Promise<string> {
+  if (!wallet.address) {
+    throw new Error('Wallet not connected');
+  }
+  if (!wallet.signCashScriptTransaction) {
+    throw new Error('Connected wallet does not support CashScript transactions');
+  }
+
+  const apiUrl = '/api';
+  const response = await fetch(`${apiUrl}/streams/${streamId}/transfer`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+    body: JSON.stringify({ newRecipientAddress }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Failed to build transfer transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to build transfer transaction'));
+  }
+
+  const { wcTransaction } = await response.json();
+  if (!wcTransaction) {
+    throw new Error('Backend did not return transfer transaction');
+  }
+
+  const signOptions = deserializeWcSignOptions(wcTransaction);
+  const signResult = await wallet.signCashScriptTransaction(signOptions);
+  const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'Stream transfer signing failed');
+
+  const confirmResponse = await fetch(`${apiUrl}/streams/${streamId}/confirm-transfer`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-address': wallet.address,
+    },
+    body: JSON.stringify({ txHash, newRecipientAddress }),
+  });
+  if (!confirmResponse.ok) {
+    const error = await confirmResponse.json().catch(() => ({ error: 'Failed to confirm transfer transaction' }));
+    throw new Error(getApiErrorMessage(error, 'Failed to confirm transfer transaction'));
+  }
+
+  return publishTransactionNotice(txHash, wallet, 'Stream transferred');
+}
+
+/**
  * Fund a recurring payment contract with initial deposit
  * @param wallet The wallet hook return value
  * @param paymentId The payment ID to fund
@@ -1067,7 +1318,7 @@ export async function fundPaymentContract(
       console.log('[FlowGuard] Consolidation tx broadcast:', preparationTxId);
       publishTransactionNotice(preparationTxId, wallet, 'Token preparation');
 
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 8000));
       data = await fetchFundingInfo();
     }
 
@@ -1121,6 +1372,12 @@ export async function fundPaymentContract(
     }
 
     const details = error?.message || 'Unknown error';
+    if (preparationTxId && /transaction signing failed: internal error/i.test(details)) {
+      throw new Error(
+        `Preparation transaction broadcast (${preparationTxId}), but the wallet has not indexed the new UTXO yet. ` +
+        'Wait 15-30 seconds, refresh, then click Fund again.'
+      );
+    }
     if (preparationTxId) {
       throw new Error(`${details}. Preparation tx broadcast: ${preparationTxId}`);
     }
@@ -1152,6 +1409,7 @@ export async function claimPaymentFunds(
       },
       body: JSON.stringify({
         recipientAddress: wallet.address,
+        signerAddress: wallet.address,
       }),
     });
 
@@ -1510,7 +1768,7 @@ export async function fundAirdropContract(
       console.log('[FlowGuard] Consolidation tx broadcast:', preparationTxId);
       publishTransactionNotice(preparationTxId, wallet, 'Token preparation');
 
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 8000));
       data = await fetchFundingInfo();
     }
 
@@ -1568,6 +1826,12 @@ export async function fundAirdropContract(
     }
 
     const details = error.message || 'Unknown error';
+    if (preparationTxId && /transaction signing failed: internal error/i.test(details)) {
+      throw new Error(
+        `Preparation transaction broadcast (${preparationTxId}), but the wallet has not indexed the new UTXO yet. ` +
+        'Wait 15-30 seconds, refresh, then click Fund again.'
+      );
+    }
     if (preparationTxId) {
       throw new Error(`Funding failed: ${details}. Preparation tx broadcast: ${preparationTxId}`);
     }
@@ -1583,10 +1847,12 @@ export async function fundAirdropContract(
  */
 export async function claimAirdropFunds(
   wallet: WalletInterface,
-  airdropId: string
+  airdropId: string,
+  claimerAddressOverride?: string
 ): Promise<string> {
   try {
-    const claimerAddress = await resolveWalletAddress(wallet);
+    const signerAddress = await resolveWalletAddress(wallet);
+    const claimerAddress = claimerAddressOverride || signerAddress;
 
     // Get claim transaction from backend
     const apiUrl = '/api';
@@ -1594,9 +1860,11 @@ export async function claimAirdropFunds(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
       },
       body: JSON.stringify({
         claimerAddress,
+        signerAddress,
       }),
     });
 
@@ -1937,6 +2205,7 @@ export async function releaseMilestone(
       },
       body: JSON.stringify({
         recipientAddress: wallet.address,
+        signerAddress: wallet.address,
       }),
     });
 

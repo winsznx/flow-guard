@@ -1,0 +1,231 @@
+/**
+ * HybridVestingCovenant
+ *
+ * ENFORCEABILITY: [ENFORCEABLE-NOW]
+ *
+ * PURPOSE: Enforce hybrid vesting schedules that unlock an upfront amount at
+ *          a specific unlock timestamp, then vest the remaining balance
+ *          linearly through the end of the schedule.
+ *
+ * NFT COMMITMENT (40 bytes — same layout as VestingCovenant):
+ *   [0]:     status (uint8: 0=ACTIVE, 1=PAUSED, 2=CANCELLED, 3=COMPLETED)
+ *   [1]:     flags (uint8: bit0=cancelable, bit1=transferable, bit2=usesTokens)
+ *   [2-9]:   total_released (uint64)
+ *   [10-14]: cursor (uint40, adjusted start used for pause accounting)
+ *   [15-19]: pause_start (uint40)
+ *   [20-39]: recipient_hash (bytes20)
+ */
+
+pragma cashscript ^0.13.0;
+
+contract HybridVestingCovenant(
+    bytes32 vaultId,
+    bytes20 senderHash,
+    int totalAmount,
+    int startTimestamp,
+    int unlockTimestamp,
+    int endTimestamp,
+    int upfrontAmount
+) {
+    function claim(sig recipientSig, pubkey recipientPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        int totalReleased = int(c.split(2)[1].split(8)[0]);
+        int cursor        = int(c.split(10)[1].split(5)[0]);
+        bytes20 recipient = c.split(20)[1].split(20)[0];
+
+        require(hash160(recipientPubkey) == recipient);
+        require(checkSig(recipientSig, recipientPubkey));
+        require(status == 0);
+
+        int timeShift = cursor - startTimestamp;
+        int effectiveNow = tx.locktime - timeShift;
+        int vestedTotal = 0;
+
+        if (effectiveNow >= endTimestamp) {
+            vestedTotal = totalAmount;
+        } else if (effectiveNow >= unlockTimestamp) {
+            int remainingAmount = totalAmount - upfrontAmount;
+            int linearDuration = endTimestamp - unlockTimestamp;
+            if (linearDuration <= 0) {
+                vestedTotal = totalAmount;
+            } else {
+                vestedTotal = upfrontAmount + ((remainingAmount * (effectiveNow - unlockTimestamp)) / linearDuration);
+            }
+        }
+
+        int claimable = vestedTotal - totalReleased;
+        require(claimable > 0);
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+            require(tx.outputs[0].tokenAmount == claimable);
+        } else {
+            require(tx.outputs[0].value == claimable);
+        }
+
+        int newTotalReleased = totalReleased + claimable;
+        int newStatus = 0;
+        if (newTotalReleased >= totalAmount) { newStatus = 3; }
+
+        bytes newCommitment =
+            toPaddedBytes(newStatus, 1) +
+            flagsByte +
+            toPaddedBytes(newTotalReleased, 8) +
+            toPaddedBytes(cursor, 5) +
+            0x0000000000 +
+            recipient;
+
+        require(tx.outputs[1].nftCommitment == newCommitment);
+        require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+    }
+
+    function complete() {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        int totalReleased = int(c.split(2)[1].split(8)[0]);
+        bytes20 recipient = c.split(20)[1].split(20)[0];
+
+        require(status == 0 || status == 1);
+        require(tx.locktime >= endTimestamp);
+
+        int remaining = totalAmount - totalReleased;
+        if (remaining > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+                require(tx.outputs[0].tokenAmount == remaining);
+            } else {
+                require(tx.outputs[0].value == remaining);
+            }
+        }
+
+        require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
+
+    function pause(sig senderSig, pubkey senderPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0);
+
+        bytes newCommitment =
+            0x01 +
+            flagsByte +
+            c.split(2)[1].split(8)[0] +
+            c.split(10)[1].split(5)[0] +
+            toPaddedBytes(tx.locktime, 5) +
+            c.split(20)[1].split(20)[0];
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+    }
+
+    function resume(sig senderSig, pubkey senderPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int cursor       = int(c.split(10)[1].split(5)[0]);
+        int pauseStart   = int(c.split(15)[1].split(5)[0]);
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require(status == 1);
+        require(pauseStart > 0);
+
+        int pauseDuration = tx.locktime - pauseStart;
+        int newCursor = cursor + pauseDuration;
+
+        bytes newCommitment =
+            0x00 +
+            flagsByte +
+            c.split(2)[1].split(8)[0] +
+            toPaddedBytes(newCursor, 5) +
+            0x0000000000 +
+            c.split(20)[1].split(20)[0];
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+    }
+
+    function cancel(sig senderSig, pubkey senderPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        int totalReleased = int(c.split(2)[1].split(8)[0]);
+        int cursor        = int(c.split(10)[1].split(5)[0]);
+        bytes20 recipient = c.split(20)[1].split(20)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0 || status == 1);
+
+        int timeShift = cursor - startTimestamp;
+        int effectiveNow = tx.locktime - timeShift;
+        int vestedAtCancel = 0;
+
+        if (effectiveNow >= endTimestamp) {
+            vestedAtCancel = totalAmount;
+        } else if (effectiveNow >= unlockTimestamp) {
+            int remainingAmount = totalAmount - upfrontAmount;
+            int linearDuration = endTimestamp - unlockTimestamp;
+            if (linearDuration <= 0) {
+                vestedAtCancel = totalAmount;
+            } else {
+                vestedAtCancel = upfrontAmount + ((remainingAmount * (effectiveNow - unlockTimestamp)) / linearDuration);
+            }
+        }
+
+        int claimableNow = vestedAtCancel - totalReleased;
+        int unvested = totalAmount - vestedAtCancel;
+
+        if (claimableNow > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+                require(tx.outputs[0].tokenAmount == claimableNow);
+            } else {
+                require(tx.outputs[0].value == claimableNow);
+            }
+        }
+
+        if (unvested > 0) {
+            require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+                require(tx.outputs[1].tokenAmount == unvested);
+            } else {
+                require(tx.outputs[1].value == unvested);
+            }
+        }
+    }
+
+    function transfer(sig recipientSig, pubkey recipientPubkey, bytes20 newRecipientHash) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        bytes20 current   = c.split(20)[1].split(20)[0];
+
+        require(hash160(recipientPubkey) == current);
+        require(checkSig(recipientSig, recipientPubkey));
+        require((flagsByte & 0x02) == 0x02);
+        require(status == 0);
+
+        bytes newCommitment = c.split(20)[0] + newRecipientHash;
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+    }
+}
