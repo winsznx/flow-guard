@@ -27,7 +27,8 @@ import type {
   CashScriptSignResponse,
 } from '../types/wallet';
 
-const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1';
+const WALLETCONNECT_PROJECT_ID =
+  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1';
 
 export class CashonizeConnector implements IWalletConnector {
   type: WalletType = 'walletconnect' as WalletType; // Uses WC protocol
@@ -60,7 +61,7 @@ export class CashonizeConnector implements IWalletConnector {
       if (!WALLETCONNECT_PROJECT_ID || WALLETCONNECT_PROJECT_ID === 'demo-project-id') {
         throw new Error(
           'WalletConnect requires a project ID. Get one free at https://cloud.walletconnect.com\n' +
-          'Then add to .env.local: VITE_WALLETCONNECT_PROJECT_ID=your-id'
+            'Then add to .env.local: VITE_WALLETCONNECT_PROJECT_ID=your-id'
         );
       }
 
@@ -69,7 +70,7 @@ export class CashonizeConnector implements IWalletConnector {
         projectId: WALLETCONNECT_PROJECT_ID,
         metadata: {
           name: 'FlowGuard',
-          description: 'On-Chain Treasury Management for Bitcoin Cash',
+          description: 'BCH-native treasuries, streams, payments, and governance',
           url: window.location.origin,
           icons: [`${window.location.origin}/favicon.svg`],
         },
@@ -92,11 +93,7 @@ export class CashonizeConnector implements IWalletConnector {
       const { uri, approval } = await this.client.connect({
         requiredNamespaces: {
           bch: {
-            methods: [
-              'bch_signTransaction',
-              'bch_signMessage',
-              'bch_getAddresses',
-            ],
+            methods: ['bch_signTransaction', 'bch_signMessage', 'bch_getAddresses'],
             chains: [primaryChain],
             events: ['addressesChanged', 'disconnect'],
           },
@@ -112,10 +109,13 @@ export class CashonizeConnector implements IWalletConnector {
 
       // Wait for approval
       const approvalTimeout = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Connection timeout - please scan QR code with Cashonize')), 120000);
+        setTimeout(
+          () => reject(new Error('Connection timeout - please scan QR code with Cashonize')),
+          120000
+        );
       });
 
-      this.session = await Promise.race([approval(), approvalTimeout]) as SessionTypes.Struct;
+      this.session = (await Promise.race([approval(), approvalTimeout])) as SessionTypes.Struct;
       this.hideQRModal();
 
       console.log('[Cashonize] Session established');
@@ -128,10 +128,10 @@ export class CashonizeConnector implements IWalletConnector {
       if (error.message?.includes('timeout')) {
         throw new Error(
           'Connection timeout. Please:\n\n' +
-          '1. Open Cashonize app on your mobile device\n' +
-          '2. Tap the scan icon\n' +
-          '3. Scan the QR code\n\n' +
-          'Download: https://cashonize.com'
+            '1. Open Cashonize app on your mobile device\n' +
+            '2. Tap the scan icon\n' +
+            '3. Scan the QR code\n\n' +
+            'Download: https://cashonize.com'
         );
       }
 
@@ -195,7 +195,9 @@ export class CashonizeConnector implements IWalletConnector {
     }
 
     try {
-      const response = await fetch(`/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`);
+      const response = await fetch(
+        `/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`
+      );
       if (!response.ok) {
         console.warn('[Cashonize] Balance API returned error:', response.status);
         return { bch: 0, sat: 0 };
@@ -236,14 +238,14 @@ export class CashonizeConnector implements IWalletConnector {
         },
       };
 
-      const result = await this.client.request({
+      const result = (await this.client.request({
         topic: this.session.topic,
         chainId: this.getChainId(),
         request: {
           method: 'bch_signTransaction',
           params: request,
         },
-      }) as any;
+      })) as any;
 
       return {
         txId: result.txid || result.signedTransactionHash,
@@ -277,14 +279,14 @@ export class CashonizeConnector implements IWalletConnector {
         sourceOutputs: options.sourceOutputs,
       };
 
-      const result = await this.client.request({
+      const result = (await this.client.request({
         topic: this.session.topic,
         chainId: this.getChainId(),
         request: {
           method: 'bch_signTransaction',
           params: request,
         },
-      }) as any;
+      })) as any;
 
       console.log('[Cashonize] Covenant transaction signed successfully');
 
@@ -309,7 +311,7 @@ export class CashonizeConnector implements IWalletConnector {
     const address = await this.getAddress();
 
     try {
-      const result = await this.client.request({
+      const result = (await this.client.request({
         topic: this.session.topic,
         chainId: this.getChainId(),
         request: {
@@ -322,7 +324,7 @@ export class CashonizeConnector implements IWalletConnector {
             },
           ],
         },
-      }) as any;
+      })) as any;
 
       return result.signature;
     } catch (error: any) {
@@ -383,7 +385,8 @@ export class CashonizeConnector implements IWalletConnector {
   private async showCashonizeQRModal(uri: string): Promise<void> {
     // Create modal
     this.qrModal = document.createElement('div');
-    this.qrModal.className = 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm';
+    this.qrModal.className =
+      'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm';
 
     // Generate QR code
     const qrDataUrl = await QRCode.toDataURL(uri, {

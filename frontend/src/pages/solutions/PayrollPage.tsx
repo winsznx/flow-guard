@@ -4,10 +4,16 @@ import { ArrowRight, Users, Calendar, Clock, Pause, DollarSign, Check } from 'lu
 import { Footer } from '../../components/layout/Footer';
 import { SolutionsDropdown } from '../../components/ui/SolutionsDropdown';
 import { NoiseBackground } from '../../components/ui/NoiseBackground';
+import { PageMeta } from '../../components/seo/PageMeta';
 
 export default function PayrollPage() {
   return (
     <main className="bg-background min-h-screen">
+      <PageMeta
+        title="Payroll"
+        description="Run BCH and CashToken payroll with fixed recurring schedules, refillable runway controls, and treasury-linked visibility."
+        path="/payroll"
+      />
       {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-b border-border/30 h-20">
         <div className="max-w-7xl mx-auto px-6 lg:px-12 h-full flex justify-between items-center">

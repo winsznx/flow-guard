@@ -3,6 +3,7 @@ import { useWalletModal } from '../hooks/useWalletModal';
 import { useAppMode } from '../hooks/useAppMode';
 import { ShieldCheck, UserCircle, ArrowRight, Zap, Target, Lock } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { PageMeta } from '../components/seo/PageMeta';
 
 export const SplitLoginScreen: React.FC = () => {
     const { openModal } = useWalletModal();
@@ -15,6 +16,11 @@ export const SplitLoginScreen: React.FC = () => {
 
     return (
         <div className="min-h-screen flex flex-col md:flex-row bg-background">
+            <PageMeta
+                title="Choose Your Workspace"
+                description="Choose your FlowGuard workspace for personal vaults, streams, payments, or organization treasury operations on Bitcoin Cash."
+                path="/app"
+            />
             {/* LHS - Branding & Value Prop */}
             <div className="hidden md:flex flex-col flex-1 bg-[#1a1a1a] text-white p-12 lg:p-20 relative overflow-hidden justify-between">
                 {/* Abstract Background Elements */}
@@ -27,24 +33,25 @@ export const SplitLoginScreen: React.FC = () => {
                     </Link>
 
                     <h1 className="text-4xl lg:text-5xl xl:text-6xl font-extrabold tracking-tight leading-tight mb-6">
-                        The standard <br />
-                        for on-chain <br />
-                        <span className="text-[#00E676]">treasuries.</span>
+                        The operating system <br />
+                        for on-chain finance. <br />
+                        <span className="text-white">on </span>
+                        <span className="text-white">Bitcoin</span><span className="text-[#00E676]">Cash.</span>
                     </h1>
                     <p className="text-lg text-gray-400 max-w-md leading-relaxed">
-                        FlowGuard is the operating system for next-generation protocol treasuries, streaming payroll, and decentralized governance built natively on Bitcoin Cash.
+                        FlowGuard helps teams manage BCH-native treasuries, vesting flows, payments, and governance workflows on Bitcoin Cash.
                     </p>
                 </div>
 
                 <div className="relative z-10 space-y-4">
                     <div className="flex items-center gap-3 text-sm text-gray-400 font-mono">
-                        <ShieldCheck className="w-5 h-5 text-[#00E676]" /> Audited CashScript Contracts
+                        <ShieldCheck className="w-5 h-5 text-[#00E676]" /> CashScript-native contracts
                     </div>
                     <div className="flex items-center gap-3 text-sm text-gray-400 font-mono">
-                        <Zap className="w-5 h-5 text-[#00E676]" /> Instant Settlement
+                        <Zap className="w-5 h-5 text-[#00E676]" /> Fast BCH settlement
                     </div>
                     <div className="flex items-center gap-3 text-sm text-gray-400 font-mono">
-                        <Lock className="w-5 h-5 text-[#00E676]" /> Zero Custody Architecture
+                        <Lock className="w-5 h-5 text-[#00E676]" /> Non-custodial by design
                     </div>
                 </div>
             </div>
@@ -57,8 +64,8 @@ export const SplitLoginScreen: React.FC = () => {
                 </div>
 
                 <div className="max-w-md w-full mx-auto">
-                    <h2 className="text-3xl font-extrabold text-[#1a1a1a] tracking-tight mb-2">Initialize Workspace</h2>
-                    <p className="text-textSecondary mb-10">Select your operating context to continue.</p>
+                    <h2 className="text-3xl font-extrabold text-[#1a1a1a] tracking-tight mb-2">Choose Your Workspace</h2>
+                    <p className="text-textSecondary mb-10">Select how you want to use FlowGuard.</p>
 
                     <div className="space-y-4">
                         {/* User Mode Button */}
@@ -71,9 +78,9 @@ export const SplitLoginScreen: React.FC = () => {
                                     <UserCircle className="w-6 h-6" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-bold text-textPrimary mb-1 group-hover:text-[#00E676] transition-colors">Personal Operations</h3>
+                                    <h3 className="text-lg font-bold text-textPrimary mb-1 group-hover:text-[#00E676] transition-colors">Personal Workspace</h3>
                                     <p className="text-sm text-textSecondary leading-relaxed">
-                                        Access private vaults, manage custom streams, and execute personal on-chain actions.
+                                        Manage personal vaults, vesting streams, payments, and individual on-chain actions.
                                     </p>
                                 </div>
                             </div>
@@ -95,7 +102,7 @@ export const SplitLoginScreen: React.FC = () => {
                                         <span className="bg-[#00E676] text-white text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-sans shrink-0">BETA</span>
                                     </h3>
                                     <p className="text-sm text-textSecondary leading-relaxed">
-                                        Manage multi-member treasuries, roles, governance, and centralized policy enforcement.
+                                        Manage multi-member treasuries, roles, governance workflows, and shared treasury policy controls.
                                     </p>
                                 </div>
                             </div>

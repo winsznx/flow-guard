@@ -4,10 +4,16 @@ import { ArrowRight, Lock, Calendar, Shield, TrendingUp, Users } from 'lucide-re
 import { Footer } from '../../components/layout/Footer';
 import { SolutionsDropdown } from '../../components/ui/SolutionsDropdown';
 import { NoiseBackground } from '../../components/ui/NoiseBackground';
+import { PageMeta } from '../../components/seo/PageMeta';
 
 export default function VestingPage() {
   return (
     <main className="bg-background min-h-screen">
+      <PageMeta
+        title="Vesting"
+        description="Launch contract-backed linear, cliffed, hybrid, milestone, tranche, and recurring release schedules on Bitcoin Cash."
+        path="/vesting"
+      />
       {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-b border-border/30 h-20">
         <div className="max-w-7xl mx-auto px-6 lg:px-12 h-full flex justify-between items-center">
@@ -65,8 +71,8 @@ export default function VestingPage() {
             transition={{ delay: 0.2 }}
             className="text-xl text-textSecondary mb-10 max-w-3xl mx-auto"
           >
-            Set cliff dates and unlock schedules upfront. Recipients see exactly when funds become available.
-            No manual transfers—withdrawals happen when the schedule allows.
+            Configure contract-backed linear vesting, milestone unlocks, and fixed recurring release schedules.
+            Recipients see exactly when funds become available, and withdrawals only happen when the covenant allows.
           </motion.p>
 
           <motion.div
@@ -97,8 +103,8 @@ export default function VestingPage() {
             {
               icon: Calendar,
               title: 'Fixed schedules',
-              description: 'Set cliff dates and unlock schedules upfront.',
-              detail: 'The timeline is locked in and cannot be changed after creation.',
+              description: 'Choose from continuous vesting, milestone unlocks, and fixed recurring releases.',
+              detail: 'The timeline is locked into the covenant and cannot be changed after creation.',
             },
             {
               icon: Shield,

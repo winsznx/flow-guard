@@ -1,8 +1,9 @@
 {
   "name": "@flowguard/frontend",
   "version": "0.1.0",
-  "description": "FlowGuard frontend dashboard",
+  "description": "FlowGuard web app for BCH treasuries, streams, payments, distributions, and governance",
   "type": "module",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

@@ -1,125 +1,147 @@
 # FlowGuard
 
-FlowGuard is a CashToken powered streaming and recurring payment protocol that encodes financial coordination logic directly into BCH UTXOs, enabling programmable treasury systems and token native economic flows. It turns BCH from static value storage into programmable value flow.
+FlowGuard is a BCH-native operating layer for contract-backed treasuries, streams, payments, distributions, and governance workflows on Bitcoin Cash.
 
-## Components
-* Frontend: React and Vite (`frontend/`), WalletConnect v2 (Paytaca, Selene), talks to `/api`.
-* Backend API: Express and TypeScript (`backend/`), builds WC transactions, stores state in SQLite (better sqlite3) by default.
-* Indexer (optional): Postgres based chain indexer (`backend/indexer/`) for richer explorer and state queries.
-* Executor (optional): Postgres based automation worker (`backend/executor/`) to auto execute ready tasks.
-* Contracts: CashScript covenants (`contracts/`) compiled to `contracts/artifacts/`.
+It combines CashScript covenants, wallet-driven signing, backend transaction builders, and indexer activity views so teams can run treasury logic on-chain without giving custody to an application server.
 
-## Quick Start (Chipnet dev)
+## What FlowGuard includes
+
+- Multi-member treasury vaults with policy controls, proposal workflows, and activity tracking
+- Contract-backed stream families for linear, cliffed linear, hybrid, recurring, refillable recurring, milestone, and tranche schedules
+- One-time payments and recurring payout flows
+- Airdrops, rewards, bounties, and grants backed by on-chain contract logic
+- Governance proposal and vote-lock infrastructure for treasury-linked decision making
+- Personal and organization workspace surfaces in the frontend
+
+## Stream families supported today
+
+FlowGuard does not treat every schedule as the same thing under the hood. The app currently ships with contract-backed support for:
+
+- Linear vesting
+- Linear vesting with a cliff
+- Hybrid schedules with an upfront unlock and linear tail
+- Fixed-cadence recurring schedules
+- Refillable recurring schedules
+- Milestone-based step schedules
+- Bounded custom tranche schedules
+
+The frontend includes a shape gallery, schedule previews, row-level batch charts, batch history, treasury-linked activity feeds, and personal or organization launch flows for the same shared stream builders.
+
+## Repository layout
+
+- `frontend/`
+  React + Vite application for the public site, personal workspace, and organization workspace
+- `backend/`
+  Express + TypeScript API for transaction building, app state, indexing hooks, and execution services
+- `contracts/`
+  CashScript covenant source and compiled artifacts for treasury, streaming, distribution, and governance modules
+- `docs/`
+  Product, guide, API, and reference documentation
+
+## Core architecture
+
+FlowGuard keeps users in control of signing:
+
+1. The frontend collects configuration and requests a transaction build.
+2. The backend assembles a contract-aware unsigned transaction descriptor.
+3. The user signs in a BCH wallet.
+4. The signed transaction is broadcast to the Bitcoin Cash network.
+5. The app observes the resulting contract state and updates activity/history views.
+
+## Quick start
+
+### 1. Install dependencies
+
 ```bash
 pnpm install
+```
 
-# Contracts
-cd contracts && pnpm run build
+### 2. Build the contracts
 
-# Backend (SQLite)
-cd ../backend
+```bash
+cd contracts
+pnpm run build
+```
+
+### 3. Start the backend
+
+```bash
+cd backend
 cp .env.example .env
 pnpm dev
+```
 
-# Frontend
-cd ../frontend
+### 4. Start the frontend
+
+```bash
+cd frontend
 pnpm dev
 ```
-Open http://localhost:5173 (wallet on chipnet).
 
-## Environment
-Backend (`backend/.env`):
-* `PORT` default 3001
-* `BCH_NETWORK=chipnet|mainnet`
-* `DATABASE_PATH=./flowguard.db` (use a mounted volume in prod)
-* Optional: `CHAINGRAPH_URL`
+Open `http://localhost:5173`.
 
-Indexer (`backend/indexer/.env`):
-* `DATABASE_URL` (Postgres)
-* `BCH_NETWORK`, `ELECTRUM_SERVER`
-* `START_BLOCK`, `CONFIRMATIONS`, `POLL_INTERVAL`
+## Environment overview
 
-Executor (`backend/executor/.env`):
-* `DATABASE_URL` (same Postgres as indexer)
-* `BCH_NETWORK`, `ELECTRUM_SERVER`
-* `POLL_INTERVAL`, `MAX_GAS_PRICE`
-* Optional `EXECUTOR_PRIVATE_KEY` (WIF) to pay fees
+### Backend
 
-Frontend:
-* `VITE_API_BASE_URL` pointing to backend host
+Key environment values in `backend/.env`:
 
-## Build
-```bash
-# contracts
-cd contracts && pnpm run build
-# backend
-cd ../backend && pnpm build
-# frontend
-cd ../frontend && pnpm build
-```
+- `PORT`
+- `BCH_NETWORK=chipnet|mainnet`
+- `DATABASE_PATH`
+- `CHAINGRAPH_URL` for richer chain indexing when configured
+- backend authority or fee-payer values used by specific product flows, when enabled
 
-## Deployment
-* Frontend: Vercel (static `frontend/dist`, set `VITE_API_BASE_URL`).
-* Backend API: Railway (Dockerfile), mount volume `/data` and set `DATABASE_PATH=/data/flowguard.db`.
-* Indexer (optional): Railway service with Postgres add on; run `pnpm build && node dist/index.js`.
-* Executor (optional): Railway service with Postgres; run `pnpm build && node dist/index.js`.
+### Frontend
 
-## Architecture (mermaid, focused views)
-
-### User -> API -> Wallet
-```mermaid
-flowchart LR
-  UI[Frontend] -->|REST /api| API[API]
-  API -->|wcTransaction| UI
-  UI -->|signCashScriptTransaction| WAL[Wallet]
-  WAL -->|broadcast| BCH[BCH Network]
-```
+- `VITE_API_BASE_URL` pointing at the backend host
 
 ### Optional services
-```mermaid
-flowchart LR
-  API["API (SQLite)"] -.-> IDX["Indexer (Postgres)"]
-  IDX -->|state UTXOs| BCH["BCH Network"]
-  EXE["Executor (Postgres)"] -->|polls tasks| IDX
-  EXE -->|exec tx| BCH
+
+The repo also includes optional indexer and executor services under `backend/indexer/` and `backend/executor/` for richer activity and automation workflows.
+
+## Build commands
+
+```bash
+pnpm build
 ```
 
-## Data flow (create and sign)
-```mermaid
-sequenceDiagram
-  participant User
-  participant Frontend
-  participant API
-  participant Wallet
-  participant BCH as BCH Network
+Or per workspace:
 
-  User->>Frontend: Create vault / stream / airdrop
-  Frontend->>API: POST create (params)
-  API->>API: Build WC transaction (contract input + sourceOutputs)
-  API-->>Frontend: wcTransaction
-  Frontend->>Wallet: signCashScriptTransaction(wcTransaction)
-  Wallet->>BCH: Broadcast
-  BCH-->>API: UTXO confirmed
-  API-->>Frontend: status/txid
+```bash
+cd contracts && pnpm run build
+cd backend && pnpm build
+cd frontend && pnpm build
 ```
 
-## How it works (at a glance)
-```mermaid
-graph TD
-  A["User action\n(create/approve/claim)"] --> B["API builds unsigned tx\n+ sourceOutputs"]
-  B --> C["Wallet signs via WC2\n(empty unlocking for user UTXOs)"]
-  C --> D["BCH network\ncovenant validates"]
-  D --> E["API/indexer observe UTXO\nupdate state in DB"]
-  E --> F["UI refreshes status\nshows tx links"]
+## Contract verification commands
+
+Current local verification paths:
+
+```bash
+cd contracts && pnpm run check
+cd contracts && pnpm run test:unit
+cd contracts && pnpm run test:streaming
 ```
 
-## Wallets
-* Tested: Paytaca, Selene (WC2 `bch_signTransaction` with `sourceOutputs`).
-* CashTokens share the same cashaddr; no separate token address.
+## Deployment notes
 
-## Status and Safety
-* Designed and wired for chipnet; mainnet use only after audits and your own testing.
-* Backend cannot override covenant rules; funds remain non custodial.
+- Frontend: static deployment for `frontend/dist`
+- Backend API: Node deployment with persistent storage for SQLite when used
+- Contracts: compiled locally and consumed by the backend and tests
+- Docs: Mint-based documentation under `docs/`
+
+Production use should follow contract review, operational testing, and wallet compatibility checks before mainnet rollout.
+
+## Documentation
+
+- Product docs: `docs/`
+- Public docs site: `https://docs.flowguard.cash`
+
+## Status
+
+FlowGuard is actively evolving. Some surfaces are still marked alpha, beta, or preview while the contract-backed flows continue to expand across treasury, stream, distribution, and governance modules.
 
 ## License
-MIT
+
+MIT. See [LICENSE](./LICENSE).

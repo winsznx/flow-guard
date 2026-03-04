@@ -1,8 +1,9 @@
 {
   "name": "flowguard",
   "version": "0.1.0",
-  "description": "Safe, automated, on-chain treasury management for BCH-native teams",
+  "description": "Contract-backed treasuries, streams, payments, distributions, and governance on Bitcoin Cash",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "contracts",
     "frontend",
@@ -24,4 +25,3 @@
     "pnpm": ">=8.0.0"
   }
 }
-

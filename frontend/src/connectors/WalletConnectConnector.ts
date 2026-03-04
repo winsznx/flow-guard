@@ -22,7 +22,8 @@ import type {
 
 // WalletConnect Cloud project ID (free tier)
 // Get yours at: https://cloud.walletconnect.com
-const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1';
+const WALLETCONNECT_PROJECT_ID =
+  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1';
 
 export class WalletConnectConnector implements IWalletConnector {
   type: WalletType = 'walletconnect' as WalletType;
@@ -49,7 +50,7 @@ export class WalletConnectConnector implements IWalletConnector {
       if (!WALLETCONNECT_PROJECT_ID || WALLETCONNECT_PROJECT_ID === 'demo-project-id') {
         throw new Error(
           'WalletConnect requires a project ID. Get one free at https://cloud.walletconnect.com\n' +
-          'Then add to .env.local: VITE_WALLETCONNECT_PROJECT_ID=your-id'
+            'Then add to .env.local: VITE_WALLETCONNECT_PROJECT_ID=your-id'
         );
       }
 
@@ -58,7 +59,7 @@ export class WalletConnectConnector implements IWalletConnector {
         projectId: WALLETCONNECT_PROJECT_ID,
         metadata: {
           name: 'FlowGuard',
-          description: 'On-Chain Treasury Management for Bitcoin Cash',
+          description: 'BCH-native treasuries, streams, payments, and governance',
           url: window.location.origin,
           icons: [`${window.location.origin}/favicon.svg`],
         },
@@ -87,11 +88,7 @@ export class WalletConnectConnector implements IWalletConnector {
         // Use requiredNamespaces to force specific network
         requiredNamespaces: {
           bch: {
-            methods: [
-              'bch_signTransaction',
-              'bch_signMessage',
-              'bch_getAddresses',
-            ],
+            methods: ['bch_signTransaction', 'bch_signMessage', 'bch_getAddresses'],
             chains: [primaryChain], // Force chipnet or mainnet based on VITE_BCH_NETWORK
             events: ['addressesChanged', 'disconnect'],
           },
@@ -112,7 +109,7 @@ export class WalletConnectConnector implements IWalletConnector {
         setTimeout(() => reject(new Error('Connection timeout - please try again')), 120000); // 2 minutes
       });
 
-      this.session = await Promise.race([approval(), approvalTimeout]) as SessionTypes.Struct;
+      this.session = (await Promise.race([approval(), approvalTimeout])) as SessionTypes.Struct;
       this.hideQRCodeModal();
 
       console.log('Session approved:', this.session);
@@ -123,15 +120,17 @@ export class WalletConnectConnector implements IWalletConnector {
       console.error('WalletConnect connection error:', error);
 
       if (error.message.includes('No matching key')) {
-        throw new Error('No BCH wallet connected. Please make sure you have Zapit or Cashonize installed on your mobile device.');
+        throw new Error(
+          'No BCH wallet connected. Please make sure you have Zapit or Cashonize installed on your mobile device.'
+        );
       }
 
       if (error.message.includes('Connection timeout')) {
         throw new Error(
           'Connection timeout. Possible issues:\n\n' +
-          '1. Wallet app not responding\n' +
-          '2. Network/firewall blocking WalletConnect\n' +
-          '3. Use Paytaca extension (desktop) or Testing Wallet instead'
+            '1. Wallet app not responding\n' +
+            '2. Network/firewall blocking WalletConnect\n' +
+            '3. Use Paytaca extension (desktop) or Testing Wallet instead'
         );
       }
 
@@ -139,13 +138,13 @@ export class WalletConnectConnector implements IWalletConnector {
       if (error.message?.includes('WebSocket') || error.toString().includes('WebSocket')) {
         throw new Error(
           'Cannot connect to WalletConnect relay.\n\n' +
-          'This might be due to:\n' +
-          '- Network/firewall blocking websockets\n' +
-          '- VPN/proxy interference\n\n' +
-          'Try:\n' +
-          '1. Use Paytaca extension (easier for desktop)\n' +
-          '2. Or use Testing Wallet option\n\n' +
-          'See WALLET_CONNECTION_FIX.md for help'
+            'This might be due to:\n' +
+            '- Network/firewall blocking websockets\n' +
+            '- VPN/proxy interference\n\n' +
+            'Try:\n' +
+            '1. Use Paytaca extension (easier for desktop)\n' +
+            '2. Or use Testing Wallet option\n\n' +
+            'See WALLET_CONNECTION_FIX.md for help'
         );
       }
 
@@ -240,10 +239,12 @@ export class WalletConnectConnector implements IWalletConnector {
       this.hideQRCodeModal();
       if (this.client) {
         // Cancel connection attempt
-        this.client.disconnect({
-          topic: '',
-          reason: { code: 6000, message: 'User cancelled' },
-        }).catch(console.error);
+        this.client
+          .disconnect({
+            topic: '',
+            reason: { code: 6000, message: 'User cancelled' },
+          })
+          .catch(console.error);
       }
     });
   }
@@ -349,7 +350,7 @@ export class WalletConnectConnector implements IWalletConnector {
     // Use placeholder substitution like Paytaca
     throw new Error(
       'WalletConnect uses placeholder substitution for signatures. ' +
-      'Pass placeholder pubkeys in transaction template.'
+        'Pass placeholder pubkeys in transaction template.'
     );
   }
 
@@ -359,7 +360,9 @@ export class WalletConnectConnector implements IWalletConnector {
     }
 
     try {
-      const response = await fetch(`/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`);
+      const response = await fetch(
+        `/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`
+      );
       if (!response.ok) {
         console.warn('Balance API returned error:', response.status);
         return { bch: 0, sat: 0 };
@@ -382,9 +385,7 @@ export class WalletConnectConnector implements IWalletConnector {
   /**
    * Sign CashScript transaction via WalletConnect
    */
-  async signCashScriptTransaction(
-    options: CashScriptSignOptions
-  ): Promise<CashScriptSignResponse> {
+  async signCashScriptTransaction(options: CashScriptSignOptions): Promise<CashScriptSignResponse> {
     if (!this.client || !this.session) {
       throw new Error('Wallet not connected');
     }
@@ -397,12 +398,14 @@ export class WalletConnectConnector implements IWalletConnector {
       console.log('Signing transaction on chain:', connectedChain);
 
       // Use libauth stringify for proper serialization (handles Uint8Arrays, BigInts, etc.)
-      const serializedParams = JSON.parse(stringify({
-        transaction: options.transaction,
-        sourceOutputs: options.sourceOutputs,
-        broadcast: options.broadcast ?? true,
-        userPrompt: options.userPrompt,
-      }));
+      const serializedParams = JSON.parse(
+        stringify({
+          transaction: options.transaction,
+          sourceOutputs: options.sourceOutputs,
+          broadcast: options.broadcast ?? true,
+          userPrompt: options.userPrompt,
+        })
+      );
 
       const result = await this.client.request({
         topic: this.session.topic,

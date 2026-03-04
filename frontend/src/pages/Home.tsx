@@ -1,26 +1,44 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Lock, Vote, Zap, CheckCircle2, ArrowRight, Database, Clock, Coins, Users, PieChart, Gift, Eye, Menu, X, ChevronDown } from 'lucide-react';
+import {
+  Shield,
+  Lock,
+  Vote,
+  Zap,
+  CheckCircle2,
+  ArrowRight,
+  Database,
+  Clock,
+  Coins,
+  Users,
+  PieChart,
+  Gift,
+  Eye,
+  Menu,
+  X,
+  ChevronDown,
+} from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
 import { ResourcesDropdown } from '../components/ui/ResourcesDropdown';
 import { MobileMenu } from '../components/layout/MobileMenu';
 import Hero3D from '../components/hero/Hero3D';
 import { NoiseBackground } from '../components/ui/NoiseBackground';
+import { PageMeta } from '../components/seo/PageMeta';
 
 const fadeInUp = {
   initial: { opacity: 0, y: 60 },
   animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.6, ease: 'easeOut' as const }
+  transition: { duration: 0.6, ease: 'easeOut' as const },
 };
 
 const staggerContainer = {
   animate: {
     transition: {
-      staggerChildren: 0.1
-    }
-  }
+      staggerChildren: 0.1,
+    },
+  },
 };
 
 export default function Home() {
@@ -29,27 +47,35 @@ export default function Home() {
 
   return (
     <main className="bg-background min-h-screen">
+      <PageMeta
+        title="FlowGuard — The Operating Layer for On-Chain Finance"
+        description="Contract-backed treasuries, streams, payments, distributions, and governance workflows on Bitcoin Cash."
+        path="/"
+      />
       <MobileMenu isOpen={isMobileMenuOpen} onClose={() => setIsMobileMenuOpen(false)} />
       <nav className="fixed top-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-b border-border/30 h-20">
         <div className="max-w-7xl mx-auto px-6 lg:px-12 h-full flex justify-between items-center">
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-          >
+          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
             <Link to="/">
-              <img
-                src="/assets/flow-green.png"
-                alt="FlowGuard"
-                className="h-8 object-contain"
-              />
+              <img src="/assets/flow-green.png" alt="FlowGuard" className="h-8 object-contain" />
             </Link>
           </motion.div>
           <div className="hidden md:flex items-center space-x-10">
             <SolutionsDropdown />
-            <a href="https://docs.flowguard.cash" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors">
+            <a
+              href="https://docs.flowguard.cash"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors"
+            >
               Developers
             </a>
-            <a href="#security" className="text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors">Security</a>
+            <a
+              href="#security"
+              className="text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors"
+            >
+              Security
+            </a>
             <ResourcesDropdown />
             <Link to="/app">
               <motion.button
@@ -92,9 +118,9 @@ export default function Home() {
                 {...fadeInUp}
                 className="font-display text-4xl md:text-5xl lg:text-6xl leading-[0.95] mb-4 text-textPrimary"
               >
-                Where Logic
+                The Operating Layer
                 <br />
-                <span className="text-brand300">Becomes Law</span>
+                <span className="text-brand300">for On-Chain Finance</span>
               </motion.h1>
 
               <motion.p
@@ -102,7 +128,8 @@ export default function Home() {
                 transition={{ delay: 0.1, duration: 0.6 }}
                 className="text-lg md:text-xl text-textSecondary mb-6 leading-relaxed"
               >
-                The Protocol for Guaranteed, Permissionless Fund Movement on BCH.
+                Contract-backed treasuries, streams, payments, distributions, and governance
+                workflows on Bitcoin Cash.
               </motion.p>
 
               <motion.div
@@ -113,15 +140,23 @@ export default function Home() {
                 <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
                   <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="font-medium text-textPrimary mb-1 text-sm">Rules enforced Onchain</p>
-                    <p className="text-xs text-textSecondary">Spending limits and release conditions cannot be overridden</p>
+                    <p className="font-medium text-textPrimary mb-1 text-sm">
+                      Rules enforced Onchain
+                    </p>
+                    <p className="text-xs text-textSecondary">
+                      Spending limits and release conditions cannot be overridden
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
                   <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="font-medium text-textPrimary mb-1 text-sm">Time-locked by default</p>
-                    <p className="text-xs text-textSecondary">Funds unlock only when the time conditions are met</p>
+                    <p className="font-medium text-textPrimary mb-1 text-sm">
+                      Time-locked by default
+                    </p>
+                    <p className="text-xs text-textSecondary">
+                      Funds unlock only when the time conditions are met
+                    </p>
                   </div>
                 </div>
               </motion.div>
@@ -145,7 +180,9 @@ export default function Home() {
                   href="#features"
                   onClick={(e) => {
                     e.preventDefault();
-                    document.querySelector('#features')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    document
+                      .querySelector('#features')
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                   }}
                 >
                   <motion.button
@@ -171,7 +208,6 @@ export default function Home() {
         </div>
       </section>
 
-
       <section className="py-6 md:py-8 px-4 md:px-6 border-y border-border/30 bg-surfaceAlt/20 mt-8">
         <div className="max-w-7xl mx-auto">
           <motion.div
@@ -180,7 +216,13 @@ export default function Home() {
             viewport={{ once: true }}
             className="flex flex-wrap justify-center md:justify-between items-center gap-6 md:gap-8"
           >
-            {['You Control the Funds', 'Built on Bitcoin Cash', 'Publicly Verifiable', 'CashTokens Support', 'Open Source'].map((item, i) => (
+            {[
+              'You Control the Funds',
+              'Built on Bitcoin Cash',
+              'Publicly Verifiable',
+              'CashTokens Support',
+              'Open Source',
+            ].map((item, i) => (
               <motion.span
                 key={item}
                 initial={{ opacity: 0, y: 20 }}
@@ -206,12 +248,13 @@ export default function Home() {
               transition={{ duration: 0.7 }}
             >
               <h2 className="font-display text-5xl mb-8 text-textPrimary leading-tight">
-                The problem with manual treasury management
+                The problem with manual treasury and payout operations
               </h2>
               <div className="space-y-6 text-lg text-textSecondary">
                 <p>
                   Traditional multisig wallets require manual coordination for every payment.
-                  Budgets are tracked in spreadsheets. Spending caps aren't enforced—they're just guidelines.
+                  Budgets are tracked in spreadsheets. Spending caps aren't enforced—they're just
+                  guidelines.
                 </p>
                 <p>
                   Every payment requires manual coordination. Budget tracking is error-prone.
@@ -228,15 +271,18 @@ export default function Home() {
               className="relative"
             >
               <div className="bg-surfaceAlt/30 border border-border rounded-3xl p-10">
-                <h3 className="font-display text-4xl mb-6 text-textPrimary">FlowGuard automates this</h3>
+                <h3 className="font-display text-4xl mb-6 text-textPrimary">
+                  FlowGuard automates this
+                </h3>
                 <div className="space-y-6 text-lg text-textSecondary">
                   <p>
-                    Set the rules once, and the blockchain enforces them automatically.
-                    Spending caps that can't be exceeded. Approval requirements that can't be bypassed.
+                    Set the rules once, and the blockchain enforces them automatically. Spending
+                    caps that can't be exceeded. Approval requirements that can't be bypassed.
                   </p>
                   <p>
-                    Payments happen on schedule without manual intervention. All activity is publicly visible.
-                    Rules are locked in—no one can change them, not even the signers.
+                    Payments happen on schedule without manual intervention. All activity is
+                    publicly visible. Rules are locked in—no one can change them, not even the
+                    signers.
                   </p>
                 </div>
               </div>
@@ -245,7 +291,10 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="features" className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-4 md:px-6 lg:px-12 bg-surfaceAlt/10">
+      <section
+        id="features"
+        className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-4 md:px-6 lg:px-12 bg-surfaceAlt/10"
+      >
         <div className="max-w-7xl mx-auto">
           <motion.div
             initial={{ opacity: 0, y: 40 }}
@@ -253,9 +302,12 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-10 md:mb-12 lg:mb-16"
           >
-            <h2 className="font-display text-3xl md:text-5xl lg:text-6xl mb-4 md:mb-6 text-textPrimary">What FlowGuard Can Do</h2>
+            <h2 className="font-display text-3xl md:text-5xl lg:text-6xl mb-4 md:mb-6 text-textPrimary">
+              What FlowGuard Can Do
+            </h2>
             <p className="text-base md:text-lg lg:text-xl text-textSecondary max-w-3xl mx-auto">
-              Complete treasury management with automated controls, governance, and transparency
+              BCH-native treasuries, vesting, payments, distributions, and governance in one
+              contract-backed product surface
             </p>
           </motion.div>
 
@@ -276,11 +328,18 @@ export default function Home() {
             >
               <div className="h-full flex flex-col">
                 <div className="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16 mb-4 md:mb-5 lg:mb-6">
-                  <img src="/assets/features/treasury.png" alt="Treasury" className="w-full h-full object-contain" />
+                  <img
+                    src="/assets/features/treasury.png"
+                    alt="Treasury"
+                    className="w-full h-full object-contain"
+                  />
                 </div>
-                <h3 className="font-display text-lg md:text-xl lg:text-2xl mb-2 md:mb-3 lg:mb-4 text-textPrimary">Treasury Management</h3>
+                <h3 className="font-display text-lg md:text-xl lg:text-2xl mb-2 md:mb-3 lg:mb-4 text-textPrimary">
+                  Treasury Management
+                </h3>
                 <p className="text-sm md:text-base text-textSecondary leading-relaxed mb-4 md:mb-5 lg:mb-6 lg:flex-grow">
-                  Create and manage multiple treasuries with customizable rules. Set spending limits, approval workflows, and automated controls. Full transparency with on-chain activity tracking.
+                  Run BCH and CashToken treasuries with signer thresholds, spending policies,
+                  proposal execution, and multi-asset activity tracking.
                 </p>
                 <div className="space-y-2">
                   <div className="flex items-center text-sm text-textSecondary">
@@ -308,11 +367,18 @@ export default function Home() {
               className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/vesting.png" alt="Vesting" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/vesting.png"
+                  alt="Vesting"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Vesting</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Streams & Vesting
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Set up token vesting schedules with customizable cliffs and unlock periods. Automated distribution on schedule.
+                Launch linear, cliffed, hybrid, milestone, and tranche schedules with previews,
+                claims, and transferable state where supported.
               </p>
             </motion.div>
 
@@ -325,11 +391,18 @@ export default function Home() {
               className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/payments.png" alt="Payments" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/payments.png"
+                  alt="Payments"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Payments</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Payments
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Execute one-time or recurring payments with automated scheduling. No manual intervention required.
+                Execute one-time, recurring, and refillable recurring payouts with explicit cadence,
+                auditable execution, and BCH-native settlement.
               </p>
             </motion.div>
 
@@ -342,11 +415,18 @@ export default function Home() {
               className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/proposals.png" alt="Proposals" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/proposals.png"
+                  alt="Proposals"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Proposals</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Proposals
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Create and vote on treasury proposals. Transparent decision-making with configurable approval thresholds.
+                Create and vote on treasury proposals. Transparent decision-making with configurable
+                approval thresholds.
               </p>
             </motion.div>
 
@@ -359,11 +439,18 @@ export default function Home() {
               className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/budget.png" alt="Budget Plans" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/budget.png"
+                  alt="Budget Plans"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Budget Plans</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Budget Plans
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Define spending budgets by category, time period, or recipient. Automatic enforcement prevents overspending.
+                Define spending budgets by category, time period, or recipient. Automatic
+                enforcement prevents overspending.
               </p>
             </motion.div>
 
@@ -376,11 +463,18 @@ export default function Home() {
               className="lg:col-span-2 bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/explorer.png" alt="Activity Explorer" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/explorer.png"
+                  alt="Activity Explorer"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Activity Explorer</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Activity Explorer
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Track all treasury activity in real-time. View approvals, payments, unlocks, and governance actions. Complete transparency with blockchain verification.
+                Track all treasury activity in real-time. View approvals, payments, unlocks, and
+                governance actions. Complete transparency with blockchain verification.
               </p>
             </motion.div>
 
@@ -393,11 +487,18 @@ export default function Home() {
               className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/governance.png" alt="Governance" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/governance.png"
+                  alt="Governance"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Governance</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Governance
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                On-chain governance with configurable voting rules. Democratic decision-making for treasury management.
+                Connect proposals, approvals, and treasury actions with vote-lock governance and
+                contract-backed execution traces.
               </p>
             </motion.div>
 
@@ -410,11 +511,18 @@ export default function Home() {
               className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
             >
               <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img src="/assets/features/airdrops.png" alt="Airdrops" className="w-full h-full object-contain" />
+                <img
+                  src="/assets/features/airdrops.png"
+                  alt="Airdrops"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">Airdrops</h3>
+              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
+                Airdrops
+              </h3>
               <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Distribute tokens to multiple recipients efficiently. Batch processing with automated execution.
+                Distribute tokens to multiple recipients efficiently. Batch processing with
+                automated execution.
               </p>
             </motion.div>
           </motion.div>
@@ -431,16 +539,32 @@ export default function Home() {
           >
             <h2 className="font-display text-6xl mb-6 text-textPrimary">How FlowGuard Works</h2>
             <p className="text-xl text-textSecondary max-w-3xl mx-auto">
-              Four simple steps to automate your treasury
+              Four steps to move treasury and payout operations onto contract-backed rails
             </p>
           </motion.div>
 
           <div className="grid md:grid-cols-4 gap-8">
             {[
-              { num: '01', title: 'Create Treasury', desc: 'Set who can approve spending, what the limits are, and how funds unlock. Add initial funds to get started.' },
-              { num: '02', title: 'Set Up Schedules', desc: 'Define budgets, vesting, or recurring payments. Set the amounts and timing for each.' },
-              { num: '03', title: 'Approve Proposals', desc: 'Large expenses require multiple approvals. You choose how many signers need to approve.' },
-              { num: '04', title: 'Funds Release', desc: 'Payments happen on schedule or when approvals are met. Rules are checked automatically.' }
+              {
+                num: '01',
+                title: 'Create Treasury',
+                desc: 'Set signer thresholds, spending policy, and treasury limits. Fund the vault or linked payment flow with BCH or CashTokens.',
+              },
+              {
+                num: '02',
+                title: 'Choose a Schedule',
+                desc: 'Launch linear, hybrid, milestone, tranche, or recurring payout flows and preview how each unlock path behaves.',
+              },
+              {
+                num: '03',
+                title: 'Approve Sensitive Actions',
+                desc: 'Use proposals and signer policy for treasury actions that require review before funds move.',
+              },
+              {
+                num: '04',
+                title: 'Execute or Claim',
+                desc: 'Valid contract transitions can be signed, claimed, resumed, paused, or refilled directly from the product.',
+              },
             ].map((step, i) => (
               <motion.div
                 key={i}
@@ -461,7 +585,10 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="security" className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-6 lg:px-12 bg-surfaceAlt/10">
+      <section
+        id="security"
+        className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-6 lg:px-12 bg-surfaceAlt/10"
+      >
         <div className="max-w-7xl mx-auto">
           <motion.div
             initial={{ opacity: 0, y: 40 }}
@@ -486,8 +613,13 @@ export default function Home() {
               <div className="w-16 h-16 rounded-full bg-brand300/20 flex items-center justify-center mx-auto mb-6">
                 <Shield className="w-8 h-8 text-brand300" />
               </div>
-              <h3 className="font-display text-2xl text-textPrimary mb-4">Rules locked into the blockchain</h3>
-              <p className="text-textSecondary">Spending rules are part of the blockchain itself. They can't be bypassed or changed after creation.</p>
+              <h3 className="font-display text-2xl text-textPrimary mb-4">
+                Rules locked into the blockchain
+              </h3>
+              <p className="text-textSecondary">
+                Spending rules are part of the blockchain itself. They can't be bypassed or changed
+                after creation.
+              </p>
             </motion.div>
 
             <motion.div
@@ -501,7 +633,9 @@ export default function Home() {
                 <Lock className="w-8 h-8 text-brand300" />
               </div>
               <h3 className="font-display text-2xl text-textPrimary mb-4">You control the funds</h3>
-              <p className="text-textSecondary">FlowGuard doesn't have access to your treasury. No third party controls your funds.</p>
+              <p className="text-textSecondary">
+                FlowGuard doesn't have access to your treasury. No third party controls your funds.
+              </p>
             </motion.div>
 
             <motion.div
@@ -514,8 +648,13 @@ export default function Home() {
               <div className="w-16 h-16 rounded-full bg-brand300/20 flex items-center justify-center mx-auto mb-6">
                 <Eye className="w-8 h-8 text-brand300" />
               </div>
-              <h3 className="font-display text-2xl text-textPrimary mb-4">All activity is publicly verifiable</h3>
-              <p className="text-textSecondary">Every approval, payment, and unlock is recorded on the blockchain for anyone to audit.</p>
+              <h3 className="font-display text-2xl text-textPrimary mb-4">
+                All activity is publicly verifiable
+              </h3>
+              <p className="text-textSecondary">
+                Every approval, payment, and unlock is recorded on the blockchain for anyone to
+                audit.
+              </p>
             </motion.div>
           </div>
 
@@ -525,7 +664,11 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mt-12"
           >
-            <a href="https://docs.flowguard.cash/security" target="_blank" rel="noopener noreferrer">
+            <a
+              href="https://docs.flowguard.cash/security"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               <button className="text-primary hover:text-primaryHover font-semibold inline-flex items-center gap-2 group">
                 Learn more about security
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
@@ -615,12 +758,18 @@ export default function Home() {
               <div className="border-2 border-warning/40 bg-warning/5 p-10 rounded-3xl">
                 <div className="flex items-center gap-3 mb-6">
                   <span className="w-3 h-3 rounded-full bg-warning animate-pulse" />
-                  <h3 className="text-warning text-sm font-mono uppercase tracking-wider">Deployment Status</h3>
+                  <h3 className="text-warning text-sm font-mono uppercase tracking-wider">
+                    Deployment Status
+                  </h3>
                 </div>
-                <p className="font-display text-4xl mb-6 text-textPrimary">Alpha Integration Phase</p>
+                <p className="font-display text-4xl mb-6 text-textPrimary">
+                  Alpha Integration Phase
+                </p>
                 <p className="text-textSecondary leading-relaxed">
-                  Basic multisig and guardrails operational on Chipnet. Advanced features (governance tallying, arbitrary M-of-N)
-                  scheduled for <strong className="text-textPrimary">May 15, 2026</strong> following BCHN Layla upgrade.
+                  Basic multisig and guardrails operational on Chipnet. Advanced features
+                  (governance tallying, arbitrary M-of-N) scheduled for{' '}
+                  <strong className="text-textPrimary">May 15, 2026</strong> following BCHN Layla
+                  upgrade.
                 </p>
               </div>
             </motion.div>
@@ -634,8 +783,9 @@ export default function Home() {
                 Engineered for Layla CHIPs
               </h2>
               <p className="text-lg text-textSecondary mb-8 leading-relaxed">
-                FlowGuard uses modular covenants for efficient state encoding and predictable execution.
-                Post-May 2026, Loops, Functions, and Bitwise CHIPs enable trustless vote tallying and arbitrary M-of-N.
+                FlowGuard uses modular covenants for efficient state encoding and predictable
+                execution. Post-May 2026, Loops, Functions, and Bitwise CHIPs enable trustless vote
+                tallying and arbitrary M-of-N.
               </p>
               <div className="space-y-3 font-mono text-sm text-textMuted">
                 <div className="flex items-center gap-3">
@@ -660,7 +810,10 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="faq" className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-6 lg:px-12 bg-surfaceAlt/10">
+      <section
+        id="faq"
+        className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-6 lg:px-12 bg-surfaceAlt/10"
+      >
         <div className="max-w-4xl mx-auto">
           <motion.div
             initial={{ opacity: 0, y: 40 }}
@@ -668,35 +821,37 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="font-display text-6xl mb-6 text-textPrimary">Frequently asked questions</h2>
+            <h2 className="font-display text-6xl mb-6 text-textPrimary">
+              Frequently asked questions
+            </h2>
           </motion.div>
 
           <div className="space-y-3">
             {[
               {
                 q: 'Who controls the funds?',
-                a: "You do. FlowGuard doesn't hold your keys or have access to treasury funds. You set the rules, and the blockchain enforces them—no middleman."
+                a: "You do. FlowGuard doesn't hold your keys or have access to treasury funds. You set the rules, and the blockchain enforces them—no middleman.",
               },
               {
                 q: 'Do payments happen automatically?',
-                a: 'Yes and no. Payments unlock automatically when the schedule allows, but someone (you or an executor service) must broadcast the transaction to the network. Think of it like a time-locked safe—it opens on time, but someone still needs to take the funds out.'
+                a: 'Yes and no. Payments unlock automatically when the schedule allows, but someone (you or an executor service) must broadcast the transaction to the network. Think of it like a time-locked safe—it opens on time, but someone still needs to take the funds out.',
               },
               {
                 q: 'Can spending rules be changed after creation?',
-                a: 'No. Once a treasury is created with specific rules, those rules are permanent. This prevents anyone from changing the limits or bypassing approvals later.'
+                a: 'No. Once a treasury is created with specific rules, those rules are permanent. This prevents anyone from changing the limits or bypassing approvals later.',
               },
               {
                 q: 'What happens if a signer loses access?',
-                a: 'If you set up a 3-of-5 multisig, you can lose 2 signers and still operate. Choose your approval threshold carefully based on your security needs.'
+                a: 'If you set up a 3-of-5 multisig, you can lose 2 signers and still operate. Choose your approval threshold carefully based on your security needs.',
               },
               {
                 q: 'Is this production-ready?',
-                a: 'FlowGuard is in alpha on Chipnet (BCH test network). Mainnet launch planned after external audits and beta testing. Use at your own risk.'
+                a: 'FlowGuard is in alpha on Chipnet (BCH test network). Mainnet launch planned after external audits and beta testing. Use at your own risk.',
               },
               {
                 q: 'How do I get started?',
-                a: 'Connect a BCH wallet (Paytaca recommended), create a treasury with your spending rules, then set up vesting, payroll, or budget plans as needed.'
-              }
+                a: 'Connect a BCH wallet (Paytaca recommended), create a treasury with your spending rules, then set up vesting, payroll, or budget plans as needed.',
+              },
             ].map((faq, i) => (
               <motion.div
                 key={i}
@@ -704,22 +859,31 @@ export default function Home() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.05 }}
-                className={`bg-surface border rounded-2xl overflow-hidden transition-colors ${openFaq === i ? 'border-brand300/60' : 'border-border hover:border-brand300/30'
-                  }`}
+                className={`bg-surface border rounded-2xl overflow-hidden transition-colors ${
+                  openFaq === i ? 'border-brand300/60' : 'border-border hover:border-brand300/30'
+                }`}
               >
                 <button
                   onClick={() => setOpenFaq(openFaq === i ? -1 : i)}
                   className="w-full flex items-center justify-between gap-4 px-8 py-6 text-left"
                 >
-                  <span className={`font-display text-xl transition-colors ${openFaq === i ? 'text-brand300' : 'text-textPrimary'
-                    }`}>{faq.q}</span>
+                  <span
+                    className={`font-display text-xl transition-colors ${
+                      openFaq === i ? 'text-brand300' : 'text-textPrimary'
+                    }`}
+                  >
+                    {faq.q}
+                  </span>
                   <motion.div
                     animate={{ rotate: openFaq === i ? 180 : 0 }}
                     transition={{ duration: 0.25 }}
                     className="flex-shrink-0"
                   >
-                    <ChevronDown className={`w-5 h-5 transition-colors ${openFaq === i ? 'text-brand300' : 'text-textMuted'
-                      }`} />
+                    <ChevronDown
+                      className={`w-5 h-5 transition-colors ${
+                        openFaq === i ? 'text-brand300' : 'text-textMuted'
+                      }`}
+                    />
                   </motion.div>
                 </button>
                 <AnimatePresence initial={false}>
@@ -772,7 +936,6 @@ export default function Home() {
       </section>
 
       <Footer />
-    </main >
+    </main>
   );
 }
-

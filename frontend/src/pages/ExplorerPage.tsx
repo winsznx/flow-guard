@@ -23,6 +23,7 @@ import {
   Filter,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
+import { PageMeta } from '../components/seo/PageMeta';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -268,9 +269,15 @@ export default function ExplorerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <div className="flex-grow pb-20">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
+    <>
+      <PageMeta
+        title="Explorer"
+        description="Browse FlowGuard treasury, stream, payment, proposal, and distribution activity on Bitcoin Cash."
+        path="/explorer"
+      />
+      <div className="min-h-screen bg-background flex flex-col">
+        <div className="flex-grow pb-20">
+          <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
           {/* Header */}
           <div className="mb-6 md:mb-8">
             <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-6 mb-6 md:mb-8">
@@ -914,8 +921,9 @@ export default function ExplorerPage() {
             </Card>
           )}
         </div>
+        </div>
+        <Footer />
       </div>
-      <Footer />
-    </div>
+    </>
   );
 }

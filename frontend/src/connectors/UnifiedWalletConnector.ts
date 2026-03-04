@@ -27,7 +27,7 @@ const PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID;
 
 const APP_METADATA = {
   name: 'FlowGuard',
-  description: 'On-Chain Treasury Management for Bitcoin Cash',
+  description: 'BCH-native treasuries, streams, payments, and governance',
   url: window.location.origin,
   icons: [`${window.location.origin}/favicon.svg`],
 };
@@ -64,7 +64,9 @@ export class WalletConnect2Connector implements IWalletConnector {
   async connect(): Promise<WalletInfo> {
     // Validate PROJECT_ID
     if (!PROJECT_ID || PROJECT_ID === 'demo-project-id') {
-      throw new Error('WalletConnect Project ID not configured. Please set VITE_WALLETCONNECT_PROJECT_ID in your .env file.');
+      throw new Error(
+        'WalletConnect Project ID not configured. Please set VITE_WALLETCONNECT_PROJECT_ID in your .env file.'
+      );
     }
 
     // Initialize SignClient (singleton)
@@ -78,10 +80,18 @@ export class WalletConnect2Connector implements IWalletConnector {
         });
 
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('WalletConnect connection timed out. Please check your internet connection and try again.')), 30000);
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'WalletConnect connection timed out. Please check your internet connection and try again.'
+                )
+              ),
+            30000
+          );
         });
 
-        globalSignClient = await Promise.race([initPromise, timeoutPromise]) as SignClient;
+        globalSignClient = (await Promise.race([initPromise, timeoutPromise])) as SignClient;
         console.log('WC: SignClient initialized successfully');
       } catch (error: any) {
         console.error('WC: SignClient initialization failed:', error);
@@ -295,7 +305,7 @@ export class WalletConnect2Connector implements IWalletConnector {
 
       const response = await fetch(balanceUrl, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: { Accept: 'application/json' },
       });
 
       if (!response.ok) {
@@ -321,9 +331,7 @@ export class WalletConnect2Connector implements IWalletConnector {
     throw new Error('Use signCashScriptTransaction() for WalletConnect');
   }
 
-  async signCashScriptTransaction(
-    options: CashScriptSignOptions
-  ): Promise<CashScriptSignResponse> {
+  async signCashScriptTransaction(options: CashScriptSignOptions): Promise<CashScriptSignResponse> {
     if (!this.client || !this.session) {
       throw new Error('Wallet not connected');
     }

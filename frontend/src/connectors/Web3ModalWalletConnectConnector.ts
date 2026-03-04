@@ -29,8 +29,7 @@ import type {
 // Get WalletConnect Project ID from environment
 // Free at: https://cloud.walletconnect.com
 const WALLETCONNECT_PROJECT_ID =
-  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ||
-  '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1'; // Fallback demo ID
+  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1'; // Fallback demo ID
 
 // Get network from environment
 const BCH_NETWORK = (import.meta.env.VITE_BCH_NETWORK || 'chipnet') as 'mainnet' | 'chipnet';
@@ -223,9 +222,9 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       if (!WALLETCONNECT_PROJECT_ID || WALLETCONNECT_PROJECT_ID === 'demo-project-id') {
         throw new Error(
           'WalletConnect requires a Project ID.\n\n' +
-          'Get one free at: https://cloud.walletconnect.com\n' +
-          'Then add to .env.local:\n' +
-          'VITE_WALLETCONNECT_PROJECT_ID=your-project-id'
+            'Get one free at: https://cloud.walletconnect.com\n' +
+            'Then add to .env.local:\n' +
+            'VITE_WALLETCONNECT_PROJECT_ID=your-project-id'
         );
       }
 
@@ -234,7 +233,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
         projectId: WALLETCONNECT_PROJECT_ID,
         metadata: {
           name: 'FlowGuard',
-          description: 'On-Chain Treasury Management for Bitcoin Cash',
+          description: 'BCH-native treasuries, streams, payments, and governance',
           url: window.location.origin,
           icons: [`${window.location.origin}/favicon.svg`],
         },
@@ -267,20 +266,20 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       if (message.includes('timeout')) {
         throw new Error(
           'Connection timeout.\n\n' +
-          'Possible issues:\n' +
-          '1. Wallet app not responding\n' +
-          '2. Network/firewall blocking WalletConnect\n' +
-          '3. Try using Paytaca extension instead'
+            'Possible issues:\n' +
+            '1. Wallet app not responding\n' +
+            '2. Network/firewall blocking WalletConnect\n' +
+            '3. Try using Paytaca extension instead'
         );
       }
 
       if (message.includes('WebSocket')) {
         throw new Error(
           'Cannot connect to WalletConnect relay.\n\n' +
-          'This might be due to:\n' +
-          '- Network/firewall blocking websockets\n' +
-          '- VPN/proxy interference\n\n' +
-          'Try using Paytaca extension (desktop) or Testing Wallet instead.'
+            'This might be due to:\n' +
+            '- Network/firewall blocking websockets\n' +
+            '- VPN/proxy interference\n\n' +
+            'Try using Paytaca extension (desktop) or Testing Wallet instead.'
         );
       }
 
@@ -509,21 +508,23 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
   async getPublicKey(): Promise<string> {
     throw new Error(
       'WalletConnect uses automatic pubkey substitution during signing.\n\n' +
-      'For contract interactions, use 33-byte zero placeholder:\n' +
-      'new Uint8Array(33) // Wallet will replace with actual pubkey'
+        'For contract interactions, use 33-byte zero placeholder:\n' +
+        'new Uint8Array(33) // Wallet will replace with actual pubkey'
     );
   }
 
   /**
- * Get wallet balance via backend API
- */
+   * Get wallet balance via backend API
+   */
   async getBalance(): Promise<WalletBalance> {
     if (!this.currentAddress) {
       return { bch: 0, sat: 0 };
     }
 
     try {
-      const response = await fetch(`/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`);
+      const response = await fetch(
+        `/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`
+      );
       if (!response.ok) {
         console.warn('[Web3ModalWC] Balance API returned error:', response.status);
         return { bch: 0, sat: 0 };
@@ -545,7 +546,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
   async signTransaction(_tx: Transaction): Promise<SignedTransaction> {
     throw new Error(
       'Use signCashScriptTransaction() for all WalletConnect transactions.\n\n' +
-      'WalletConnect requires full transaction construction with sourceOutputs.'
+        'WalletConnect requires full transaction construction with sourceOutputs.'
     );
   }
 
@@ -576,9 +577,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    *
    * Uses libauth stringify for proper serialization of Uint8Array and BigInt
    */
-  async signCashScriptTransaction(
-    options: CashScriptSignOptions
-  ): Promise<CashScriptSignResponse> {
+  async signCashScriptTransaction(options: CashScriptSignOptions): Promise<CashScriptSignResponse> {
     if (!this.client || !this.session) {
       throw new Error('Wallet not connected');
     }
@@ -600,7 +599,6 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
           userPrompt: options.userPrompt,
         })
       );
-
 
       const result = await this._withRequestTimeout(
         this._requestWithoutRedirect(() =>

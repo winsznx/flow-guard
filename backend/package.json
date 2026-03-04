@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "FlowGuard backend API",
+  "license": "MIT",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
