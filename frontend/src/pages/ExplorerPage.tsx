@@ -21,6 +21,7 @@ import {
   Download,
   ArrowUpRight,
   Filter,
+  Waves,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { PageMeta } from '../components/seo/PageMeta';
@@ -30,6 +31,7 @@ import { Input } from '../components/ui/Input';
 import { CircularProgress } from '../components/streams/CircularProgress';
 import { getExplorerTxUrl, getExplorerAddressUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { isExplorerHost } from '../utils/publicUrls';
 
 interface ExplorerStats {
   network: {
@@ -64,6 +66,21 @@ interface Transaction {
   } | null;
 }
 
+interface StreamActivitySnapshot {
+  id: string;
+  event_type: string;
+  amount: number | null;
+  tx_hash: string | null;
+  created_at: number;
+  stream: {
+    stream_id: string;
+    stream_type: string;
+    schedule_template?: string | null;
+    sender: string;
+    recipient: string;
+  };
+}
+
 type ViewMode = 'overview' | 'transactions' | 'timeline';
 type TxTypeFilter = 'ALL' | 'VESTING' | 'STREAMING' | 'AIRDROP' | 'VAULT' | 'PAYMENT' | 'PROPOSAL';
 type TokenFilter = 'ALL' | 'BCH' | 'CASHTOKENS';
@@ -74,6 +91,7 @@ export default function ExplorerPage() {
   const [stats, setStats] = useState<ExplorerStats | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
+  const [recentStreamActivity, setRecentStreamActivity] = useState<StreamActivitySnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [txTypeFilter, setTxTypeFilter] = useState<TxTypeFilter>('ALL');
@@ -82,11 +100,32 @@ export default function ExplorerPage() {
   const [searchResults, setSearchResults] = useState<any>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const network = import.meta.env.VITE_BCH_NETWORK === 'mainnet' ? 'mainnet' : 'chipnet';
+  const onExplorerHost = isExplorerHost();
 
   // Fetch stats
   useEffect(() => {
     fetchStats();
     const interval = autoRefresh ? setInterval(fetchStats, 30000) : undefined;
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [autoRefresh]);
+
+  useEffect(() => {
+    const fetchRecentStreamActivity = async () => {
+      try {
+        const response = await fetch('/api/streams/activity?limit=6&page=1');
+        const data = await response.json();
+        setRecentStreamActivity(data.events || []);
+      } catch (error) {
+        console.error('Failed to fetch recent stream activity:', error);
+        setRecentStreamActivity([]);
+      }
+    };
+
+    fetchRecentStreamActivity();
+    const interval = autoRefresh ? setInterval(fetchRecentStreamActivity, 30000) : undefined;
+
     return () => {
       if (interval) clearInterval(interval);
     };
@@ -215,6 +254,13 @@ export default function ExplorerPage() {
   };
 
   const formatAmount = (amount: number) => amount.toFixed(4) + ' BCH';
+  const formatAssetAmount = (amount: number | null) => {
+    if (typeof amount !== 'number') return 'N/A';
+    return `${amount.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 8,
+    })} BCH/tokens`;
+  };
   const toUnixMs = (value: string | number) => {
     if (typeof value === 'number' && Number.isFinite(value)) {
       return value > 1_000_000_000_000 ? value : value * 1000;
@@ -241,6 +287,9 @@ export default function ExplorerPage() {
       .split('_')
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
+
+  const getStreamTemplateLabel = (snapshot: StreamActivitySnapshot) =>
+    snapshot.stream.schedule_template || snapshot.stream.stream_type;
 
   const getStatusColor = (status: string) => {
     switch (status?.toUpperCase()) {
@@ -273,7 +322,7 @@ export default function ExplorerPage() {
       <PageMeta
         title="Explorer"
         description="Browse FlowGuard treasury, stream, payment, proposal, and distribution activity on Bitcoin Cash."
-        path="/explorer"
+        path={onExplorerHost ? '/' : '/explorer'}
       />
       <div className="min-h-screen bg-background flex flex-col">
         <div className="flex-grow pb-20">
@@ -688,6 +737,95 @@ export default function ExplorerPage() {
                   </div>
                 </Card>
               </div>
+
+              <Card className="p-6 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between mb-6">
+                  <div>
+                    <p className="text-xs font-mono uppercase tracking-[0.28em] text-textMuted mb-2">
+                      FlowGuard Activity
+                    </p>
+                    <h3 className="text-xl font-display font-bold text-textPrimary">
+                      Recent stream execution
+                    </h3>
+                    <p className="text-sm text-textMuted font-sans mt-2 max-w-2xl">
+                      Explorer tracks product-wide on-chain activity. This stream slice is here so recent claims,
+                      refills, pauses, resumes, and cancellations are visible in the same operational surface.
+                    </p>
+                  </div>
+                  <Link
+                    to="/streams/activity"
+                    className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
+                  >
+                    Open stream workspace
+                    <ChevronRight className="w-4 h-4" />
+                  </Link>
+                </div>
+
+                {recentStreamActivity.length > 0 ? (
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    {recentStreamActivity.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-xl border border-border bg-surfaceAlt p-4 flex flex-col gap-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-sans font-semibold text-textPrimary">
+                              {formatEventLabel(event.event_type)}
+                            </p>
+                            <p className="text-xs font-mono text-textMuted mt-1">
+                              {new Date(event.created_at * 1000).toLocaleString()}
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-mono text-primary">
+                            {getStreamTemplateLabel(event)}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <p className="text-xs font-mono uppercase tracking-[0.2em] text-textMuted mb-1">Stream</p>
+                            <Link to={`/streams/${event.stream.stream_id}`} className="font-mono text-textPrimary hover:text-primary break-all">
+                              {formatLogicalId(event.stream.stream_id)}
+                            </Link>
+                          </div>
+                          <div>
+                            <p className="text-xs font-mono uppercase tracking-[0.2em] text-textMuted mb-1">Amount</p>
+                            <p className="font-display font-bold text-primary">
+                              {formatAssetAmount(event.amount)}
+                            </p>
+                          </div>
+                          <div className="sm:col-span-2">
+                            <p className="text-xs font-mono uppercase tracking-[0.2em] text-textMuted mb-1">Flow</p>
+                            <p className="font-mono text-textMuted break-all">
+                              {formatAddress(event.stream.sender)} → {formatAddress(event.stream.recipient)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {event.tx_hash && (
+                          <a
+                            href={getExplorerTxUrl(event.tx_hash, network)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 text-sm text-primary hover:text-primaryHover font-medium"
+                          >
+                            View transaction
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-border bg-surfaceAlt p-8 text-center">
+                    <Waves className="mx-auto h-10 w-10 text-textMuted mb-3" />
+                    <p className="font-sans text-textMuted">
+                      No recent stream activity yet.
+                    </p>
+                  </div>
+                )}
+              </Card>
             </div>
           )}
 
