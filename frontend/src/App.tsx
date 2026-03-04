@@ -1,4 +1,4 @@
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
@@ -21,6 +21,9 @@ import StreamsPage from './pages/StreamsPage';
 import StreamDetailPage from './pages/StreamDetailPage';
 import CreateStreamPage from './pages/CreateStreamPage';
 import BatchCreateStreamsPage from './pages/BatchCreateStreamsPage';
+import StreamBatchHistoryPage from './pages/StreamBatchHistoryPage';
+import StreamShapeGalleryPage from './pages/StreamShapeGalleryPage';
+import StreamActivityPage from './pages/StreamActivityPage';
 import PaymentsPage from './pages/PaymentsPage';
 import CreatePaymentPage from './pages/CreatePaymentPage';
 import PaymentDetailPage from './pages/PaymentDetailPage';
@@ -40,11 +43,15 @@ import UpdatesPage from './pages/UpdatesPage';
 import UpdateDetailPage from './pages/UpdateDetailPage';
 import ChangelogPage from './pages/ChangelogPage';
 import RoadmapPage from './pages/RoadmapPage';
+import TermsPage from './pages/TermsPage';
+import PrivacyPage from './pages/PrivacyPage';
+import DisclaimerPage from './pages/DisclaimerPage';
 import { AppShellPage } from './pages/AppShellPage';
 import { DaoOverviewPage } from './pages/dao/DaoOverviewPage';
 import { DaoTeamPage } from './pages/dao/DaoTeamPage';
 import { DaoRolesPage } from './pages/dao/DaoRolesPage';
 import { DaoTreasuryPolicyPage } from './pages/dao/DaoTreasuryPolicyPage';
+import { DaoStreamsPage } from './pages/dao/DaoStreamsPage';
 import { SplitLoginScreen } from './pages/SplitLoginScreen';
 
 function App() {
@@ -100,10 +107,84 @@ function App() {
           />
 
           {/* DAO Beta Placeholders */}
-          <Route path="/app/dao/overview" element={<ProtectedRoute><DashboardLayout><DaoOverviewPage /></DashboardLayout></ProtectedRoute>} />
-          <Route path="/app/dao/team" element={<ProtectedRoute><DashboardLayout><DaoTeamPage /></DashboardLayout></ProtectedRoute>} />
-          <Route path="/app/dao/roles" element={<ProtectedRoute><DashboardLayout><DaoRolesPage /></DashboardLayout></ProtectedRoute>} />
-          <Route path="/app/dao/treasury-policy" element={<ProtectedRoute><DashboardLayout><DaoTreasuryPolicyPage /></DashboardLayout></ProtectedRoute>} />
+          <Route
+            path="/app/dao"
+            element={
+              <ProtectedRoute>
+                <Navigate to="/app/dao/overview" replace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/overview"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <DaoOverviewPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/streams"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <DaoStreamsPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/stream-batches"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <StreamBatchHistoryPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/team"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <DaoTeamPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/roles"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <DaoRolesPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/treasury-policy"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <DaoTreasuryPolicyPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/dao/stream-activity"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <StreamActivityPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
 
           {/* Solution landing pages (public) */}
           <Route path="/vesting" element={<VestingPage />} />
@@ -111,7 +192,6 @@ function App() {
           <Route path="/budgeting" element={<BudgetingPage />} />
           <Route path="/grants" element={<GrantsPage />} />
           <Route path="/governance-info" element={<GovernanceInfoPage />} />
-
 
           {/* Updates/Blog (public) */}
           <Route path="/updates" element={<UpdatesPage />} />
@@ -122,6 +202,9 @@ function App() {
 
           {/* Roadmap (public) */}
           <Route path="/roadmap" element={<RoadmapPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/disclaimer" element={<DisclaimerPage />} />
 
           {/* NEW: Streams (Recipient View) */}
           <Route
@@ -140,6 +223,36 @@ function App() {
               <ProtectedRoute>
                 <DashboardLayout>
                   <CreateStreamPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/streams/activity"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <StreamActivityPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/streams/batches"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <StreamBatchHistoryPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/streams/shapes"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <StreamShapeGalleryPage />
                 </DashboardLayout>
               </ProtectedRoute>
             }
@@ -170,6 +283,16 @@ function App() {
           {/* Batch Create Streams */}
           <Route
             path="/vaults/:id/batch-create"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <BatchCreateStreamsPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/streams/batch-create"
             element={
               <ProtectedRoute>
                 <DashboardLayout>
@@ -247,18 +370,10 @@ function App() {
           <Route path="/claim/:token" element={<ClaimLinkPage />} />
 
           {/* Public Explorer (no auth required) */}
-          <Route
-            path="/explorer"
-            element={
-              <ExplorerPage />
-            }
-          />
+          <Route path="/explorer" element={<ExplorerPage />} />
 
           {/* Public Status Page (standalone) */}
-          <Route
-            path="/status"
-            element={<IndexerStatusPage />}
-          />
+          <Route path="/status" element={<IndexerStatusPage />} />
 
           {/* Protected routes with dashboard layout */}
           <Route
@@ -361,11 +476,8 @@ function App() {
               </ProtectedRoute>
             }
           />
-
-
         </Routes>
       </main>
-
 
       {/* Global Wallet Modal - rendered at App level, not in Header */}
       <WalletModal
@@ -376,7 +488,7 @@ function App() {
         error={wallet.error}
       />
       <TransactionNoticeToast />
-    </div >
+    </div>
   );
 }
 

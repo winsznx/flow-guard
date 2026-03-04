@@ -14,6 +14,8 @@ import {
   Users,
   ShieldCheck,
   Settings,
+  Clock,
+  History,
 } from 'lucide-react';
 import { useAppMode } from '../../hooks/useAppMode';
 
@@ -50,6 +52,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { path: '/app', icon: LayoutDashboard, label: 'App Home' },
     { path: '/vaults', icon: LayoutDashboard, label: 'Treasuries' },
     { path: '/streams', icon: Inbox, label: 'Vesting' },
+    { path: '/streams/activity', icon: Clock, label: 'Stream Activity' },
+    { path: '/streams/batches', icon: History, label: 'Batch Runs' },
     { path: '/payments', icon: Repeat, label: 'Payments' },
     { path: '/airdrops', icon: Gift, label: 'Airdrops' },
     { path: '/proposals', icon: FileText, label: 'Proposals' },
@@ -60,7 +64,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const daoNavItems: NavItem[] = [
     { path: '/app', icon: LayoutDashboard, label: 'App Home' },
     { path: '/vaults', icon: LayoutDashboard, label: 'Treasuries' },
-    { path: '/streams', icon: Inbox, label: 'Vesting' },
+    { path: '/app/dao/streams', icon: Inbox, label: 'Vesting', beta: true },
+    { path: '/app/dao/stream-activity', icon: Clock, label: 'Stream Activity', beta: true },
+    { path: '/app/dao/stream-batches', icon: History, label: 'Batch Runs', beta: true },
     { path: '/payments', icon: Repeat, label: 'Payments' },
     { path: '/airdrops', icon: Gift, label: 'Airdrops' },
     { path: '/proposals', icon: FileText, label: 'Proposals' },
@@ -144,13 +150,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="bg-brand-100/50 p-1 rounded-xl flex items-center border border-border/50">
               <button
                 onClick={() => setMode('user')}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${mode === 'user' ? 'bg-white shadow-sm text-textPrimary' : 'text-textMuted hover:text-textPrimary'}`}
+                className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition-all ${
+                  mode === 'user'
+                    ? 'bg-surface shadow-sm text-textPrimary'
+                    : 'text-textMuted hover:text-textPrimary'
+                }`}
               >
                 User
               </button>
               <button
                 onClick={() => setMode('dao')}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${mode === 'dao' ? 'bg-[#00E676]/10 text-[#00E676] border border-[#00E676]/20' : 'text-textMuted hover:text-textPrimary'}`}
+                className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition-all ${
+                  mode === 'dao'
+                    ? 'border border-accent/20 bg-accent/10 text-accent'
+                    : 'text-textMuted hover:text-textPrimary'
+                }`}
               >
                 DAO (Beta)
               </button>
@@ -160,7 +174,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="mx-auto mt-4 px-2">
             <button
               onClick={toggleMode}
-              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${mode === 'dao' ? 'bg-[#00E676]/10 text-[#00E676]' : 'bg-surfaceAlt text-textMuted border border-border'}`}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-all ${
+                mode === 'dao'
+                  ? 'bg-accent/10 text-accent'
+                  : 'border border-border bg-surfaceAlt text-textMuted'
+              }`}
               title={`Switch Mode: Currently ${mode.toUpperCase()}`}
             >
               {mode === 'dao' ? <ShieldCheck className="w-5 h-5" /> : <Users className="w-5 h-5" />}
@@ -200,7 +218,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   {item.label}
                   {isBeta && (
-                    <span className="bg-[#00E676] text-white text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-sans ml-auto shrink-0">
+                    <span className="ml-auto shrink-0 rounded bg-accent px-1.5 py-0.5 text-[10px] font-sans uppercase tracking-wider text-textPrimary">
                       Beta
                     </span>
                   )}

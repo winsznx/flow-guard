@@ -33,7 +33,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
   }, [sidebarOpen]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-white">
+    <div className="flex h-screen overflow-hidden bg-background">
       {/* Mobile Backdrop */}
       {isMobileOpen && (
         <div
@@ -55,7 +55,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
           }`}
       >
         {/* Top Bar */}
-        <header className="sticky top-0 z-40 bg-white px-4 md:px-6 py-3 md:py-4">
+        <header className="sticky top-0 z-40 border-b border-border/60 bg-surface/90 px-3 py-3 backdrop-blur-md md:px-6 md:py-4">
           <div className="flex items-center justify-between lg:justify-end">
             <button
               onClick={() => setIsMobileOpen(true)}
@@ -69,7 +69,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
 
         {/* Scrollable Content */}
         <main className="flex-1 overflow-y-auto">
-          <div className="min-h-full bg-white">
+          <div className="min-h-full bg-background pb-8 md:pb-10">
             {children}
           </div>
         </main>

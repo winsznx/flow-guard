@@ -129,6 +129,9 @@ export function DataTable<T extends Record<string, any>>({
       })
     : filteredData;
 
+  const primaryColumn = columns[0];
+  const secondaryColumns = columns.slice(1);
+
   return (
     <div className={`space-y-4 ${className}`}>
       {/* Toolbar */}
@@ -189,16 +192,31 @@ export function DataTable<T extends Record<string, any>>({
                 onRowClick ? 'cursor-pointer hover:border-accent active:bg-surfaceAlt' : ''
               }`}
             >
-              {columns.map((column) => (
-                <div key={column.key} className="flex justify-between items-start gap-3">
-                  <span className="text-xs font-mono text-textMuted uppercase tracking-wider flex-shrink-0">
-                    {column.label}
+              {primaryColumn && (
+                <div className="pb-3 border-b border-border/70">
+                  <span className="mb-2 block text-[11px] font-mono uppercase tracking-wider text-textMuted">
+                    {primaryColumn.label}
                   </span>
-                  <div className="text-sm text-textPrimary text-right flex-1 min-w-0">
-                    {column.render ? column.render(row) : row[column.key]}
+                  <div className="min-w-0 text-sm text-textPrimary">
+                    {primaryColumn.render ? primaryColumn.render(row) : row[primaryColumn.key]}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {secondaryColumns.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {secondaryColumns.map((column) => (
+                    <div key={column.key} className="min-w-0 rounded-lg bg-surfaceAlt p-3">
+                      <span className="mb-1 block text-[11px] font-mono uppercase tracking-wider text-textMuted">
+                        {column.label}
+                      </span>
+                      <div className="min-w-0 text-sm text-textPrimary">
+                        {column.render ? column.render(row) : row[column.key]}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))
         )}
