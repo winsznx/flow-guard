@@ -94,6 +94,7 @@ interface ExecutorStatusSnapshot {
     canBroadcast: boolean;
     canExecuteSchedulesAutomatically: boolean;
     canExecuteProposalsAutomatically: boolean;
+    executionMode: 'manual' | 'automatic';
   };
   resources: {
     memoryRssMB: number;
