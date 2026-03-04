@@ -121,6 +121,10 @@ export default function IndexerStatusPage() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
+
   const fetchStatus = async () => {
     try {
       const response = await fetch('/api/admin/system/status');
