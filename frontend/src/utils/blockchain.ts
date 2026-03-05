@@ -554,6 +554,8 @@ async function signFromBackendPayload(
       throw new Error('Connected wallet does not support CashScript transactions');
     }
     const signOptions = deserializeWcSignOptions(payload.wcTransaction);
+    // Keep legacy payload signing aligned with the standardized lifecycle contract.
+    signOptions.broadcast = false;
     const tx = signOptions.transaction as { inputs?: Array<{ unlockingBytecode?: Uint8Array }>; outputs?: unknown[] };
     const contractInputCount = signOptions.sourceOutputs.filter((so: any) => so.contract != null).length;
 
