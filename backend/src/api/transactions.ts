@@ -220,7 +220,10 @@ router.post('/transactions/broadcast', async (req, res) => {
     res.status(500).json({
       error: errorMessage,
       userMessage: toUserFacingBroadcastMessage(errorMessage),
-      debug: diagnostics ? { diagnostics } : undefined,
+      debug: {
+        reason: errorMessage,
+        ...(diagnostics ? { diagnostics } : {}),
+      },
       diagnostics,
     });
   }

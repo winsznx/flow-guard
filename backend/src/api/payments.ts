@@ -275,9 +275,16 @@ router.post('/payments/:id/pause', async (req: Request, res: Response) => {
 
     const controlService = new PaymentControlService('chipnet');
     const contractService = new ContractService('chipnet');
-    const currentCommitment = await contractService.getNFTCommitment(payment.contract_address)
-      || payment.nft_commitment
-      || '';
+    const currentCommitment = await contractService.getNFTCommitment(payment.contract_address);
+    if (!currentCommitment) {
+      return res.status(409).json({
+        error: 'Payment state is still syncing',
+        message: 'Unable to read live on-chain payment state right now. Retry claim in a few seconds.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'PAYMENT_STATE_UNAVAILABLE',
+      });
+    }
     const constructorParams = deserializeConstructorParams(payment.constructor_params);
     const built = await controlService.buildPauseTransaction({
       contractAddress: payment.contract_address,

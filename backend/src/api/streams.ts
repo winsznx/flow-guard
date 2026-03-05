@@ -1062,9 +1062,16 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
 
     const contractService = new ContractService('chipnet');
     const constructorParams = deserializeConstructorParams(row.constructor_params);
-    const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
-      || row.nft_commitment
-      || '00'.repeat(40);
+    const currentCommitment = await contractService.getNFTCommitment(row.contract_address);
+    if (!currentCommitment) {
+      return res.status(409).json({
+        error: 'Stream state is still syncing',
+        message: 'Unable to read live on-chain stream state right now. Retry claim in a few seconds.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_STATE_UNAVAILABLE',
+      });
+    }
 
     if (row.stream_type === 'RECURRING') {
       const recurringClaimService = new PaymentClaimService('chipnet');
@@ -1313,9 +1320,16 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
 
     const contractService = new ContractService('chipnet');
     const constructorParams = deserializeConstructorParams(row.constructor_params);
-    const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
-      || row.nft_commitment
-      || '00'.repeat(40);
+    const currentCommitment = await contractService.getNFTCommitment(row.contract_address);
+    if (!currentCommitment) {
+      return res.status(409).json({
+        error: 'Stream state is still syncing',
+        message: 'Unable to read live on-chain stream state right now. Retry shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_STATE_UNAVAILABLE',
+      });
+    }
 
     if (row.stream_type === 'RECURRING') {
       const recurringClaimService = new PaymentClaimService('chipnet');

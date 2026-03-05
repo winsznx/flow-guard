@@ -135,9 +135,17 @@ export async function broadcastTransaction(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Failed to broadcast transaction' }));
     const base = error.userMessage || error.message || error.error || 'Failed to broadcast transaction';
+    const reason = error?.debug?.reason;
     const diagnostics = error?.debug?.diagnostics ?? error?.diagnostics;
+    const detailChunks: string[] = [];
+    if (typeof reason === 'string' && reason.trim().length > 0 && reason.trim() !== base) {
+      detailChunks.push(`Reason: ${reason.trim()}`);
+    }
     if (diagnostics) {
-      throw new Error(`${base}\n\nDiagnostics: ${JSON.stringify(diagnostics)}`);
+      detailChunks.push(`Diagnostics: ${JSON.stringify(diagnostics)}`);
+    }
+    if (detailChunks.length > 0) {
+      throw new Error(`${base}\n\n${detailChunks.join('\n\n')}`);
     }
     throw new Error(base);
   }
