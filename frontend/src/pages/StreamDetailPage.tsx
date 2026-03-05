@@ -132,6 +132,9 @@ interface FeedbackState {
   txHash?: string;
 }
 
+const FRESH_CREATE_TITLE = 'Stream created. Funding is the next step.';
+const FRESH_CREATE_DESCRIPTION = 'The stream exists on-chain. Fund this stream from here to activate vesting.';
+
 function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
   return `${amount.toLocaleString(undefined, {
     minimumFractionDigits: 0,
@@ -528,8 +531,8 @@ export default function StreamDetailPage() {
     launchState?.freshCreate
       ? {
           tone: 'info',
-          title: 'Stream created. Funding is the next step.',
-          description: 'The stream exists on-chain. Fund this stream from here to activate vesting.',
+          title: FRESH_CREATE_TITLE,
+          description: FRESH_CREATE_DESCRIPTION,
         }
       : null,
   );
@@ -598,6 +601,20 @@ export default function StreamDetailPage() {
       void refreshStream();
     }
   }, [id, wallet.address]);
+
+  useEffect(() => {
+    if (!stream) return;
+    setFeedback((current) => {
+      if (!current) return current;
+      if (
+        current.title === FRESH_CREATE_TITLE
+        && stream.status !== 'PENDING'
+      ) {
+        return null;
+      }
+      return current;
+    });
+  }, [stream?.status]);
 
   const handleClaim = async () => {
     if (!stream || stream.claimable_amount <= 0) return;
