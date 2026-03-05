@@ -163,19 +163,34 @@ export async function updateVaultBalance(
   amount: number,
   userAddress: string
 ): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/update-balance`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-address': userAddress,
-    },
-    body: JSON.stringify({ txid, amount }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Failed to update vault balance' }));
-    throw new Error(error.error || 'Failed to update vault balance');
+  const maxAttempts = 8;
+  const baseDelayMs = 1200;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/confirm-funding`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': userAddress,
+      },
+      body: JSON.stringify({ txHash: txid, amount }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) {
+      return payload;
+    }
+
+    const retryablePending = response.status === 409 && payload?.retryable === true;
+    if (!retryablePending || attempt === maxAttempts) {
+      throw new Error(payload.error || payload.message || 'Failed to update vault balance');
+    }
+
+    const waitMs = Math.min(baseDelayMs * attempt, 5000);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
-  return response.json();
+
+  throw new Error('Failed to update vault balance');
 }
 
 // Streams API

@@ -1,14 +1,151 @@
 import { Router } from 'express';
 import { VaultService } from '../services/vaultService.js';
 import { CreateVaultDto } from '../models/Vault.js';
-import { ElectrumNetworkProvider } from 'cashscript';
-import { transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
 import { VaultFundingService } from '../services/VaultFundingService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import db from '../database/schema.js';
 import { displayAmountToOnChain } from '../utils/amounts.js';
 
 const router = Router();
+
+async function confirmVaultFunding(args: {
+  vaultDbId: string;
+  txid: string;
+  amount: number;
+  userAddress: string;
+}): Promise<{
+  status: number;
+  body: Record<string, unknown>;
+}> {
+  if (!args.amount || args.amount <= 0) {
+    return {
+      status: 400,
+      body: { error: 'Valid amount is required', state: 'failed', retryable: false, errorCode: 'INVALID_AMOUNT' },
+    };
+  }
+
+  if (!args.txid) {
+    return {
+      status: 400,
+      body: { error: 'Transaction ID is required', state: 'failed', retryable: false, errorCode: 'MISSING_TX_ID' },
+    };
+  }
+
+  const vault = VaultService.getVaultById(args.vaultDbId);
+  if (!vault) {
+    return {
+      status: 404,
+      body: { error: 'Vault not found', state: 'failed', retryable: false, errorCode: 'VAULT_NOT_FOUND' },
+    };
+  }
+
+  if (!VaultService.isCreator(vault, args.userAddress)) {
+    return {
+      status: 403,
+      body: {
+        error: 'Only the vault creator can update balance',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'NOT_VAULT_CREATOR',
+      },
+    };
+  }
+
+  if (!vault.contractAddress) {
+    return {
+      status: 400,
+      body: { error: 'Vault contract address not available', state: 'failed', retryable: false, errorCode: 'NO_CONTRACT' },
+    };
+  }
+
+  const network = process.env.BCH_NETWORK === 'mainnet' ? 'mainnet' : 'chipnet';
+
+  if (!(await transactionExists(args.txid, network))) {
+    return {
+      status: 409,
+      body: {
+        error: 'Transaction hash not found on network',
+        message: 'Transaction is not indexed yet. Retry confirmation shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'TX_NOT_FOUND',
+      },
+    };
+  }
+
+  const minSatoshis = BigInt(Math.max(546, displayAmountToOnChain(args.amount, 'BCH')));
+  const isInitialFunding = (vault.balance || 0) <= 0;
+
+  let hasExpectedOutput = false;
+  try {
+    hasExpectedOutput = await transactionHasExpectedOutput(
+      args.txid,
+      {
+        address: vault.contractAddress,
+        minimumSatoshis: minSatoshis,
+        ...(isInitialFunding
+          ? {
+              requireNft: true,
+              requiredNftCapability: 'mutable' as const,
+              minimumNftCommitmentBytes: 32,
+            }
+          : {}),
+      },
+      network,
+    );
+  } catch (verifyError: any) {
+    const verifyMessage = verifyError?.message || 'Failed to verify funding output';
+    if (/not found|missing|mempool|index/i.test(verifyMessage)) {
+      return {
+        status: 409,
+        body: {
+          error: 'Transaction verification is pending',
+          message: 'Funding transaction is indexed partially. Retry confirmation shortly.',
+          state: 'pending',
+          retryable: true,
+          errorCode: 'TX_VERIFICATION_PENDING',
+        },
+      };
+    }
+    return {
+      status: 400,
+      body: {
+        error: 'Failed to verify transaction on blockchain',
+        details: verifyMessage,
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_VERIFICATION_FAILED',
+      },
+    };
+  }
+
+  if (!hasExpectedOutput) {
+    return {
+      status: 400,
+      body: {
+        error: isInitialFunding
+          ? 'Initial vault funding transaction must include a mutable state NFT output to the vault contract'
+          : 'Transaction does not include expected vault funding output',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'FUNDING_OUTPUT_MISMATCH',
+      },
+    };
+  }
+
+  const updatedVault = VaultService.updateBalance(args.vaultDbId, args.amount, args.txid);
+  return {
+    status: 200,
+    body: {
+      success: true,
+      txHash: args.txid,
+      state: 'confirmed',
+      retryable: false,
+      vault: updatedVault,
+    },
+  };
+}
 
 // Create vault (now async - deploys contract to blockchain)
 router.post('/', async (req, res) => {
@@ -239,88 +376,40 @@ router.post('/:id/update-balance', async (req, res) => {
   try {
     const { txid, amount } = req.body;
     const userAddress = req.headers['x-user-address'] as string || 'unknown';
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ error: 'Valid amount is required' });
-    }
-
-    if (!txid) {
-      return res.status(400).json({ error: 'Transaction ID is required' });
-    }
-
-    const vault = VaultService.getVaultById(req.params.id);
-    if (!vault) {
-      return res.status(404).json({ error: 'Vault not found' });
-    }
-
-    // Only creator can update balance (for initial deposit)
-    if (!VaultService.isCreator(vault, userAddress)) {
-      return res.status(403).json({ error: 'Only the vault creator can update balance' });
-    }
-
-    // Verify transaction on blockchain
-    try {
-      const network = process.env.BCH_NETWORK as 'mainnet' | 'chipnet' || 'chipnet';
-      const provider = new ElectrumNetworkProvider(network);
-
-      // Get transaction details from blockchain
-      const txData = await provider.getRawTransaction(txid);
-
-      if (!txData) {
-        return res.status(400).json({
-          error: 'Transaction not found on blockchain. Please wait for confirmation and try again.'
-        });
-      }
-
-      // Verify transaction sends to vault contract address
-      if (!vault.contractAddress) {
-        return res.status(400).json({
-          error: 'Vault contract address not available'
-        });
-      }
-
-      const minSatoshis = BigInt(Math.max(546, displayAmountToOnChain(amount, 'BCH')));
-      const isInitialFunding = (vault.balance || 0) <= 0;
-      const hasExpectedOutput = await transactionHasExpectedOutput(
-        txid,
-        {
-          address: vault.contractAddress,
-          minimumSatoshis: minSatoshis,
-          ...(isInitialFunding
-            ? {
-                requireNft: true,
-                requiredNftCapability: 'mutable' as const,
-                minimumNftCommitmentBytes: 32,
-              }
-            : {}),
-        },
-        network === 'mainnet' ? 'mainnet' : 'chipnet',
-      );
-
-      if (!hasExpectedOutput) {
-        return res.status(400).json({
-          error: isInitialFunding
-            ? 'Initial vault funding transaction must include a mutable state NFT output to the vault contract'
-            : 'Transaction does not include expected vault funding output',
-        });
-      }
-
-      console.log(`Verified transaction ${txid} exists on ${network} network`);
-    } catch (verifyError: any) {
-      console.error('Blockchain verification failed:', verifyError);
-      return res.status(400).json({
-        error: 'Failed to verify transaction on blockchain. The transaction may not be confirmed yet.',
-        details: verifyError.message,
-      });
-    }
-
-    const updatedVault = VaultService.updateBalance(req.params.id, amount, txid);
-    res.json(updatedVault);
+    const result = await confirmVaultFunding({
+      vaultDbId: req.params.id,
+      txid,
+      amount: Number(amount),
+      userAddress,
+    });
+    res.status(result.status).json(result.body);
   } catch (error: any) {
     if (error.message.includes('not found')) {
       return res.status(404).json({ error: error.message });
     }
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Confirm vault funding (lifecycle-compatible alias for update-balance)
+router.post('/:id/confirm-funding', async (req, res) => {
+  try {
+    const { txHash, txid, amount } = req.body;
+    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const result = await confirmVaultFunding({
+      vaultDbId: req.params.id,
+      txid: String(txHash || txid || ''),
+      amount: Number(amount),
+      userAddress,
+    });
+    res.status(result.status).json(result.body);
+  } catch (error: any) {
+    res.status(500).json({
+      error: error?.message || 'Failed to confirm vault funding',
+      state: 'failed',
+      retryable: false,
+      errorCode: 'CONFIRM_FAILED',
+    });
   }
 });
 

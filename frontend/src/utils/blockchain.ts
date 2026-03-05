@@ -929,10 +929,22 @@ export async function depositToVault(
       try {
         const depositInfo = await getDepositInfo(vaultId, wallet.address);
         if (depositInfo?.wcTransaction && wallet.signCashScriptTransaction) {
-          const signResult = await wallet.signCashScriptTransaction(
-            deserializeWcSignOptions(depositInfo.wcTransaction as SerializedWcTransaction),
+          const signOptions = deserializeWcSignOptions(depositInfo.wcTransaction as SerializedWcTransaction);
+          signOptions.broadcast = false;
+          const signResult = await wallet.signCashScriptTransaction(signOptions);
+          const txHash = await resolveTxHashFromSignResult(
+            signResult,
+            signOptions,
+            'Vault funding signing failed',
+            {
+              txType: 'create',
+              vaultId,
+              amount: amountBCH,
+              fromAddress: wallet.address || undefined,
+              toAddress: contractAddress,
+            },
           );
-          return publishTransactionNotice(signResult.signedTransactionHash, wallet, 'Vault funded');
+          return publishTransactionNotice(txHash, wallet, 'Vault funded');
         }
 
         const isInitialFunding = Number(depositInfo?.currentBalance || 0) <= 0 && Number(depositInfo?.amountToDeposit || 0) > 0;
