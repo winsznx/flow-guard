@@ -339,9 +339,11 @@ export default function StreamsPage() {
       className: 'text-center',
       render: (row) => {
         const statusColors = {
+          PENDING: 'bg-primary/10 text-primary border-primary',
           ACTIVE: 'bg-accent/10 text-accent border-accent',
           COMPLETED: 'bg-primary/10 text-primary border-primary',
           PAUSED: 'bg-secondary/10 text-secondary border-secondary',
+          FAILED: 'bg-red-500/10 text-red-300 border-red-500/30',
           CANCELLED: 'bg-surfaceAlt text-textMuted border-border',
         };
         return (
