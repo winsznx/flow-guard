@@ -69,6 +69,13 @@ export interface LifecycleConfirmResult {
   nextStatus?: string;
 }
 
+interface StreamCancelBuildPayload {
+  vestedAmount?: number;
+  unvestedAmount?: number;
+  cancelReturnAddress?: string;
+  senderAddress?: string;
+}
+
 interface RunLifecycleActionOptions<TPayload = Record<string, unknown>> {
   wallet: WalletInterface;
   actionLabel: string;
@@ -1319,7 +1326,7 @@ export async function cancelStreamOnChain(
   streamId: string
 ): Promise<string> {
   const apiUrl = '/api';
-  const { confirm } = await runLifecycleAction({
+  const { confirm } = await runLifecycleAction<StreamCancelBuildPayload>({
     wallet,
     actionLabel: 'Stream cancelled',
     signContext: 'Stream cancel signing failed',
@@ -1341,16 +1348,28 @@ export async function cancelStreamOnChain(
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
-        payload,
+        payload: {
+          vestedAmount: typeof payload.vestedAmount === 'number' ? payload.vestedAmount : undefined,
+          unvestedAmount: typeof payload.unvestedAmount === 'number' ? payload.unvestedAmount : undefined,
+          cancelReturnAddress:
+            typeof payload.cancelReturnAddress === 'string' ? payload.cancelReturnAddress : undefined,
+          senderAddress: typeof payload.senderAddress === 'string' ? payload.senderAddress : undefined,
+        },
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/streams/${streamId}/confirm-cancel`, {
+    confirm: ({ txHash, signerAddress, buildPayload }) => fetch(`${apiUrl}/streams/${streamId}/confirm-cancel`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-user-address': signerAddress,
       },
-      body: JSON.stringify({ txHash }),
+      body: JSON.stringify({
+        txHash,
+        vestedAmount: buildPayload.vestedAmount,
+        unvestedAmount: buildPayload.unvestedAmount,
+        cancelReturnAddress: buildPayload.cancelReturnAddress,
+        senderAddress: buildPayload.senderAddress,
+      }),
     }),
   });
 

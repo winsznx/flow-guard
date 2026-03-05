@@ -101,6 +101,7 @@ interface ActivityEvent {
   amount: number | null;
   status: string | null;
   tx_hash: string | null;
+  details?: unknown;
   created_at: number;
 }
 
@@ -1438,41 +1439,63 @@ export default function StreamDetailPage() {
               <p className="text-sm font-mono text-textMuted">No activity events recorded yet.</p>
             ) : (
               <div className="space-y-3 max-h-[18rem] overflow-y-auto pr-1">
-                {events.map((event) => (
-                  <div key={event.id} className="rounded-lg border border-border bg-surfaceAlt p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-textPrimary">
-                          {formatStreamEventLabel(event.event_type)}
-                        </p>
-                        <p className="text-xs text-textMuted">
-                          {formatDate(event.created_at)}
-                        </p>
-                        {event.actor && (
-                          <p className="text-xs font-mono text-textMuted mt-1 break-all">
-                            actor: {event.actor}
+                {events.map((event) => {
+                  const cancelDetails = event.event_type === 'cancelled'
+                    ? parseStreamCancelDetails(event.details)
+                    : null;
+
+                  return (
+                    <div key={event.id} className="rounded-lg border border-border bg-surfaceAlt p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-textPrimary">
+                            {formatStreamEventLabel(event.event_type)}
                           </p>
-                        )}
-                        {typeof event.amount === 'number' && (
-                          <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {formatAssetAmount(event.amount, stream.token_type)}
+                          <p className="text-xs text-textMuted">
+                            {formatDate(event.created_at)}
                           </p>
+                          {event.actor && (
+                            <p className="text-xs font-mono text-textMuted mt-1 break-all">
+                              actor: {event.actor}
+                            </p>
+                          )}
+                          {typeof event.amount === 'number'
+                            && (cancelDetails?.unvestedAmount === null || cancelDetails?.unvestedAmount === undefined) && (
+                            <p className="text-xs font-mono text-textMuted mt-1">
+                              amount: {formatAssetAmount(event.amount, stream.token_type)}
+                            </p>
+                            )}
+                          {typeof cancelDetails?.vestedAmount === 'number' && (
+                            <p className="text-xs font-mono text-textMuted mt-1 break-words">
+                              recipient received: {formatAssetAmount(cancelDetails.vestedAmount, stream.token_type)}
+                            </p>
+                          )}
+                          {typeof cancelDetails?.unvestedAmount === 'number' && (
+                            <p className="text-xs font-mono text-textMuted mt-1 break-words">
+                              sender refunded: {formatAssetAmount(cancelDetails.unvestedAmount, stream.token_type)}
+                            </p>
+                          )}
+                          {cancelDetails?.cancelReturnAddress && (
+                            <p className="text-xs font-mono text-textMuted mt-1 break-all">
+                              refund address: {cancelDetails.cancelReturnAddress}
+                            </p>
+                          )}
+                        </div>
+                        {event.tx_hash && (
+                          <a
+                            href={getExplorerUrl(event.tx_hash)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-primary hover:text-primaryHover"
+                          >
+                            tx
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
                         )}
                       </div>
-                      {event.tx_hash && (
-                        <a
-                          href={getExplorerUrl(event.tx_hash)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-xs text-primary hover:text-primaryHover"
-                        >
-                          tx
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Card>
@@ -1893,4 +1916,46 @@ function formatStreamEventLabel(eventType: string): string {
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ');
   }
+}
+
+interface StreamCancelDetails {
+  vestedAmount: number | null;
+  unvestedAmount: number | null;
+  cancelReturnAddress: string | null;
+}
+
+function parseStreamCancelDetails(details: unknown): StreamCancelDetails | null {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return null;
+  }
+
+  const raw = details as Record<string, unknown>;
+  const parsed: StreamCancelDetails = {
+    vestedAmount: parseOptionalNumber(raw.vestedAmount),
+    unvestedAmount: parseOptionalNumber(raw.unvestedAmount),
+    cancelReturnAddress: parseOptionalString(raw.cancelReturnAddress),
+  };
+
+  if (
+    parsed.vestedAmount === null
+    && parsed.unvestedAmount === null
+    && parsed.cancelReturnAddress === null
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function parseOptionalNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function parseOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

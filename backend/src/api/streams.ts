@@ -2212,6 +2212,9 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const vestedAmount = parseOptionalDisplayAmount(req.body?.vestedAmount);
+    const unvestedAmount = parseOptionalDisplayAmount(req.body?.unvestedAmount);
+    const cancelReturnAddress = parseOptionalAddress(req.body?.cancelReturnAddress);
     const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.sender || '').trim();
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
@@ -2267,8 +2270,16 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
       entityId: id,
       eventType: 'cancelled',
       actor: signerAddress,
+      amount: unvestedAmount ?? undefined,
       status: 'CANCELLED',
       txHash,
+      details: {
+        vestedAmount,
+        unvestedAmount,
+        cancelReturnAddress,
+        recipientAddress: row.recipient || null,
+        senderAddress: row.sender || null,
+      },
       createdAt: now,
     });
 
@@ -3621,6 +3632,19 @@ function safeParseJson(raw: string) {
   } catch {
     return raw;
   }
+}
+
+function parseOptionalDisplayAmount(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Number(parsed.toFixed(8));
+}
+
+function parseOptionalAddress(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function isP2pkhAddress(address: string): boolean {
