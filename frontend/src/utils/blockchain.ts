@@ -1302,6 +1302,52 @@ export async function claimStreamFunds(
 }
 
 /**
+ * Cancel a stream on-chain.
+ */
+export async function cancelStreamOnChain(
+  wallet: WalletInterface,
+  streamId: string
+): Promise<string> {
+  const apiUrl = '/api';
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: 'Stream cancelled',
+    signContext: 'Stream cancel signing failed',
+    build: async (signerAddress) => {
+      const response = await fetch(`${apiUrl}/streams/${streamId}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+        body: JSON.stringify({}),
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return cancel transaction');
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/streams/${streamId}/confirm-cancel`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return confirm.txHash;
+}
+
+/**
  * Pause a stream on-chain.
  */
 export async function pauseStreamOnChain(

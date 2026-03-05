@@ -25,17 +25,15 @@ import { formatLogicalId } from '../utils/display';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
 import {
-  deserializeWcSignOptions,
+  cancelStreamOnChain,
+  claimStreamFunds,
   fundStreamContract,
   getExplorerTxUrl,
   pauseStreamOnChain,
   refillStreamOnChain,
-  resolveTxHashFromSignResult,
   resumeStreamOnChain,
   transferStreamOnChain,
-  type SerializedWcTransaction,
 } from '../utils/blockchain';
-import { emitTransactionNotice, normalizeWalletNetwork } from '../utils/txNotice';
 
 interface StreamLaunchContext {
   source: string;
@@ -128,14 +126,6 @@ interface FeedbackState {
   title: string;
   description?: string;
   txHash?: string;
-}
-
-function getApiErrorMessage(error: any, fallback: string): string {
-  if (!error || typeof error !== 'object') return fallback;
-  const generic = typeof error.error === 'string' ? error.error.trim() : '';
-  const detail = typeof error.message === 'string' ? error.message.trim() : '';
-  if (generic && detail && generic !== detail) return `${generic}: ${detail}`;
-  return detail || generic || fallback;
 }
 
 function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
@@ -596,65 +586,13 @@ export default function StreamDetailPage() {
 
     try {
       setClaiming(true);
-
-      const claimResponse = await fetch(`/api/streams/${stream.id}/claim`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipientAddress: wallet.address,
-          signerAddress: wallet.address,
-        }),
-      });
-
-      if (!claimResponse.ok) {
-        const errorData = await claimResponse.json().catch(() => ({ error: 'Failed to create claim transaction' }));
-        throw new Error(getApiErrorMessage(errorData, 'Failed to create claim transaction'));
-      }
-
-      const { claimableAmount, wcTransaction } = await claimResponse.json() as {
-        success: boolean;
-        claimableAmount: number;
-        wcTransaction: SerializedWcTransaction;
-      };
-
-      const signOptions = {
-        ...deserializeWcSignOptions(wcTransaction),
-        broadcast: wcTransaction.broadcast ?? true,
-        userPrompt: `Claim ${formatAssetAmount(claimableAmount, stream.token_type)} from stream ${stream.stream_id}`,
-      };
-      const signResult = await wallet.signCashScriptTransaction(signOptions);
-      const txHash = await resolveTxHashFromSignResult(
-        signResult,
-        signOptions,
-        'Stream claim signing failed'
-      );
-
-      // Confirm claim with backend to record the txid and update withdrawn amount
-      const confirmResponse = await fetch(`/api/streams/${stream.id}/confirm-claim`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-              txHash,
-              claimedAmount: claimableAmount,
-            }),
-          });
-
-      if (!confirmResponse.ok) {
-        console.error('Failed to confirm claim, but transaction was broadcast');
-      }
-
-      // Refresh stream data
+      const claimEstimate = stream.claimable_amount;
+      const txHash = await claimStreamFunds(wallet, stream.id);
       await refreshStream();
-
-      emitTransactionNotice({
-        txHash,
-        network: normalizeWalletNetwork(wallet.network),
-        label: 'Stream claim',
-      });
 
       setFeedback({
         tone: 'success',
-        title: `Successfully claimed ${formatAssetAmount(claimableAmount, stream.token_type)}.`,
+        title: `Successfully claimed ${formatAssetAmount(claimEstimate, stream.token_type)}.`,
         description: 'The stream balance and claim history have been refreshed.',
         txHash,
       });
@@ -680,7 +618,6 @@ export default function StreamDetailPage() {
       });
       return;
     }
-    const signerAddress = wallet.address ?? '';
 
     const confirmed = window.confirm(
       `Are you sure you want to cancel this stream?\n\n` +
@@ -692,64 +629,7 @@ export default function StreamDetailPage() {
 
     try {
       setCancelling(true);
-
-      // Get transaction descriptor from backend
-      const cancelResponse = await fetch(`/api/streams/${stream.id}/cancel`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-address': signerAddress,
-        },
-        body: JSON.stringify({}),
-      });
-
-      if (!cancelResponse.ok) {
-        const errorData = await cancelResponse.json().catch(() => ({ error: 'Failed to create cancel transaction' }));
-        throw new Error(getApiErrorMessage(errorData, 'Failed to create cancel transaction'));
-      }
-
-      const payload = await cancelResponse.json() as { wcTransaction?: SerializedWcTransaction };
-      if (!payload.wcTransaction) {
-        throw new Error(
-          'Cancel transaction signing is not wired yet for this stream type. ' +
-          'Backend must return a WalletConnect-compatible transaction object.',
-        );
-      }
-
-      const signOptions = {
-        ...deserializeWcSignOptions(payload.wcTransaction),
-        broadcast: payload.wcTransaction.broadcast ?? true,
-        userPrompt: payload.wcTransaction.userPrompt ?? `Cancel stream ${stream.stream_id}`,
-      };
-      const signResult = await wallet.signCashScriptTransaction(signOptions);
-      const txHash = await resolveTxHashFromSignResult(
-        signResult,
-        signOptions,
-        'Stream cancel signing failed',
-      );
-
-      const confirmResponse = await fetch(`/api/streams/${stream.id}/confirm-cancel`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-address': signerAddress,
-        },
-        body: JSON.stringify({
-          txHash,
-        }),
-      });
-
-      if (!confirmResponse.ok) {
-        const errorData = await confirmResponse.json().catch(() => ({ error: 'Failed to confirm cancel' }));
-        throw new Error(errorData.message || errorData.error || 'Cancel transaction broadcast but confirmation failed');
-      }
-
-      console.log('Cancel transaction signed and broadcast:', txHash);
-      emitTransactionNotice({
-        txHash,
-        network: normalizeWalletNetwork(wallet.network),
-        label: 'Stream cancelled',
-      });
+      const txHash = await cancelStreamOnChain(wallet, stream.id);
 
       setFeedback({
         tone: 'success',
