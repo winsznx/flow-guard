@@ -871,14 +871,6 @@ router.get('/streams/:id/funding-info', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing stream NFT commitment for funding' });
     }
 
-    if (nftCommitment !== row.nft_commitment) {
-      db!.prepare(`
-        UPDATE streams
-        SET nft_commitment = ?, updated_at = ?
-        WHERE id = ?
-      `).run(nftCommitment, now, id);
-    }
-
     const fundingService = new StreamFundingService('chipnet');
     const fundingTx = await fundingService.buildFundingTransaction({
       contractAddress,
@@ -902,6 +894,7 @@ router.get('/streams/:id/funding-info', async (req: Request, res: Response) => {
         tokenCategory: row.token_category,
         tokenAmount: row.token_type === 'CASHTOKENS' ? Number(row.total_amount) : undefined,
         nftCommitment,
+        predictedCommitment: nftCommitment,
         inputs: fundingTx.inputs,
         outputs: fundingTx.outputs,
         fee: fundingTx.fee,
@@ -980,15 +973,17 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
 
     const now = Math.floor(Date.now() / 1000);
     const contractService = new ContractService('chipnet');
+    const predictedCommitment = getPendingFundingCommitment(row, now);
     const confirmedCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || predictedCommitment
       || row.nft_commitment
       || null;
 
     db!.prepare(`
       UPDATE streams
-      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, updated_at = ?
+      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, activated_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(txHash, confirmedCommitment, now, id);
+    `).run(txHash, confirmedCommitment, now, now, id);
     recordActivityEvent({
       entityType: 'stream',
       entityId: id,
@@ -2602,18 +2597,19 @@ router.post('/treasuries/:vaultId/batch-create/confirm', async (req: Request, re
     const confirmedCommitments = new Map<string, string | null>();
     for (const row of rows) {
       const commitment = await contractService.getNFTCommitment(row.contract_address);
-      confirmedCommitments.set(row.id, commitment || row.nft_commitment || null);
+      const predictedCommitment = getPendingFundingCommitment(row, updatedAt);
+      confirmedCommitments.set(row.id, commitment || predictedCommitment || row.nft_commitment || null);
     }
 
     const updateStmt = db!.prepare(`
       UPDATE streams
-      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, updated_at = ?
+      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, activated_at = ?, updated_at = ?
       WHERE id = ?
     `);
 
     db!.transaction(() => {
       for (const row of rows) {
-        updateStmt.run(txHash, confirmedCommitments.get(row.id) ?? null, updatedAt, row.id);
+        updateStmt.run(txHash, confirmedCommitments.get(row.id) ?? null, updatedAt, updatedAt, row.id);
         recordActivityEvent({
           entityType: 'stream',
           entityId: row.id,
@@ -2758,6 +2754,7 @@ function rowToStream(row: any): Stream {
     transferable: Boolean(row.transferable),
     refillable: Boolean(row.refillable),
     status: row.status,
+    activated_at: row.activated_at || undefined,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

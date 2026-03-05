@@ -8,6 +8,7 @@ import {
 } from 'cashscript';
 import { binToHex, hexToBin } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface BudgetControlBuildParams {
   contractAddress: string;
@@ -83,10 +84,10 @@ export class BudgetControlService {
     });
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Pause budget vesting plan',
-      }),
+      })),
       nextStatus: 'PAUSED',
     };
   }
@@ -129,4 +130,3 @@ export class BudgetControlService {
     target[offset + 4] = Math.floor(safe / 0x100000000) & 0xff;
   }
 }
-

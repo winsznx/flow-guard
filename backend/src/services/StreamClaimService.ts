@@ -10,6 +10,7 @@ import {
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface ClaimTransactionParams {
   streamId: string;
@@ -251,10 +252,10 @@ export class StreamClaimService {
       });
     }
 
-    const wcTransaction = txBuilder.generateWcTransactionObject({
+    const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim vested funds',
-    });
+    }));
 
     console.log('[StreamClaimService] Built claim transaction', {
       contractAddress,

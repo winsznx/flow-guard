@@ -47,6 +47,7 @@ export interface Stream {
   transferable: boolean;
   refillable: boolean;
   status: 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED' | 'FAILED';
+  activated_at?: number;
   created_at: number;
   updated_at: number;
 }

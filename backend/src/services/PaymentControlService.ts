@@ -9,6 +9,7 @@ import {
 } from 'cashscript';
 import { binToHex, cashAddressToLockingBytecode, hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface PaymentControlBuildParams {
   contractAddress: string;
@@ -91,10 +92,10 @@ export class PaymentControlService {
     });
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Pause recurring payment',
-      }),
+      })),
       nextStatus: 'PAUSED',
     };
   }
@@ -152,10 +153,10 @@ export class PaymentControlService {
     });
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Resume recurring payment',
-      }),
+      })),
       nextStatus: 'ACTIVE',
     };
   }
@@ -226,10 +227,10 @@ export class PaymentControlService {
     }
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Cancel recurring payment and recover remaining funds',
-      }),
+      })),
       nextStatus: 'CANCELLED',
       senderReturnAddress,
       remainingPool,
@@ -399,10 +400,10 @@ export class PaymentControlService {
     }
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Refill recurring stream runway',
-      }),
+      })),
       nextStatus: status === 1 ? 'PAUSED' : 'ACTIVE',
     };
   }

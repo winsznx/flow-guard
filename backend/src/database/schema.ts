@@ -142,6 +142,7 @@ const createTablesSQL = `
     nft_commitment TEXT,
     nft_capability TEXT DEFAULT 'mutable',
     tx_hash TEXT,
+    activated_at INTEGER,
     created_at INTEGER DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
   );
@@ -230,6 +231,7 @@ const createTablesSQL = `
     nft_commitment TEXT,
     nft_capability TEXT DEFAULT 'mutable',
     tx_hash TEXT,
+    activated_at INTEGER,
     created_at INTEGER DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
   );
@@ -439,6 +441,7 @@ try {
   addIfMissing(streamCols, 'streams', 'preferred_lane',     'ALTER TABLE streams ADD COLUMN preferred_lane TEXT');
   addIfMissing(streamCols, 'streams', 'description',        'ALTER TABLE streams ADD COLUMN description TEXT');
   addIfMissing(streamCols, 'streams', 'tx_hash',            'ALTER TABLE streams ADD COLUMN tx_hash TEXT');
+  addIfMissing(streamCols, 'streams', 'activated_at',       'ALTER TABLE streams ADD COLUMN activated_at INTEGER');
   addIfMissing(streamCols, 'streams', 'refillable',         'ALTER TABLE streams ADD COLUMN refillable INTEGER DEFAULT 0');
   addIfMissing(streamCols, 'streams', 'batch_id',           'ALTER TABLE streams ADD COLUMN batch_id TEXT');
 
@@ -450,6 +453,7 @@ try {
   addIfMissing(paymentCols, 'payments', 'nft_commitment',     'ALTER TABLE payments ADD COLUMN nft_commitment TEXT');
   addIfMissing(paymentCols, 'payments', 'nft_capability',     "ALTER TABLE payments ADD COLUMN nft_capability TEXT DEFAULT 'mutable'");
   addIfMissing(paymentCols, 'payments', 'tx_hash',            'ALTER TABLE payments ADD COLUMN tx_hash TEXT');
+  addIfMissing(paymentCols, 'payments', 'activated_at',       'ALTER TABLE payments ADD COLUMN activated_at INTEGER');
 
   const airdropCols = db.prepare('PRAGMA table_info(airdrops)').all() as Array<{ name: string }>;
   addIfMissing(airdropCols, 'airdrops', 'constructor_params',      'ALTER TABLE airdrops ADD COLUMN constructor_params TEXT');

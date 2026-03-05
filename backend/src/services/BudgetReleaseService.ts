@@ -15,6 +15,7 @@ import {
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface TransactionOutput {
   to: string;
@@ -323,10 +324,10 @@ export class BudgetReleaseService {
       });
     }
 
-    const wcTransaction = txBuilder.generateWcTransactionObject({
+    const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Release budget milestone funds',
-    });
+    }));
 
     return {
       releasableAmount,

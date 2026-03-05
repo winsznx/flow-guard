@@ -124,6 +124,20 @@ function diagnoseSignedTransaction(txHex: string): {
   }
 }
 
+function toUserFacingBroadcastMessage(rawMessage: string): string {
+  const normalized = (rawMessage || '').toLowerCase();
+  if (normalized.includes('bad-txns-nonfinal') || normalized.includes('non-final transaction')) {
+    return 'Transaction is not final yet. Wait a few seconds and retry.';
+  }
+  if (normalized.includes('missing inputs') || normalized.includes('already spent')) {
+    return 'Transaction inputs are no longer spendable. Refresh and rebuild the transaction.';
+  }
+  if (normalized.includes('insufficient fee')) {
+    return 'Transaction fee is too low. Rebuild with updated fee inputs and retry.';
+  }
+  return 'Transaction broadcast failed. Please retry.';
+}
+
 /**
  * GET /api/vaults/:id/transactions
  * Get all transactions for a vault
@@ -202,8 +216,11 @@ router.post('/transactions/broadcast', async (req, res) => {
     const diagnostics = typeof req.body?.txHex === 'string'
       ? diagnoseSignedTransaction(req.body.txHex)
       : null;
+    const errorMessage = error.message || 'Failed to broadcast transaction';
     res.status(500).json({
-      error: error.message || 'Failed to broadcast transaction',
+      error: errorMessage,
+      userMessage: toUserFacingBroadcastMessage(errorMessage),
+      debug: diagnostics ? { diagnostics } : undefined,
       diagnostics,
     });
   }

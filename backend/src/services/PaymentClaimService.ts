@@ -8,6 +8,7 @@ import {
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface ClaimTransactionParams {
   paymentId: string;
@@ -196,10 +197,10 @@ export class PaymentClaimService {
       });
     }
 
-    const wcTransaction = txBuilder.generateWcTransactionObject({
+    const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim recurring payment',
-    });
+    }));
 
     console.log('[PaymentClaimService] Built claim transaction', {
       contractAddress,

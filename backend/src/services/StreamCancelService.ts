@@ -13,6 +13,7 @@ import {
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface StreamCancelParams {
   streamType: 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID';
@@ -132,10 +133,10 @@ export class StreamCancelService {
         );
       }
 
-      const wcTransaction = txBuilder.generateWcTransactionObject({
+      const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: `Cancel recurring stream to recover ${result.unvestedAmount} units`,
-      });
+      }));
 
       console.log('[StreamCancelService] Built recurring cancel transaction', {
         contractAddress: params.contractAddress,
@@ -213,10 +214,10 @@ export class StreamCancelService {
       );
     }
 
-    const wcTransaction = txBuilder.generateWcTransactionObject({
+    const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: `Cancel vesting stream. Return ${result.unvestedAmount} units`,
-    });
+    }));
 
     console.log('[StreamCancelService] Built vesting cancel transaction', {
       contractAddress: params.contractAddress,

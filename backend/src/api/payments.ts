@@ -728,6 +728,12 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
+    if (payment.status !== 'PENDING') {
+      return res.status(400).json({
+        error: 'Payment is not pending',
+        message: `Payment status is ${payment.status}. Only PENDING payments can be funded.`,
+      });
+    }
 
     const fundingExpectation = resolvePaymentFundingExpectation(payment);
     const fundedPeriods = fundingExpectation.fundedPeriods;
@@ -764,13 +770,19 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
     }
 
     const now = Math.floor(Date.now() / 1000);
+    const activationStart = Math.max(now, Number(payment.start_date || 0));
+    const nextPaymentDate = activationStart + Number(payment.interval_seconds || 0);
+    const contractService = new ContractService('chipnet');
+    const confirmedCommitment = await contractService.getNFTCommitment(payment.contract_address)
+      || payment.nft_commitment
+      || null;
 
-    // Update payment with tx_hash and set status to ACTIVE
+    // Activate recurring schedule only after funding confirmation.
     db!.prepare(`
       UPDATE payments
-      SET tx_hash = ?, status = 'ACTIVE', updated_at = ?
+      SET tx_hash = ?, status = 'ACTIVE', nft_commitment = ?, start_date = ?, next_payment_date = ?, activated_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(txHash, now, id);
+    `).run(txHash, confirmedCommitment, activationStart, nextPaymentDate, now, now, id);
     recordActivityEvent({
       entityType: 'payment',
       entityId: id,

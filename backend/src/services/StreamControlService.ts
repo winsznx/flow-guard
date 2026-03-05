@@ -9,6 +9,7 @@ import {
 import { binToHex, cashAddressToLockingBytecode, hexToBin } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { PaymentControlService } from './PaymentControlService.js';
+import { finalizeWcTransactionSequences } from './txFinality.js';
 
 export interface StreamControlBuildParams {
   streamType: 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID';
@@ -111,10 +112,10 @@ export class StreamControlService {
     });
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Pause stream',
-      }),
+      })),
       nextStatus: 'PAUSED',
     };
   }
@@ -187,10 +188,10 @@ export class StreamControlService {
     });
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Resume stream',
-      }),
+      })),
       nextStatus: 'ACTIVE',
     };
   }
@@ -249,10 +250,10 @@ export class StreamControlService {
     });
 
     return {
-      wcTransaction: txBuilder.generateWcTransactionObject({
+      wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
         userPrompt: 'Transfer vesting stream recipient',
-      }),
+      })),
       nextRecipient: params.newRecipient,
     };
   }
