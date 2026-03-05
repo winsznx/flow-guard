@@ -344,6 +344,18 @@ export function useWallet() {
           await connect(savedWalletType);
         } catch (error) {
           console.error('[useWallet] Failed to reconnect wallet:', error);
+          const message = error instanceof Error ? error.message : String(error || '');
+          const isTransientWalletConnectError =
+            savedWalletType === WalletType.WALLETCONNECT
+            && /(timeout|relay|websocket|network|temporar|stale session)/i.test(message);
+
+          if (isTransientWalletConnectError) {
+            // Keep saved WC session metadata so reconnect can recover without forcing a fresh login.
+            console.warn('[useWallet] WalletConnect reconnect failed transiently; preserving saved session metadata');
+            setInitAttempted(false);
+            return;
+          }
+
           // Clear invalid saved data
           localStorage.removeItem('wallet_type');
           localStorage.removeItem('wallet_address');

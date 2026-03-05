@@ -111,8 +111,13 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
     return fallback;
   }
 
-  private async _withRequestTimeout<T>(promise: Promise<T>, context: string): Promise<T> {
-    const timeoutMs = Number(import.meta.env.VITE_WALLETCONNECT_REQUEST_TIMEOUT_MS || 90000);
+  private async _withRequestTimeout<T>(
+    promise: Promise<T>,
+    context: string,
+    timeoutOverrideMs?: number,
+  ): Promise<T> {
+    const timeoutMs = timeoutOverrideMs
+      ?? Number(import.meta.env.VITE_WALLETCONNECT_REQUEST_TIMEOUT_MS || 90000);
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
@@ -250,11 +255,26 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
 
         const sortedSessions = [...existingSessions].sort((a, b) => (b.expiry || 0) - (a.expiry || 0));
         for (const candidate of sortedSessions) {
+          if (!this._isSessionStructurallyUsable(candidate)) {
+            continue;
+          }
+
           this.session = candidate;
-          const isUsable = await this._validateSession(candidate);
-          if (isUsable) {
+          try {
             console.log('[Web3ModalWC] Reusing active WalletConnect session');
-            return await this._getSessionInfo();
+            const info = await this._getSessionInfo();
+
+            // Probe session health in the background without blocking restore.
+            void this._validateSession(candidate).then((isUsable) => {
+              if (!isUsable) {
+                console.warn('[Web3ModalWC] Reused session failed live probe; will request fresh session on next connect');
+              }
+            });
+
+            return info;
+          } catch (error) {
+            console.warn('[Web3ModalWC] Failed to hydrate existing session candidate:', error);
+            this.session = null;
           }
         }
 
@@ -299,9 +319,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
     }
   }
 
-  private async _validateSession(session: SessionTypes.Struct): Promise<boolean> {
-    if (!this.client) return false;
-
+  private _isSessionStructurallyUsable(session: SessionTypes.Struct): boolean {
     // WalletConnect expiry is in seconds.
     const nowSeconds = Math.floor(Date.now() / 1000);
     if ((session.expiry || 0) <= nowSeconds + 5) {
@@ -320,7 +338,20 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       return false;
     }
 
+    return true;
+  }
+
+  private async _validateSession(session: SessionTypes.Struct): Promise<boolean> {
+    if (!this.client) return false;
+    if (!this._isSessionStructurallyUsable(session)) {
+      return false;
+    }
+
     try {
+      const primaryChain = this._getPrimaryChain();
+      const validationTimeoutMs = Number(
+        import.meta.env.VITE_WALLETCONNECT_SESSION_VALIDATION_TIMEOUT_MS || 8000
+      );
       const result = await this._withRequestTimeout(
         this._requestWithoutRedirect(() =>
           this.client!.request({
@@ -332,7 +363,8 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
             },
           })
         ),
-        'WalletConnect session validation request'
+        'WalletConnect session validation request',
+        validationTimeoutMs,
       );
 
       const address = this._extractAddress(result);
