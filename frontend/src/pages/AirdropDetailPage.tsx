@@ -12,6 +12,7 @@ import {
   getExplorerTxUrl,
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { toUserFacingError } from '../utils/userError';
 import {
   ChevronLeft,
   Gift,
@@ -47,6 +48,7 @@ interface FeedbackState {
   tone: FeedbackTone;
   title: string;
   description?: string;
+  details?: string;
   txHash?: string;
 }
 
@@ -74,6 +76,20 @@ export default function AirdropDetailPage() {
       : null,
   );
   const [isFundingSyncing, setIsFundingSyncing] = useState(false);
+
+  const buildErrorFeedback = (
+    title: string,
+    error: unknown,
+    fallback: string,
+  ): FeedbackState => {
+    const parsed = toUserFacingError(error, fallback);
+    return {
+      tone: 'error',
+      title,
+      description: parsed.message,
+      details: parsed.details,
+    };
+  };
 
   const refreshCampaign = useCallback(async () => {
     if (!id) return null;
@@ -115,11 +131,7 @@ export default function AirdropDetailPage() {
         await refreshCampaign();
       } catch (error) {
         console.error('Failed to fetch campaign:', error);
-        setFeedback({
-          tone: 'error',
-          title: 'Failed to load campaign details.',
-          description: error instanceof Error ? error.message : 'Try refreshing the page.',
-        });
+        setFeedback(buildErrorFeedback('Failed to load campaign details.', error, 'Try refreshing the page.'));
       } finally {
         setLoading(false);
       }
@@ -193,11 +205,7 @@ export default function AirdropDetailPage() {
       });
     } catch (error: any) {
       console.error('Failed to pause campaign:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to pause campaign.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to pause campaign.', error, 'Unable to pause campaign'));
     } finally {
       setActionLoading(null);
     }
@@ -223,11 +231,7 @@ export default function AirdropDetailPage() {
       navigate('/airdrops');
     } catch (error: any) {
       console.error('Failed to cancel campaign:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to cancel campaign.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to cancel campaign.', error, 'Unable to cancel campaign'));
       setActionLoading(null);
     }
   };
@@ -280,11 +284,7 @@ export default function AirdropDetailPage() {
       }
     } catch (error: any) {
       console.error('Failed to fund airdrop:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to fund airdrop.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to fund airdrop.', error, 'Unable to fund airdrop'));
     } finally {
       setActionLoading(null);
     }
@@ -321,11 +321,7 @@ export default function AirdropDetailPage() {
       });
     } catch (error: any) {
       console.error('Failed to claim airdrop:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to claim airdrop.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to claim airdrop.', error, 'Unable to claim airdrop'));
     } finally {
       setActionLoading(null);
     }
@@ -464,7 +460,17 @@ export default function AirdropDetailPage() {
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">{feedback.title}</p>
                 {feedback.description && (
-                  <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                  <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
+                )}
+                {feedback.details && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
+                      Show technical details
+                    </summary>
+                    <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
+                      {feedback.details}
+                    </pre>
+                  </details>
                 )}
                 {feedback.txHash && (
                   <a

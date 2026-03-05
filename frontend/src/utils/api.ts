@@ -134,9 +134,10 @@ export async function broadcastTransaction(
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Failed to broadcast transaction' }));
-    const base = error.error || 'Failed to broadcast transaction';
-    if (error.diagnostics) {
-      throw new Error(`${base}\n\nDiagnostics: ${JSON.stringify(error.diagnostics)}`);
+    const base = error.userMessage || error.message || error.error || 'Failed to broadcast transaction';
+    const diagnostics = error?.debug?.diagnostics ?? error?.diagnostics;
+    if (diagnostics) {
+      throw new Error(`${base}\n\nDiagnostics: ${JSON.stringify(diagnostics)}`);
     }
     throw new Error(base);
   }

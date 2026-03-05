@@ -20,7 +20,6 @@ import { Textarea } from '../components/ui/Textarea';
 import { StreamScheduleChart } from '../components/streams/StreamScheduleChart';
 import { useWallet } from '../hooks/useWallet';
 import { useNetwork } from '../hooks/useNetwork';
-import { fundStreamContract } from '../utils/blockchain';
 import { rememberDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import {
   buildScheduleChartPoints,
@@ -1113,33 +1112,12 @@ export default function CreateStreamPage() {
 
       const result = await response.json();
       const streamId = result.stream?.id;
-
-      try {
-        const txId = await fundStreamContract(wallet, streamId);
-        console.log('Stream funded successfully. TxID:', txId);
-
-        if (effectiveVaultId) {
-          navigate(`/vaults/${effectiveVaultId}?tab=streams`);
-        } else {
-          navigate(`/streams/${streamId}`, {
-            state: daoContext ? { daoContext } : undefined,
-          });
-        }
-      } catch (fundingError: any) {
-        console.error('Failed to fund stream:', fundingError);
-        setErrors({
-          recipient: `Stream created but funding failed: ${fundingError.message}. You can fund it later from the stream detail page.`,
-        });
-        setTimeout(() => {
-          if (effectiveVaultId) {
-            navigate(`/vaults/${effectiveVaultId}?tab=streams`);
-          } else {
-            navigate(`/streams/${streamId}`, {
-              state: daoContext ? { daoContext } : undefined,
-            });
-          }
-        }, 3000);
+      if (!streamId) {
+        throw new Error('Stream created but no stream ID was returned.');
       }
+      navigate(`/streams/${streamId}`, {
+        state: { freshCreate: true, ...(daoContext ? { daoContext } : {}) },
+      });
     } catch (error: any) {
       console.error('Failed to create stream:', error);
       setErrors({

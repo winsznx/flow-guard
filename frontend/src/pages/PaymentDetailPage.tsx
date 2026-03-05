@@ -13,6 +13,7 @@ import {
   getExplorerTxUrl,
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { toUserFacingError } from '../utils/userError';
 import {
   ChevronLeft,
   Repeat,
@@ -47,6 +48,7 @@ interface FeedbackState {
   tone: FeedbackTone;
   title: string;
   description?: string;
+  details?: string;
   txHash?: string;
 }
 
@@ -74,6 +76,20 @@ export default function PaymentDetailPage() {
       : null,
   );
   const [isFundingSyncing, setIsFundingSyncing] = useState(false);
+
+  const buildErrorFeedback = (
+    title: string,
+    error: unknown,
+    fallback: string,
+  ): FeedbackState => {
+    const parsed = toUserFacingError(error, fallback);
+    return {
+      tone: 'error',
+      title,
+      description: parsed.message,
+      details: parsed.details,
+    };
+  };
 
   const refreshPayment = useCallback(async () => {
     if (!id) return null;
@@ -113,11 +129,7 @@ export default function PaymentDetailPage() {
         await refreshPayment();
       } catch (error) {
         console.error('Failed to fetch payment:', error);
-        setFeedback({
-          tone: 'error',
-          title: 'Failed to load payment details.',
-          description: error instanceof Error ? error.message : 'Try refreshing the page.',
-        });
+        setFeedback(buildErrorFeedback('Failed to load payment details.', error, 'Try refreshing the page.'));
       } finally {
         setLoading(false);
       }
@@ -171,11 +183,7 @@ export default function PaymentDetailPage() {
       });
     } catch (error: any) {
       console.error('Failed to pause payment:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to pause payment.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to pause payment.', error, 'Unable to pause payment'));
     } finally {
       setActionLoading(null);
     }
@@ -202,11 +210,7 @@ export default function PaymentDetailPage() {
       });
     } catch (error: any) {
       console.error('Failed to resume payment:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to resume payment.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to resume payment.', error, 'Unable to resume payment'));
     } finally {
       setActionLoading(null);
     }
@@ -237,11 +241,7 @@ export default function PaymentDetailPage() {
       navigate('/payments');
     } catch (error: any) {
       console.error('Failed to cancel payment:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to cancel payment.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to cancel payment.', error, 'Unable to cancel payment'));
       setActionLoading(null);
     }
   };
@@ -294,11 +294,7 @@ export default function PaymentDetailPage() {
       }
     } catch (error: any) {
       console.error('Failed to fund payment:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to fund payment.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to fund payment.', error, 'Unable to fund payment'));
     } finally {
       setActionLoading(null);
     }
@@ -335,11 +331,7 @@ export default function PaymentDetailPage() {
       });
     } catch (error: any) {
       console.error('Failed to claim payment:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Failed to claim payment.',
-        description: error.message,
-      });
+      setFeedback(buildErrorFeedback('Failed to claim payment.', error, 'Unable to claim payment'));
     } finally {
       setActionLoading(null);
     }
@@ -482,7 +474,17 @@ export default function PaymentDetailPage() {
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">{feedback.title}</p>
                 {feedback.description && (
-                  <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                  <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
+                )}
+                {feedback.details && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
+                      Show technical details
+                    </summary>
+                    <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
+                      {feedback.details}
+                    </pre>
+                  </details>
                 )}
                 {feedback.txHash && (
                   <a

@@ -16,6 +16,7 @@ import {
   getExplorerTxUrl,
 } from '../utils/blockchain';
 import { useNetwork } from '../hooks/useNetwork';
+import { toUserFacingError } from '../utils/userError';
 import { Button } from '../components/ui/Button';
 import { DataTable, Column } from '../components/shared/DataTable';
 import { StatsCard } from '../components/shared/StatsCard';
@@ -47,6 +48,7 @@ interface FeedbackState {
   tone: FeedbackTone;
   title: string;
   description?: string;
+  details?: string;
   txHash?: string;
 }
 
@@ -63,6 +65,20 @@ export default function BudgetPlansPage() {
   const [actionModal, setActionModal] = useState<{ open: boolean; plan: BudgetPlan | null }>({ open: false, plan: null });
   const [actionLoading, setActionLoading] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+
+  const buildErrorFeedback = (
+    title: string,
+    error: unknown,
+    fallback: string,
+  ): FeedbackState => {
+    const parsed = toUserFacingError(error, fallback);
+    return {
+      tone: 'error',
+      title,
+      description: parsed.message,
+      details: parsed.details,
+    };
+  };
 
   const transformPlan = (plan: any): BudgetPlan => ({
     id: plan.id,
@@ -316,11 +332,7 @@ export default function BudgetPlansPage() {
       await reloadPlans();
     } catch (error: any) {
       console.error('Failed to fund budget plan:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Funding failed',
-        description: error.message || 'Failed to fund budget plan.',
-      });
+      setFeedback(buildErrorFeedback('Funding failed', error, 'Failed to fund budget plan.'));
     } finally {
       setActionLoading(false);
     }
@@ -353,11 +365,7 @@ export default function BudgetPlansPage() {
       await reloadPlans();
     } catch (error: any) {
       console.error('Failed to release milestone:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Milestone release failed',
-        description: error.message || 'Failed to release milestone.',
-      });
+      setFeedback(buildErrorFeedback('Milestone release failed', error, 'Failed to release milestone.'));
     } finally {
       setActionLoading(false);
     }
@@ -390,11 +398,7 @@ export default function BudgetPlansPage() {
       await reloadPlans();
     } catch (error: any) {
       console.error('Failed to pause budget plan:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Pause failed',
-        description: error.message || 'Failed to pause budget plan.',
-      });
+      setFeedback(buildErrorFeedback('Pause failed', error, 'Failed to pause budget plan.'));
     } finally {
       setActionLoading(false);
     }
@@ -431,11 +435,7 @@ export default function BudgetPlansPage() {
       await reloadPlans();
     } catch (error: any) {
       console.error('Failed to cancel budget plan:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Cancel failed',
-        description: error.message || 'Failed to cancel budget plan.',
-      });
+      setFeedback(buildErrorFeedback('Cancel failed', error, 'Failed to cancel budget plan.'));
     } finally {
       setActionLoading(false);
     }
@@ -601,7 +601,17 @@ export default function BudgetPlansPage() {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold">{feedback.title}</p>
                       {feedback.description && (
-                        <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                        <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
+                      )}
+                      {feedback.details && (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
+                            Show technical details
+                          </summary>
+                          <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
+                            {feedback.details}
+                          </pre>
+                        </details>
                       )}
                       {feedback.txHash && (
                         <a

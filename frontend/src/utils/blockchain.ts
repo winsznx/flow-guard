@@ -301,12 +301,22 @@ function getApiErrorMessage(error: any, fallback: string): string {
   if (!error || typeof error !== 'object') {
     return fallback;
   }
+  const user = typeof error.userMessage === 'string' ? error.userMessage.trim() : '';
   const generic = typeof error.error === 'string' ? error.error.trim() : '';
   const detail = typeof error.message === 'string' ? error.message.trim() : '';
-  if (generic && detail && generic !== detail) {
-    return `${generic}: ${detail}`;
+  const diagnostics = error?.debug?.diagnostics ?? error?.diagnostics;
+  const primary = user || detail || generic || fallback;
+
+  let message = primary;
+  if (!user && generic && detail && generic !== detail) {
+    message = `${generic}: ${detail}`;
   }
-  return detail || generic || fallback;
+
+  if (diagnostics) {
+    return `${message}\n\nDiagnostics: ${JSON.stringify(diagnostics)}`;
+  }
+
+  return message;
 }
 
 function publishTransactionNotice(txHash: string, wallet: WalletInterface, label: string): string {

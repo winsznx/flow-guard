@@ -24,6 +24,7 @@ import { StreamScheduleChart } from '../components/streams/StreamScheduleChart';
 import { formatLogicalId } from '../utils/display';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
+import { toUserFacingError } from '../utils/userError';
 import {
   cancelStreamOnChain,
   claimStreamFunds,
@@ -81,6 +82,7 @@ interface Stream {
   transferable: boolean;
   refillable: boolean;
   status: 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
+  activated_at?: number;
   created_at: number;
   description?: string;
 }
@@ -125,6 +127,7 @@ interface FeedbackState {
   tone: FeedbackTone;
   title: string;
   description?: string;
+  details?: string;
   txHash?: string;
 }
 
@@ -502,7 +505,7 @@ export default function StreamDetailPage() {
   const network = useNetwork();
   const navigate = useNavigate();
   const location = useLocation();
-  const launchState = location.state as { daoContext?: DaoLaunchContext } | null;
+  const launchState = location.state as { daoContext?: DaoLaunchContext; freshCreate?: boolean } | null;
   const daoContext = launchState?.daoContext || readDaoLaunchContext();
   const [stream, setStream] = useState<Stream | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -520,7 +523,29 @@ export default function StreamDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [relatedActivity, setRelatedActivity] = useState<RelatedActivityEvent[]>([]);
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(
+    launchState?.freshCreate
+      ? {
+          tone: 'info',
+          title: 'Stream created. Funding is the next step.',
+          description: 'The stream exists on-chain. Fund this stream from here to activate vesting.',
+        }
+      : null,
+  );
+
+  const buildErrorFeedback = (
+    title: string,
+    error: unknown,
+    fallback: string,
+  ): FeedbackState => {
+    const parsed = toUserFacingError(error, fallback);
+    return {
+      tone: 'error',
+      title,
+      description: parsed.message,
+      details: parsed.details,
+    };
+  };
 
   const refreshStream = async () => {
     try {
@@ -598,11 +623,7 @@ export default function StreamDetailPage() {
       });
     } catch (error) {
       console.error('Claim failed:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Claim failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Claim failed.', error, 'Failed to claim stream'));
     } finally {
       setClaiming(false);
     }
@@ -641,11 +662,7 @@ export default function StreamDetailPage() {
     } catch (error) {
       console.error('Cancel failed:', error);
       await refreshStream();
-      setFeedback({
-        tone: 'error',
-        title: 'Cancel failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Cancel failed.', error, 'Failed to cancel stream'));
     } finally {
       setCancelling(false);
     }
@@ -679,11 +696,7 @@ export default function StreamDetailPage() {
       });
     } catch (error) {
       console.error('Funding failed:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Funding failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Funding failed.', error, 'Failed to fund stream'));
     } finally {
       setFunding(false);
     }
@@ -769,11 +782,7 @@ export default function StreamDetailPage() {
     } catch (error) {
       console.error('Pause failed:', error);
       await refreshStream();
-      setFeedback({
-        tone: 'error',
-        title: 'Pause failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Pause failed.', error, 'Failed to pause stream'));
     } finally {
       setPausing(false);
     }
@@ -802,11 +811,7 @@ export default function StreamDetailPage() {
       });
     } catch (error) {
       console.error('Resume failed:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Resume failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Resume failed.', error, 'Failed to resume stream'));
     } finally {
       setResuming(false);
     }
@@ -844,11 +849,7 @@ export default function StreamDetailPage() {
       });
     } catch (error) {
       console.error('Transfer failed:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Transfer failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Transfer failed.', error, 'Failed to transfer stream recipient'));
     } finally {
       setTransferring(false);
     }
@@ -887,11 +888,7 @@ export default function StreamDetailPage() {
       });
     } catch (error) {
       console.error('Refill failed:', error);
-      setFeedback({
-        tone: 'error',
-        title: 'Refill failed.',
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
+      setFeedback(buildErrorFeedback('Refill failed.', error, 'Failed to refill recurring stream'));
     } finally {
       setRefilling(false);
     }
@@ -1083,7 +1080,17 @@ export default function StreamDetailPage() {
             <div className="min-w-0 flex-1">
               <p className="font-semibold">{feedback.title}</p>
               {feedback.description && (
-                <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
+              )}
+              {feedback.details && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
+                    Show technical details
+                  </summary>
+                  <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
+                    {feedback.details}
+                  </pre>
+                </details>
               )}
               {feedback.txHash && (
                 <a
