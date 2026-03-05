@@ -97,8 +97,6 @@ export class BudgetReleaseService {
       stepInterval,
       stepAmount,
       totalAmount,
-      totalReleased,
-      lastReleaseTime,
       currentTime,
       tokenType,
       tokenCategory,
@@ -106,26 +104,6 @@ export class BudgetReleaseService {
       constructorParams,
       currentCommitment,
     } = params;
-
-    // Calculate completed milestones since last release
-    const elapsedTime = currentTime - lastReleaseTime;
-    const completedMilestones = Math.floor(elapsedTime / stepInterval);
-
-    if (completedMilestones === 0) {
-      throw new Error('No milestones available to release yet');
-    }
-
-    // Calculate releasable amount (capped at total)
-    let vestedTotal = completedMilestones * stepAmount;
-    if (vestedTotal > totalAmount) {
-      vestedTotal = totalAmount;
-    }
-
-    const releasableAmount = vestedTotal - totalReleased;
-
-    if (releasableAmount <= 0) {
-      throw new Error('No funds available to release');
-    }
 
     // Get contract artifact
     const artifact = ContractFactory.getArtifact('VestingCovenant');
@@ -145,6 +123,43 @@ export class BudgetReleaseService {
       throw new Error('Budget contract UTXO missing required state NFT token');
     }
 
+    const commitment = this.resolveCommitment(contractUtxo.token.nft?.commitment as unknown, currentCommitment);
+    if (commitment.length < 20) {
+      throw new Error(`Invalid budget state commitment length: expected >=20, got ${commitment.length}`);
+    }
+    const status = commitment[0] ?? 0;
+    if (status !== 0) {
+      throw new Error(`Budget plan is not ACTIVE on-chain (status=${status})`);
+    }
+    const onChainUsesTokens = ((commitment[1] ?? 0) & 0x04) === 0x04;
+    const requestedUsesTokens = tokenType === 'FUNGIBLE_TOKEN';
+    if (onChainUsesTokens !== requestedUsesTokens) {
+      throw new Error(
+        `Token type mismatch: budget on-chain uses ${onChainUsesTokens ? 'FUNGIBLE_TOKEN' : 'BCH'}, `
+        + `but release request used ${requestedUsesTokens ? 'FUNGIBLE_TOKEN' : 'BCH'}`,
+      );
+    }
+
+    const totalReleasedFromCommitment = Number(this.readUint64LE(commitment, 2));
+    const cursorFromCommitment = this.readUint40LE(commitment, 10);
+    const elapsedTime = currentTime - cursorFromCommitment;
+    const completedMilestones = Math.max(0, Math.floor(elapsedTime / stepInterval));
+
+    if (completedMilestones === 0) {
+      throw new Error('No milestones available to release yet');
+    }
+
+    let vestedTotal = completedMilestones * stepAmount;
+    if (vestedTotal > totalAmount) {
+      vestedTotal = totalAmount;
+    }
+
+    const releasableAmount = vestedTotal - totalReleasedFromCommitment;
+
+    if (releasableAmount <= 0) {
+      throw new Error('No funds available to release');
+    }
+
     // Build inputs
     const inputs: TransactionInput[] = [
       {
@@ -159,11 +174,10 @@ export class BudgetReleaseService {
     ];
 
     // Calculate new state
-    const newTotalReleased = totalReleased + releasableAmount;
+    const newTotalReleased = totalReleasedFromCommitment + releasableAmount;
     const newStatus = newTotalReleased >= totalAmount ? 3 : 0; // COMPLETED : ACTIVE
 
     // Build new NFT commitment
-    const commitment = hexToBin(currentCommitment);
     const newCommitment = new Uint8Array(40);
     newCommitment.set(commitment.slice(0, 40));
 
@@ -349,5 +363,32 @@ export class BudgetReleaseService {
       txHex: JSON.stringify({ inputs, outputs, fee: Number(estimatedFee) }),
       wcTransaction,
     };
+  }
+
+  private resolveCommitment(onChain: unknown, fallbackHex?: string): Uint8Array {
+    if (onChain instanceof Uint8Array) {
+      return onChain;
+    }
+    if (typeof onChain === 'string' && onChain.length > 0) {
+      return hexToBin(onChain);
+    }
+    if (fallbackHex && fallbackHex.length > 0) {
+      return hexToBin(fallbackHex);
+    }
+    return new Uint8Array();
+  }
+
+  private readUint64LE(source: Uint8Array, offset: number): bigint {
+    const view = new DataView(source.buffer, source.byteOffset + offset, 8);
+    return view.getBigUint64(0, true);
+  }
+
+  private readUint40LE(source: Uint8Array, offset: number): number {
+    if (source.length < offset + 5) return 0;
+    return source[offset]
+      + (source[offset + 1] << 8)
+      + (source[offset + 2] << 16)
+      + (source[offset + 3] << 24)
+      + (source[offset + 4] * 0x100000000);
   }
 }

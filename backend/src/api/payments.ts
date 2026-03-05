@@ -853,16 +853,43 @@ router.post('/payments/:id/claim', async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Only the payment recipient can claim' });
     }
 
-    const amountPerIntervalOnChain = displayAmountToOnChain(payment.amount_per_period, payment.token_type);
-    const totalPaidOnChain = displayAmountToOnChain(payment.total_paid || 0, payment.token_type);
-    const constructorParams = JSON.parse(payment.constructor_params || '[]');
+    const constructorParams = deserializeConstructorParams(payment.constructor_params || '[]');
+    const amountPerIntervalOnChain = Number(toBigIntParam(constructorParams[3], 'amountPerInterval'));
+    const intervalSecondsOnChain = Number(toBigIntParam(constructorParams[4], 'intervalSeconds'));
+    const endTimestampOnChain = Number(toBigIntParam(constructorParams[7], 'endTimestamp'));
     const now = Math.floor(Date.now() / 1000);
 
     // Fetch current NFT commitment from blockchain
     const contractService = new ContractService('chipnet');
-    const currentCommitment = await contractService.getNFTCommitment(payment.contract_address)
-      || payment.nft_commitment
-      || '';
+    const currentCommitment = await contractService.getNFTCommitment(payment.contract_address);
+    if (!currentCommitment) {
+      return res.status(409).json({
+        error: 'Payment state is still syncing',
+        message: 'Unable to read live on-chain payment state right now. Retry claim shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'PAYMENT_STATE_UNAVAILABLE',
+      });
+    }
+    const paymentState = parsePaymentCommitmentState(currentCommitment);
+    if (!paymentState) {
+      return res.status(409).json({
+        error: 'Payment state is still syncing',
+        message: 'Unable to decode live on-chain payment commitment right now. Retry claim shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'PAYMENT_STATE_UNAVAILABLE',
+      });
+    }
+    if (paymentState.status !== 0) {
+      return res.status(409).json({
+        error: 'Payment is not claimable right now',
+        message: `On-chain payment state is ${paymentState.status}. Refresh and retry after status sync.`,
+        state: 'pending',
+        retryable: true,
+        errorCode: 'PAYMENT_STATUS_MISMATCH',
+      });
+    }
 
     // Build claim transaction
     const claimService = new PaymentClaimService('chipnet');
@@ -871,19 +898,15 @@ router.post('/payments/:id/claim', async (req: Request, res: Response) => {
       contractAddress: payment.contract_address,
       recipient: payment.recipient,
       amountPerInterval: amountPerIntervalOnChain,
-      intervalSeconds: payment.interval_seconds,
-      totalPaid: totalPaidOnChain,
-      nextPaymentTime: Number(payment.next_payment_date || (now + Number(payment.interval_seconds || 0))),
+      intervalSeconds: intervalSecondsOnChain,
+      totalPaid: paymentState.totalPaid,
+      nextPaymentTime: paymentState.nextPaymentTime,
       currentTime: now,
-      endTime: payment.end_date,
+      endTime: endTimestampOnChain > 0 ? endTimestampOnChain : undefined,
       tokenType: normalizePaymentTokenType(payment.token_type),
       tokenCategory: payment.token_category,
       feePayerAddress: signerAddress || recipientAddress,
-      constructorParams: constructorParams.map((p: any) => {
-        if (p.type === 'bytes') return Buffer.from(p.value, 'hex');
-        if (p.type === 'bigint') return BigInt(p.value);
-        return p.value;
-      }),
+      constructorParams,
       currentCommitment,
     });
 
@@ -1151,6 +1174,30 @@ function buildFallbackPaymentEvents(payment: any, history: any[]): Array<{
   });
 
   return events.sort((a, b) => b.created_at - a.created_at);
+}
+
+function parsePaymentCommitmentState(commitmentHex: string | null | undefined): {
+  status: number;
+  totalPaid: number;
+  nextPaymentTime: number;
+} | null {
+  if (!commitmentHex) return null;
+  try {
+    const bytes = hexToBin(commitmentHex);
+    if (bytes.length < 23) return null;
+    return {
+      status: bytes[0],
+      totalPaid: Number(new DataView(bytes.buffer, bytes.byteOffset + 2, 8).getBigUint64(0, true)),
+      nextPaymentTime:
+        bytes[18]
+        + (bytes[19] << 8)
+        + (bytes[20] << 16)
+        + (bytes[21] << 24)
+        + (bytes[22] * 0x100000000),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function deserializeConstructorParams(raw: string): any[] {

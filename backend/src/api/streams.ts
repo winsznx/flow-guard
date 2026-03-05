@@ -1101,13 +1101,30 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
     }
 
     const claimService = new StreamClaimService('chipnet');
-    const isTokenStream = isFungibleTokenType(row.token_type);
-    const totalAmountOnChain = isTokenStream
-      ? Math.max(0, Math.trunc(Number(row.total_amount)))
-      : bchToSatoshis(Number(row.total_amount));
-    const totalReleasedOnChain = isTokenStream
-      ? Math.max(0, Math.trunc(Number(row.withdrawn_amount || 0)))
-      : bchToSatoshis(Number(row.withdrawn_amount || 0));
+    const vestingState = parseVestingCommitmentState(currentCommitment);
+    if (!vestingState) {
+      return res.status(409).json({
+        error: 'Stream state is still syncing',
+        message: 'Unable to decode live stream commitment right now. Retry claim in a few seconds.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_STATE_UNAVAILABLE',
+      });
+    }
+    if (vestingState.status !== 0) {
+      return res.status(409).json({
+        error: 'Stream is not claimable right now',
+        message: `On-chain stream state is ${vestingState.status}. Refresh and retry after status sync.`,
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_STATUS_MISMATCH',
+      });
+    }
+    const totalAmountOnChain = resolveOnChainStreamTotalAmount(row, constructorParams);
+    const { startTime: onChainStartTime, endTime: onChainEndTime } = resolveOnChainStreamTimeBounds(
+      row,
+      constructorParams,
+    );
     const scheduleDetails = getStreamScheduleDetails(row);
 
     // Build claim parameters
@@ -1116,9 +1133,9 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
       contractAddress: row.contract_address,
       recipient: row.recipient,
       totalAmount: totalAmountOnChain,
-      totalReleased: totalReleasedOnChain,
-      startTime: row.start_time,
-      endTime: row.end_time || row.start_time + 86400 * 365,
+      totalReleased: vestingState.totalReleased,
+      startTime: onChainStartTime,
+      endTime: onChainEndTime,
       currentTime: Math.floor(Date.now() / 1000),
       streamType: row.stream_type as 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID',
       stepInterval: scheduleDetails.intervalSeconds,
@@ -1357,20 +1374,37 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
           contractAddress: row.contract_address,
           recipient: row.recipient,
           claimableAmount,
-          totalReleased: row.withdrawn_amount,
+          totalReleased: onChainAmountToDisplay(Number(recurringState.totalPaid), row.token_type),
           wcTransaction: serializeWcTransaction(claimTx.wcTransaction),
         },
       });
     }
 
     const claimService = new StreamClaimService('chipnet');
-    const isTokenStream = isFungibleTokenType(row.token_type);
-    const totalAmountOnChain = isTokenStream
-      ? Math.max(0, Math.trunc(Number(row.total_amount)))
-      : bchToSatoshis(Number(row.total_amount));
-    const totalReleasedOnChain = isTokenStream
-      ? Math.max(0, Math.trunc(Number(row.withdrawn_amount || 0)))
-      : bchToSatoshis(Number(row.withdrawn_amount || 0));
+    const vestingState = parseVestingCommitmentState(currentCommitment);
+    if (!vestingState) {
+      return res.status(409).json({
+        error: 'Stream state is still syncing',
+        message: 'Unable to decode live stream commitment right now. Retry shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_STATE_UNAVAILABLE',
+      });
+    }
+    if (vestingState.status !== 0) {
+      return res.status(409).json({
+        error: 'Stream is not claimable right now',
+        message: `On-chain stream state is ${vestingState.status}. Refresh and retry after status sync.`,
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_STATUS_MISMATCH',
+      });
+    }
+    const totalAmountOnChain = resolveOnChainStreamTotalAmount(row, constructorParams);
+    const { startTime: onChainStartTime, endTime: onChainEndTime } = resolveOnChainStreamTimeBounds(
+      row,
+      constructorParams,
+    );
     const scheduleDetails = getStreamScheduleDetails(row);
 
     // Build claim parameters
@@ -1379,9 +1413,9 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
       contractAddress: row.contract_address,
       recipient: row.recipient,
       totalAmount: totalAmountOnChain,
-      totalReleased: totalReleasedOnChain,
-      startTime: row.start_time,
-      endTime: row.end_time || row.start_time + 86400 * 365,
+      totalReleased: vestingState.totalReleased,
+      startTime: onChainStartTime,
+      endTime: onChainEndTime,
       currentTime: Math.floor(Date.now() / 1000),
       streamType: row.stream_type as 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID',
       stepInterval: scheduleDetails.intervalSeconds,
@@ -1415,7 +1449,7 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
         contractAddress: row.contract_address,
         recipient: row.recipient,
         claimableAmount,
-        totalReleased: row.withdrawn_amount,
+        totalReleased: onChainAmountToDisplay(vestingState.totalReleased, row.token_type),
         wcTransaction: serializeWcTransaction(claimTx.wcTransaction),
       },
     });
@@ -3368,6 +3402,8 @@ function buildFallbackStreamEvents(row: any, claimRows: any[]): Array<{
 }
 
 function parseVestingCommitmentState(commitmentHex: string | null | undefined): {
+  status: number;
+  totalReleased: number;
   cursor: number;
   pauseStart: number;
 } | null {
@@ -3376,6 +3412,8 @@ function parseVestingCommitmentState(commitmentHex: string | null | undefined): 
     const bytes = hexToBin(commitmentHex);
     if (bytes.length < 20) return null;
     return {
+      status: bytes[0],
+      totalReleased: Number(new DataView(bytes.buffer, bytes.byteOffset + 2, 8).getBigUint64(0, true)),
       cursor:
         bytes[10]
         + (bytes[11] << 8)
@@ -3392,6 +3430,38 @@ function parseVestingCommitmentState(commitmentHex: string | null | undefined): 
   } catch {
     return null;
   }
+}
+
+function resolveOnChainStreamTotalAmount(row: any, constructorParams: any[]): number {
+  if (row.stream_type === 'HYBRID' || row.stream_type === 'TRANCHE') {
+    return Number(toBigIntParam(constructorParams[2], 'totalAmount'));
+  }
+  return Number(toBigIntParam(constructorParams[3], 'totalAmount'));
+}
+
+function resolveOnChainStreamTimeBounds(
+  row: any,
+  constructorParams: any[],
+): { startTime: number; endTime: number } {
+  if (row.stream_type === 'HYBRID') {
+    return {
+      startTime: Number(toBigIntParam(constructorParams[3], 'startTimestamp')),
+      endTime: Number(toBigIntParam(constructorParams[5], 'endTimestamp')),
+    };
+  }
+
+  if (row.stream_type === 'TRANCHE') {
+    const startTime = Number(toBigIntParam(constructorParams[3], 'startTimestamp'));
+    return {
+      startTime,
+      endTime: Number(row.end_time || startTime + 86400 * 365),
+    };
+  }
+
+  return {
+    startTime: Number(toBigIntParam(constructorParams[4], 'startTimestamp')),
+    endTime: Number(toBigIntParam(constructorParams[5], 'endTimestamp')),
+  };
 }
 
 function deserializeConstructorParams(rawParams: string): any[] {

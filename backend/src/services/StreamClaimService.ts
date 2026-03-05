@@ -69,14 +69,14 @@ export class StreamClaimService {
 
     const effectiveStart = this.readUint40LEFromHex(currentCommitment, 10) || startTime;
     const elapsed = currentTime - effectiveStart;
-    const duration = endTime - effectiveStart;
+    const duration = endTime - startTime;
 
     let vestedTotal = 0;
 
     if (streamType === 'LINEAR') {
       if (elapsed >= duration) {
         vestedTotal = totalAmount;
-      } else if (elapsed > 0) {
+      } else if (elapsed > 0 && duration > 0) {
         vestedTotal = Math.floor((totalAmount * elapsed) / duration);
       }
     } else if (streamType === 'STEP') {
@@ -123,16 +123,9 @@ export class StreamClaimService {
   }
 
   async buildClaimTransaction(params: ClaimTransactionParams): Promise<ClaimTransaction> {
-    const claimableAmount = this.calculateClaimableAmount(params);
-
-    if (claimableAmount <= 0) {
-      throw new Error('No funds available to claim at this time');
-    }
-
     const {
       contractAddress,
       recipient,
-      totalReleased,
       tokenType,
       tokenCategory,
       feePayerAddress,
@@ -161,13 +154,36 @@ export class StreamClaimService {
       throw new Error('Stream contract UTXO is missing the required mutable state NFT');
     }
 
-    // Update NFT commitment: total_released at bytes 2-9
-    const commitment = hexToBin(currentCommitment);
+    const commitment = this.resolveCommitment(contractUtxo.token.nft?.commitment as unknown, currentCommitment);
     if (commitment.length < 40) {
       throw new Error(`Invalid stream state commitment length: expected >=40, got ${commitment.length}`);
     }
+    const status = commitment[0] ?? 0;
+    if (status !== 0) {
+      throw new Error(`Stream is not ACTIVE on-chain (status=${status})`);
+    }
+    const onChainUsesTokens = ((commitment[1] ?? 0) & 0x04) === 0x04;
+    const requestedUsesTokens = tokenType === 'FUNGIBLE_TOKEN';
+    if (onChainUsesTokens !== requestedUsesTokens) {
+      throw new Error(
+        `Token type mismatch: stream on-chain uses ${onChainUsesTokens ? 'FUNGIBLE_TOKEN' : 'BCH'}, `
+        + `but claim request used ${requestedUsesTokens ? 'FUNGIBLE_TOKEN' : 'BCH'}`,
+      );
+    }
+    const commitmentHex = binToHex(commitment);
+    const totalReleasedFromCommitment = this.readUint64LEFromHex(commitmentHex, 2);
+    const claimableAmount = this.calculateClaimableAmount({
+      ...params,
+      totalReleased: totalReleasedFromCommitment,
+      currentCommitment: commitmentHex,
+    });
+    if (claimableAmount <= 0) {
+      throw new Error('No funds available to claim at this time');
+    }
+
+    // Update NFT commitment: total_released at bytes 2-9
     const newCommitment = new Uint8Array(commitment);
-    const newTotalReleased = totalReleased + claimableAmount;
+    const newTotalReleased = totalReleasedFromCommitment + claimableAmount;
     const newStatus = newTotalReleased >= params.totalAmount ? 3 : 0;
     newCommitment[0] = newStatus;
     const dv = new DataView(newCommitment.buffer, newCommitment.byteOffset + 2, 8);
@@ -273,17 +289,21 @@ export class StreamClaimService {
 
   validateClaim(params: ClaimTransactionParams): { valid: boolean; error?: string } {
     const { currentTime, startTime, endTime, currentCommitment } = params;
+    const totalReleasedFromCommitment = this.readUint64LEFromHex(currentCommitment, 2);
     const effectiveStart = this.readUint40LEFromHex(currentCommitment, 10) || startTime;
 
     if (currentTime < effectiveStart) {
       return { valid: false, error: 'Vesting has not started yet' };
     }
 
-    if (currentTime > endTime && params.totalReleased >= params.totalAmount) {
+    if (currentTime > endTime && totalReleasedFromCommitment >= params.totalAmount) {
       return { valid: false, error: 'All funds have been claimed' };
     }
 
-    const claimable = this.calculateClaimableAmount(params);
+    const claimable = this.calculateClaimableAmount({
+      ...params,
+      totalReleased: totalReleasedFromCommitment,
+    });
     if (claimable <= 0) {
       return { valid: false, error: 'No funds available to claim at this time' };
     }
@@ -303,5 +323,33 @@ export class StreamClaimService {
     } catch {
       return 0;
     }
+  }
+
+  private readUint64LEFromHex(commitmentHex: string, offset: number): number {
+    try {
+      const commitment = hexToBin(commitmentHex);
+      if (commitment.length < offset + 8) return 0;
+      const value = new DataView(
+        commitment.buffer,
+        commitment.byteOffset + offset,
+        8,
+      ).getBigUint64(0, true);
+      return Number(value);
+    } catch {
+      return 0;
+    }
+  }
+
+  private resolveCommitment(onChainCommitment: unknown, fallbackCommitment: string): Uint8Array {
+    if (onChainCommitment instanceof Uint8Array) {
+      return onChainCommitment;
+    }
+    if (typeof onChainCommitment === 'string' && onChainCommitment.length > 0) {
+      return hexToBin(onChainCommitment);
+    }
+    if (fallbackCommitment) {
+      return hexToBin(fallbackCommitment);
+    }
+    return new Uint8Array();
   }
 }

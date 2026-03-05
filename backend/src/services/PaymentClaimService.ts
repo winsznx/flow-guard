@@ -57,17 +57,9 @@ export class PaymentClaimService {
   }
 
   async buildClaimTransaction(params: ClaimTransactionParams): Promise<ClaimTransaction> {
-    const { intervals, amount: claimableAmount } = this.calculateClaimable(params);
-
-    if (claimableAmount <= 0) {
-      throw new Error('No payments available to claim at this time');
-    }
-
     const {
       contractAddress,
       recipient,
-      totalPaid,
-      nextPaymentTime,
       intervalSeconds,
       tokenType,
       tokenCategory,
@@ -91,15 +83,39 @@ export class PaymentClaimService {
       throw new Error('Payment contract UTXO is missing the required mutable state NFT');
     }
 
+    const commitment = this.resolveCommitment(contractUtxo.token.nft?.commitment as unknown, currentCommitment);
+    if (commitment.length < 28) {
+      throw new Error(`Invalid payment state commitment length: expected >=28, got ${commitment.length}`);
+    }
+    const status = commitment[0] ?? 0;
+    if (status !== 0) {
+      throw new Error(`Payment is not ACTIVE on-chain (status=${status})`);
+    }
+    const onChainUsesTokens = ((commitment[1] ?? 0) & 0x04) === 0x04;
+    const requestedUsesTokens = tokenType === 'FUNGIBLE_TOKEN';
+    if (onChainUsesTokens !== requestedUsesTokens) {
+      throw new Error(
+        `Token type mismatch: payment on-chain uses ${onChainUsesTokens ? 'FUNGIBLE_TOKEN' : 'BCH'}, `
+        + `but claim request used ${requestedUsesTokens ? 'FUNGIBLE_TOKEN' : 'BCH'}`,
+      );
+    }
+
+    const totalPaidFromCommitment = Number(this.readUint64LE(commitment, 2));
+    const nextPaymentFromCommitment = this.readUint40LE(commitment, 18);
+    const { intervals, amount: claimableAmount } = this.calculateClaimable({
+      ...params,
+      totalPaid: totalPaidFromCommitment,
+      nextPaymentTime: nextPaymentFromCommitment,
+    });
+
+    if (claimableAmount <= 0) {
+      throw new Error('No payments available to claim at this time');
+    }
+
     // Update NFT commitment for RecurringPaymentCovenant:
     // [0]=status, [1]=flags, [2-9]=total_paid, [10-17]=payment_count, [18-22]=next_payment, [23-27]=pause_start
-    const newTotalPaid = totalPaid + claimableAmount;
-    const newNextPaymentTime = nextPaymentTime + intervalSeconds;
-
-    const existingCommitment = currentCommitment ? hexToBin(currentCommitment) : new Uint8Array(40);
-    if (existingCommitment.length < 40) {
-      throw new Error(`Invalid payment state commitment length: expected >=40, got ${existingCommitment.length}`);
-    }
+    const newTotalPaid = totalPaidFromCommitment + claimableAmount;
+    const newNextPaymentTime = nextPaymentFromCommitment + intervalSeconds;
 
     const newCommitment = new Uint8Array(40);
     const configuredTotalAmount = BigInt(
@@ -111,11 +127,11 @@ export class PaymentClaimService {
       ? 3
       : 0;
     newCommitment[0] = nextStatus;
-    newCommitment[1] = existingCommitment[1]; // flags
+    newCommitment[1] = commitment[1] ?? 0; // flags
 
     const currentPaymentCount = new DataView(
-      existingCommitment.buffer,
-      existingCommitment.byteOffset + 10,
+      commitment.buffer,
+      commitment.byteOffset + 10,
       8,
     ).getBigUint64(0, true);
     const newPaymentCount = currentPaymentCount + 1n;
@@ -228,5 +244,32 @@ export class PaymentClaimService {
     target[offset + 2] = (safe >>> 16) & 0xff;
     target[offset + 3] = (safe >>> 24) & 0xff;
     target[offset + 4] = Math.floor(safe / 0x100000000) & 0xff;
+  }
+
+  private resolveCommitment(onChain: unknown, fallbackHex?: string): Uint8Array {
+    if (onChain instanceof Uint8Array) {
+      return onChain;
+    }
+    if (typeof onChain === 'string' && onChain.length > 0) {
+      return hexToBin(onChain);
+    }
+    if (fallbackHex && fallbackHex.length > 0) {
+      return hexToBin(fallbackHex);
+    }
+    return new Uint8Array();
+  }
+
+  private readUint64LE(source: Uint8Array, offset: number): bigint {
+    const view = new DataView(source.buffer, source.byteOffset + offset, 8);
+    return view.getBigUint64(0, true);
+  }
+
+  private readUint40LE(source: Uint8Array, offset: number): number {
+    if (source.length < offset + 5) return 0;
+    return source[offset]
+      + (source[offset + 1] << 8)
+      + (source[offset + 2] << 16)
+      + (source[offset + 3] << 24)
+      + (source[offset + 4] * 0x100000000);
   }
 }
