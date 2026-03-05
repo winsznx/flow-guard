@@ -11,38 +11,19 @@
       ],
       "destination": "https://flowguard.cash/:path*",
       "permanent": true
-    },
-    {
-      "source": "/app/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "app.flowguard.cash"
-        }
-      ],
-      "destination": "/:path*",
-      "permanent": false
-    },
-    {
-      "source": "/explorer/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "explorer.flowguard.cash"
-        }
-      ],
-      "destination": "/:path*",
-      "permanent": false
     }
   ],
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/:path*",
-      "destination": "https://api.flowguard.cash/api/:path*"
+      "src": "/api/(.*)",
+      "dest": "https://api.flowguard.cash/api/$1"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "handle": "filesystem"
+    },
+    {
+      "src": "/.*",
+      "dest": "/index.html"
     }
   ]
 }
