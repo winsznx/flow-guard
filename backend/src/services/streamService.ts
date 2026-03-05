@@ -46,7 +46,7 @@ export interface Stream {
   cancelable: boolean;
   transferable: boolean;
   refillable: boolean;
-  status: 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
+  status: 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED' | 'FAILED';
   created_at: number;
   updated_at: number;
 }
@@ -72,6 +72,10 @@ export class StreamService {
    * Uses linear vesting formula: vested = total * (elapsed / duration)
    */
   computeVestedAmount(stream: Stream): number {
+    if (stream.status === 'PENDING' || stream.status === 'FAILED') {
+      return 0;
+    }
+
     const now = Math.floor(Date.now() / 1000); // Current Unix timestamp
     const effectiveStart = stream.effective_start_time ?? stream.start_time;
     const vestingNow = stream.status === 'PAUSED'
@@ -299,6 +303,14 @@ export class StreamService {
     color: string;
   } {
     const now = Math.floor(Date.now() / 1000);
+
+    if (stream.status === 'PENDING') {
+      return { status: 'PENDING', label: 'Awaiting Funding', color: 'blue' };
+    }
+
+    if (stream.status === 'FAILED') {
+      return { status: 'FAILED', label: 'Failed', color: 'red' };
+    }
 
     if (stream.status === 'CANCELLED') {
       return { status: 'CANCELLED', label: 'Cancelled', color: 'red' };
