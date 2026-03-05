@@ -714,17 +714,21 @@ export default function StreamDetailPage() {
 
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
+      PENDING: 'bg-blue-100 text-blue-800',
       ACTIVE: 'bg-green-100 text-green-800',
       PAUSED: 'bg-yellow-100 text-yellow-800',
       CANCELLED: 'bg-red-100 text-red-800',
       COMPLETED: 'bg-gray-100 text-gray-800',
+      FAILED: 'bg-red-100 text-red-800',
     };
 
     const icons: Record<string, any> = {
+      PENDING: Clock,
       ACTIVE: CheckCircle2,
       PAUSED: Clock,
       CANCELLED: XCircle,
       COMPLETED: CheckCircle2,
+      FAILED: AlertCircle,
     };
 
     const Icon = icons[status] || AlertCircle;
