@@ -30,6 +30,7 @@ import {
   getExplorerTxUrl,
   pauseStreamOnChain,
   refillStreamOnChain,
+  resolveTxHashFromSignResult,
   resumeStreamOnChain,
   transferStreamOnChain,
   type SerializedWcTransaction,
@@ -118,6 +119,23 @@ interface RelatedActivityEvent {
     schedule_template?: string | null;
     launch_context?: StreamLaunchContext | null;
   };
+}
+
+type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
+
+interface FeedbackState {
+  tone: FeedbackTone;
+  title: string;
+  description?: string;
+  txHash?: string;
+}
+
+function getApiErrorMessage(error: any, fallback: string): string {
+  if (!error || typeof error !== 'object') return fallback;
+  const generic = typeof error.error === 'string' ? error.error.trim() : '';
+  const detail = typeof error.message === 'string' ? error.message.trim() : '';
+  if (generic && detail && generic !== detail) return `${generic}: ${detail}`;
+  return detail || generic || fallback;
 }
 
 function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
@@ -512,6 +530,7 @@ export default function StreamDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [relatedActivity, setRelatedActivity] = useState<RelatedActivityEvent[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
 
   const refreshStream = async () => {
     try {
@@ -567,7 +586,11 @@ export default function StreamDetailPage() {
   const handleClaim = async () => {
     if (!stream || stream.claimable_amount <= 0) return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can claim from this stream.',
+      });
       return;
     }
 
@@ -584,8 +607,8 @@ export default function StreamDetailPage() {
       });
 
       if (!claimResponse.ok) {
-        const errorData = await claimResponse.json();
-        throw new Error(errorData.error || 'Failed to create claim transaction');
+        const errorData = await claimResponse.json().catch(() => ({ error: 'Failed to create claim transaction' }));
+        throw new Error(getApiErrorMessage(errorData, 'Failed to create claim transaction'));
       }
 
       const { claimableAmount, wcTransaction } = await claimResponse.json() as {
@@ -594,21 +617,27 @@ export default function StreamDetailPage() {
         wcTransaction: SerializedWcTransaction;
       };
 
-      const signResult = await wallet.signCashScriptTransaction({
+      const signOptions = {
         ...deserializeWcSignOptions(wcTransaction),
         broadcast: wcTransaction.broadcast ?? true,
         userPrompt: `Claim ${formatAssetAmount(claimableAmount, stream.token_type)} from stream ${stream.stream_id}`,
-      });
+      };
+      const signResult = await wallet.signCashScriptTransaction(signOptions);
+      const txHash = await resolveTxHashFromSignResult(
+        signResult,
+        signOptions,
+        'Stream claim signing failed'
+      );
 
       // Confirm claim with backend to record the txid and update withdrawn amount
       const confirmResponse = await fetch(`/api/streams/${stream.id}/confirm-claim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          txHash: signResult.signedTransactionHash,
-          claimedAmount: claimableAmount,
-        }),
-      });
+              txHash,
+              claimedAmount: claimableAmount,
+            }),
+          });
 
       if (!confirmResponse.ok) {
         console.error('Failed to confirm claim, but transaction was broadcast');
@@ -618,15 +647,24 @@ export default function StreamDetailPage() {
       await refreshStream();
 
       emitTransactionNotice({
-        txHash: signResult.signedTransactionHash,
+        txHash,
         network: normalizeWalletNetwork(wallet.network),
         label: 'Stream claim',
       });
 
-      alert(`Successfully claimed ${formatAssetAmount(claimableAmount, stream.token_type)}!\nTx: ${signResult.signedTransactionHash}`);
+      setFeedback({
+        tone: 'success',
+        title: `Successfully claimed ${formatAssetAmount(claimableAmount, stream.token_type)}.`,
+        description: 'The stream balance and claim history have been refreshed.',
+        txHash,
+      });
     } catch (error) {
       console.error('Claim failed:', error);
-      alert(`Claim failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Claim failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setClaiming(false);
     }
@@ -635,7 +673,11 @@ export default function StreamDetailPage() {
   const handleCancel = async () => {
     if (!stream || !stream.cancelable) return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can cancel this stream.',
+      });
       return;
     }
     const signerAddress = wallet.address ?? '';
@@ -662,8 +704,8 @@ export default function StreamDetailPage() {
       });
 
       if (!cancelResponse.ok) {
-        const errorData = await cancelResponse.json();
-        throw new Error(errorData.message || errorData.error || 'Failed to create cancel transaction');
+        const errorData = await cancelResponse.json().catch(() => ({ error: 'Failed to create cancel transaction' }));
+        throw new Error(getApiErrorMessage(errorData, 'Failed to create cancel transaction'));
       }
 
       const payload = await cancelResponse.json() as { wcTransaction?: SerializedWcTransaction };
@@ -674,11 +716,17 @@ export default function StreamDetailPage() {
         );
       }
 
-      const signResult = await wallet.signCashScriptTransaction({
+      const signOptions = {
         ...deserializeWcSignOptions(payload.wcTransaction),
         broadcast: payload.wcTransaction.broadcast ?? true,
         userPrompt: payload.wcTransaction.userPrompt ?? `Cancel stream ${stream.stream_id}`,
-      });
+      };
+      const signResult = await wallet.signCashScriptTransaction(signOptions);
+      const txHash = await resolveTxHashFromSignResult(
+        signResult,
+        signOptions,
+        'Stream cancel signing failed',
+      );
 
       const confirmResponse = await fetch(`/api/streams/${stream.id}/confirm-cancel`, {
         method: 'POST',
@@ -687,7 +735,7 @@ export default function StreamDetailPage() {
           'x-user-address': signerAddress,
         },
         body: JSON.stringify({
-          txHash: signResult.signedTransactionHash,
+          txHash,
         }),
       });
 
@@ -696,18 +744,28 @@ export default function StreamDetailPage() {
         throw new Error(errorData.message || errorData.error || 'Cancel transaction broadcast but confirmation failed');
       }
 
-      console.log('Cancel transaction signed and broadcast:', signResult.signedTransactionHash);
+      console.log('Cancel transaction signed and broadcast:', txHash);
       emitTransactionNotice({
-        txHash: signResult.signedTransactionHash,
+        txHash,
         network: normalizeWalletNetwork(wallet.network),
         label: 'Stream cancelled',
       });
 
-      alert(`Stream cancelled successfully!\nTx: ${signResult.signedTransactionHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Stream cancelled successfully.',
+        description: 'The stream has been closed on-chain and treasury state was updated.',
+        txHash,
+      });
       navigate(stream.vault_id ? `/vaults/${stream.vault_id}?tab=streams` : effectiveDaoContext ? '/app/dao' : '/streams');
     } catch (error) {
       console.error('Cancel failed:', error);
-      alert(`Cancel failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      await refreshStream();
+      setFeedback({
+        tone: 'error',
+        title: 'Cancel failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setCancelling(false);
     }
@@ -716,7 +774,11 @@ export default function StreamDetailPage() {
   const handleFund = async () => {
     if (!stream || stream.status !== 'PENDING') return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can fund this stream.',
+      });
       return;
     }
 
@@ -729,10 +791,19 @@ export default function StreamDetailPage() {
       // Refresh stream data
       await refreshStream();
 
-      alert(`Stream funded successfully!\nTx: ${txId}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Stream funded successfully.',
+        description: 'The funding transaction is recorded and stream status was refreshed.',
+        txHash: txId,
+      });
     } catch (error) {
       console.error('Funding failed:', error);
-      alert(`Funding failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Funding failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setFunding(false);
     }
@@ -793,7 +864,11 @@ export default function StreamDetailPage() {
   const handlePause = async () => {
     if (!stream) return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can pause this stream.',
+      });
       return;
     }
 
@@ -801,10 +876,20 @@ export default function StreamDetailPage() {
       setPausing(true);
       const txHash = await pauseStreamOnChain(wallet, stream.id);
       await refreshStream();
-      alert(`Stream paused successfully!\nTx: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Stream paused successfully.',
+        description: 'Claims are paused until the stream is resumed.',
+        txHash,
+      });
     } catch (error) {
       console.error('Pause failed:', error);
-      alert(`Pause failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      await refreshStream();
+      setFeedback({
+        tone: 'error',
+        title: 'Pause failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setPausing(false);
     }
@@ -813,7 +898,11 @@ export default function StreamDetailPage() {
   const handleResume = async () => {
     if (!stream) return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can resume this stream.',
+      });
       return;
     }
 
@@ -821,10 +910,19 @@ export default function StreamDetailPage() {
       setResuming(true);
       const txHash = await resumeStreamOnChain(wallet, stream.id);
       await refreshStream();
-      alert(`Stream resumed successfully!\nTx: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Stream resumed successfully.',
+        description: 'The vesting schedule is active again.',
+        txHash,
+      });
     } catch (error) {
       console.error('Resume failed:', error);
-      alert(`Resume failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Resume failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setResuming(false);
     }
@@ -833,11 +931,19 @@ export default function StreamDetailPage() {
   const handleTransfer = async () => {
     if (!stream) return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can transfer recipient ownership.',
+      });
       return;
     }
     if (!nextRecipientAddress.trim()) {
-      alert('Enter a new recipient address first');
+      setFeedback({
+        tone: 'warning',
+        title: 'Recipient address is required.',
+        description: 'Enter a new recipient address before submitting transfer.',
+      });
       return;
     }
 
@@ -846,10 +952,19 @@ export default function StreamDetailPage() {
       const txHash = await transferStreamOnChain(wallet, stream.id, nextRecipientAddress.trim());
       setNextRecipientAddress('');
       await refreshStream();
-      alert(`Stream recipient updated successfully!\nTx: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Stream recipient updated successfully.',
+        description: 'Ownership was transferred on-chain and details have been refreshed.',
+        txHash,
+      });
     } catch (error) {
       console.error('Transfer failed:', error);
-      alert(`Transfer failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Transfer failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setTransferring(false);
     }
@@ -858,12 +973,20 @@ export default function StreamDetailPage() {
   const handleRefill = async () => {
     if (!stream) return;
     if (!wallet.isConnected) {
-      alert('Please connect your wallet first');
+      setFeedback({
+        tone: 'info',
+        title: 'Connect your wallet first.',
+        description: 'Wallet access is required before you can refill runway.',
+      });
       return;
     }
     const refillAmount = Number(refillAmountInput);
     if (!Number.isFinite(refillAmount) || refillAmount <= 0) {
-      alert('Enter a valid refill amount first');
+      setFeedback({
+        tone: 'warning',
+        title: 'Refill amount is invalid.',
+        description: 'Enter an amount greater than zero.',
+      });
       return;
     }
 
@@ -872,10 +995,19 @@ export default function StreamDetailPage() {
       const txHash = await refillStreamOnChain(wallet, stream.id, refillAmount);
       setRefillAmountInput('');
       await refreshStream();
-      alert(`Recurring stream refilled successfully!\nTx: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Recurring stream refilled successfully.',
+        description: 'Runway was extended and stream totals were refreshed.',
+        txHash,
+      });
     } catch (error) {
       console.error('Refill failed:', error);
-      alert(`Refill failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Refill failed.',
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setRefilling(false);
     }
@@ -962,6 +1094,12 @@ export default function StreamDetailPage() {
     : effectiveDaoContext
       ? 'Back to Organization Workspace'
       : 'Back to Streams';
+  const feedbackToneClasses: Record<FeedbackTone, string> = {
+    success: 'border-success/40 bg-success/10 text-success',
+    warning: 'border-warning/40 bg-warning/10 text-warning',
+    error: 'border-error/40 bg-error/10 text-error',
+    info: 'border-primary/30 bg-primary/10 text-primary',
+  };
 
   return (
     <div className="px-4 py-6 md:px-8 md:py-8">
@@ -1050,6 +1188,34 @@ export default function StreamDetailPage() {
           {getStatusBadge(stream.status)}
         </div>
       </div>
+
+      {feedback && (
+        <Card
+          padding="lg"
+          className={`mb-6 border ${feedbackToneClasses[feedback.tone]}`}
+        >
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold">{feedback.title}</p>
+              {feedback.description && (
+                <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+              )}
+              {feedback.txHash && (
+                <a
+                  href={getExplorerTxUrl(feedback.txHash, network)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
+                >
+                  View transaction
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content - Left 2/3 */}
