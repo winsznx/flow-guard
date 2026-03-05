@@ -12,6 +12,7 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { resolveFeePayer } from '../utils/feePayer.js';
 
 export interface StreamCancelParams {
   streamType: 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID';
@@ -21,6 +22,7 @@ export interface StreamCancelParams {
   currentTime: number;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  feePayerAddress?: string;
   constructorParams: any[];
   currentCommitment?: string;
 }
@@ -31,6 +33,8 @@ export interface StreamCancelTransaction {
   cancelReturnAddress: string;
   wcTransaction: WcTransactionObject;
 }
+
+const CANCEL_EXTERNAL_CUSHION = 10_000n;
 
 export class StreamCancelService {
   private provider: ElectrumNetworkProvider;
@@ -79,19 +83,54 @@ export class StreamCancelService {
 
     const contractBalance = contractUtxo.satoshis;
     const fee = 1500n;
+    const feePayerAddress = params.feePayerAddress || params.sender;
+    const feePayer = feePayerAddress
+      ? await resolveFeePayer(
+          this.provider,
+          this.network,
+          feePayerAddress,
+          fee + CANCEL_EXTERNAL_CUSHION,
+        )
+      : null;
+    const feeFromContract = feePayer ? 0n : fee;
+
+    if (feePayer) {
+      for (const utxo of feePayer.utxos) {
+        txBuilder.addInput(utxo, feePayer.unlocker);
+      }
+    }
 
     if (params.streamType === 'RECURRING') {
       const result = this.addRecurringCancelOutputs({
         txBuilder,
         commitment,
         contractBalance,
-        fee,
+        fee: feeFromContract,
         sender: params.sender,
         cancelReturnAddress,
         tokenType: params.tokenType,
         tokenCategory: params.tokenCategory,
         totalAmount: this.readBigInt(params.constructorParams[5], 'totalAmount'),
       });
+
+      if (feePayer) {
+        const externalRequired = fee + result.contractShortfall;
+        if (feePayer.total < externalRequired) {
+          throw new Error(
+            `Insufficient sponsor balance for cancel transaction (need ${externalRequired} sats, ` +
+            `available ${feePayer.total} sats)`,
+          );
+        }
+        const feeChange = feePayer.total - externalRequired;
+        if (feeChange > 546n) {
+          txBuilder.addOutput({ to: feePayer.address, amount: feeChange });
+        }
+      } else if (result.contractShortfall > 0n) {
+        throw new Error(
+          'Insufficient BCH in contract to satisfy cancellation outputs and network fee. ' +
+          'This stream likely needs explicit fee reserve funding.',
+        );
+      }
 
       const wcTransaction = txBuilder.generateWcTransactionObject({
         broadcast: true,
@@ -103,8 +142,11 @@ export class StreamCancelService {
         cancelReturnAddress,
         vestedAmount: result.vestedAmount.toString(),
         unvestedAmount: result.unvestedAmount.toString(),
+        contractShortfallSatoshis: result.contractShortfall.toString(),
         tokenType: params.tokenType || 'BCH',
         tokenCategory: params.tokenCategory || null,
+        feeSponsored: Boolean(feePayer?.sponsored),
+        feePayerAddress: feePayer?.address || null,
       });
 
       return {
@@ -120,7 +162,7 @@ export class StreamCancelService {
           txBuilder,
           commitment,
           contractBalance,
-          fee,
+          fee: feeFromContract,
           sender: params.sender,
           recipient: params.recipient,
           cancelReturnAddress,
@@ -137,7 +179,7 @@ export class StreamCancelService {
           txBuilder,
           commitment,
           contractBalance,
-          fee,
+          fee: feeFromContract,
           sender: params.sender,
           recipient: params.recipient,
           cancelReturnAddress,
@@ -152,6 +194,25 @@ export class StreamCancelService {
           locktime: params.currentTime,
         });
 
+    if (feePayer) {
+      const externalRequired = fee + result.contractShortfall;
+      if (feePayer.total < externalRequired) {
+        throw new Error(
+          `Insufficient sponsor balance for cancel transaction (need ${externalRequired} sats, ` +
+          `available ${feePayer.total} sats)`,
+        );
+      }
+      const feeChange = feePayer.total - externalRequired;
+      if (feeChange > 546n) {
+        txBuilder.addOutput({ to: feePayer.address, amount: feeChange });
+      }
+    } else if (result.contractShortfall > 0n) {
+      throw new Error(
+        'Insufficient BCH in contract to satisfy cancellation outputs and network fee. ' +
+        'This stream likely needs explicit fee reserve funding.',
+      );
+    }
+
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: `Cancel vesting stream. Return ${result.unvestedAmount} units`,
@@ -162,8 +223,11 @@ export class StreamCancelService {
       cancelReturnAddress,
       vestedAmount: result.vestedAmount.toString(),
       unvestedAmount: result.unvestedAmount.toString(),
+      contractShortfallSatoshis: result.contractShortfall.toString(),
       tokenType: params.tokenType || 'BCH',
       tokenCategory: params.tokenCategory || null,
+      feeSponsored: Boolean(feePayer?.sponsored),
+      feePayerAddress: feePayer?.address || null,
     });
 
     return {
@@ -184,7 +248,7 @@ export class StreamCancelService {
     tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
     tokenCategory?: string;
     totalAmount: bigint;
-  }): { vestedAmount: bigint; unvestedAmount: bigint } {
+  }): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
     const totalPaid = this.readUint64LE(args.commitment, 2);
     const remainingPool = args.totalAmount > 0n
       ? this.clampToZero(args.totalAmount - totalPaid)
@@ -215,15 +279,18 @@ export class StreamCancelService {
       }
     }
 
-    const senderChange = args.contractBalance - spentSatoshis - args.fee;
-    if (senderChange < 0n) {
-      throw new Error('Insufficient BCH in contract to pay cancellation fee');
-    }
+    const requiredFromContract = spentSatoshis + args.fee;
+    const contractShortfall = requiredFromContract > args.contractBalance
+      ? requiredFromContract - args.contractBalance
+      : 0n;
+    const senderChange = args.contractBalance > requiredFromContract
+      ? args.contractBalance - requiredFromContract
+      : 0n;
     if (senderChange > 546n) {
       args.txBuilder.addOutput({ to: args.sender, amount: senderChange });
     }
 
-    return { vestedAmount: totalPaid, unvestedAmount: remainingPool };
+    return { vestedAmount: totalPaid, unvestedAmount: remainingPool, contractShortfall };
   }
 
   private addVestingCancelOutputs(args: {
@@ -243,7 +310,7 @@ export class StreamCancelService {
     stepInterval: bigint;
     stepAmount: bigint;
     locktime: number;
-  }): { vestedAmount: bigint; unvestedAmount: bigint } {
+  }): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
     const totalReleased = this.readUint64LE(args.commitment, 2);
     const cursor = this.readUint40LE(args.commitment, 10);
     const duration = Number(args.endTimestamp - args.startTimestamp);
@@ -323,18 +390,18 @@ export class StreamCancelService {
       }
     }
 
-    const senderChange = args.contractBalance - spentSatoshis - args.fee;
-    if (senderChange < 0n) {
-      throw new Error(
-        'Insufficient BCH in contract to satisfy cancellation outputs and network fee. ' +
-        'This stream likely needs explicit fee reserve funding.',
-      );
-    }
+    const requiredFromContract = spentSatoshis + args.fee;
+    const contractShortfall = requiredFromContract > args.contractBalance
+      ? requiredFromContract - args.contractBalance
+      : 0n;
+    const senderChange = args.contractBalance > requiredFromContract
+      ? args.contractBalance - requiredFromContract
+      : 0n;
     if (senderChange > 546n) {
       args.txBuilder.addOutput({ to: args.sender, amount: senderChange });
     }
 
-    return { vestedAmount: vestedAtCancel, unvestedAmount: unvested };
+    return { vestedAmount: vestedAtCancel, unvestedAmount: unvested, contractShortfall };
   }
 
   private addHybridCancelOutputs(args: {
@@ -353,7 +420,7 @@ export class StreamCancelService {
     endTimestamp: bigint;
     upfrontAmount: bigint;
     locktime: number;
-  }): { vestedAmount: bigint; unvestedAmount: bigint } {
+  }): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
     const totalReleased = this.readUint64LE(args.commitment, 2);
     const cursor = this.readUint40LE(args.commitment, 10);
     const timeShift = cursor - args.startTimestamp;
@@ -424,18 +491,18 @@ export class StreamCancelService {
       }
     }
 
-    const senderChange = args.contractBalance - spentSatoshis - args.fee;
-    if (senderChange < 0n) {
-      throw new Error(
-        'Insufficient BCH in contract to satisfy cancellation outputs and network fee. ' +
-        'This stream likely needs explicit fee reserve funding.',
-      );
-    }
+    const requiredFromContract = spentSatoshis + args.fee;
+    const contractShortfall = requiredFromContract > args.contractBalance
+      ? requiredFromContract - args.contractBalance
+      : 0n;
+    const senderChange = args.contractBalance > requiredFromContract
+      ? args.contractBalance - requiredFromContract
+      : 0n;
     if (senderChange > 546n) {
       args.txBuilder.addOutput({ to: args.sender, amount: senderChange });
     }
 
-    return { vestedAmount: vestedAtCancel, unvestedAmount: unvested };
+    return { vestedAmount: vestedAtCancel, unvestedAmount: unvested, contractShortfall };
   }
 
   private resolveCommitment(onChainCommitment: unknown, fallback?: string): Uint8Array {

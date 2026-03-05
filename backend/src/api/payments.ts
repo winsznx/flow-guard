@@ -878,7 +878,36 @@ router.post('/payments/:id/claim', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error(`POST /payments/${req.params.id}/claim error:`, error);
-    res.status(500).json({ error: 'Failed to build claim transaction', message: error.message });
+    const message = typeof error?.message === 'string' ? error.message : 'Unknown claim builder error';
+
+    if (message.includes('No UTXOs found for payment contract')) {
+      return res.status(409).json({
+        error: 'Payment state is pending confirmation',
+        message:
+          'The payment contract UTXO is currently unavailable (often due to an unconfirmed claim/pause/resume/fund tx). ' +
+          'Wait for confirmation, refresh, and retry claim.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'PAYMENT_UTXO_UNAVAILABLE',
+      });
+    }
+
+    if (
+      message.includes('Insufficient contract balance to preserve state UTXO after payment')
+      || message.includes('Insufficient contract balance to satisfy payment output')
+    ) {
+      return res.status(409).json({
+        error: 'Insufficient fee reserve in payment contract',
+        message:
+          'This payment does not currently hold enough BCH to preserve covenant state after claim. ' +
+          'Refill the payment with a small BCH reserve and retry.',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'PAYMENT_FEE_RESERVE_REQUIRED',
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to build claim transaction', message });
   }
 });
 

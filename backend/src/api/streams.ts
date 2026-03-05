@@ -1146,7 +1146,10 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
       });
     }
 
-    if (message.includes('Insufficient contract balance to preserve stream state UTXO')) {
+    if (
+      message.includes('Insufficient contract balance to preserve stream state UTXO')
+      || message.includes('Insufficient contract balance to satisfy claim output')
+    ) {
       return res.status(409).json({
         error: 'Insufficient fee reserve in stream contract',
         message:
@@ -2148,7 +2151,35 @@ router.post('/streams/:id/cancel', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error(`POST /streams/${req.params.id}/cancel error:`, error);
-    res.status(500).json({ error: 'Failed to cancel stream', message: error.message });
+    const message = typeof error?.message === 'string' ? error.message : 'Unknown cancel builder error';
+
+    if (message.includes('No UTXOs found for stream contract')) {
+      return res.status(409).json({
+        error: 'Stream state is pending confirmation',
+        message:
+          'The stream contract UTXO is currently unavailable (often due to an unconfirmed claim/pause/resume/fund tx). ' +
+          'Wait for confirmation, refresh, and retry cancel.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'STREAM_UTXO_UNAVAILABLE',
+      });
+    }
+
+    if (
+      message.includes('Insufficient BCH in contract to satisfy cancellation outputs and network fee')
+      || message.includes('Insufficient sponsor balance for cancel transaction')
+    ) {
+      return res.status(409).json({
+        error: 'Insufficient fee reserve for stream cancel',
+        message:
+          'This cancel action requires additional BCH fee reserve. Top up the signer wallet or stream reserve and retry.',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'CANCEL_FEE_RESERVE_REQUIRED',
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to cancel stream', message });
   }
 });
 

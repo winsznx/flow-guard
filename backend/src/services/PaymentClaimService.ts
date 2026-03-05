@@ -126,15 +126,24 @@ export class PaymentClaimService {
 
     const claimAmountBig = BigInt(claimableAmount);
     const fee = 1500n;
-    const resolvedFeePayerAddress = feePayerAddress || recipient;
-    const feePayer = await resolveFeePayer(this.provider, this.network, resolvedFeePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    const remainingAmount = contractBalance - recipientOutputSatoshis;
-    const minimumStateOutput = 546n;
-
-    if (remainingAmount < minimumStateOutput) {
-      throw new Error('Insufficient contract balance to preserve state UTXO after payment');
+    if (contractBalance < recipientOutputSatoshis) {
+      throw new Error('Insufficient contract balance to satisfy payment output');
     }
+    const minimumStateOutput = 546n;
+    const contractStateAmount = contractBalance - recipientOutputSatoshis;
+    const stateTopUpNeeded = contractStateAmount >= minimumStateOutput
+      ? 0n
+      : minimumStateOutput - contractStateAmount;
+    const requiredExternalSatoshis = fee + stateTopUpNeeded;
+    const resolvedFeePayerAddress = feePayerAddress || recipient;
+    const feePayer = await resolveFeePayer(
+      this.provider,
+      this.network,
+      resolvedFeePayerAddress,
+      requiredExternalSatoshis,
+    );
+    const stateOutputSatoshis = contractStateAmount + stateTopUpNeeded;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(currentTime);
@@ -158,7 +167,7 @@ export class PaymentClaimService {
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
-        amount: remainingAmount,
+        amount: stateOutputSatoshis,
         token: {
           category: tokenCategory,
           amount: remainingTokens,
@@ -170,7 +179,7 @@ export class PaymentClaimService {
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
-        amount: remainingAmount,
+        amount: stateOutputSatoshis,
         token: {
           category: contractUtxo.token.category,
           amount: 0n,
@@ -179,7 +188,7 @@ export class PaymentClaimService {
       });
     }
 
-    const feeChange = feePayer.total - fee;
+    const feeChange = feePayer.total - requiredExternalSatoshis;
     if (feeChange > 546n) {
       txBuilder.addOutput({
         to: feePayer.address,
@@ -200,6 +209,7 @@ export class PaymentClaimService {
       tokenCategory: tokenCategory || null,
       feePayerAddress: feePayer.address,
       feeSponsored: feePayer.sponsored,
+      stateTopUpSatoshis: stateTopUpNeeded.toString(),
       inputSatoshis: contractUtxo.satoshis.toString(),
     });
 
