@@ -5,7 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
-import { cashAddressToLockingBytecode, hexToBin } from '@bitauth/libauth';
+import { cashAddressToLockingBytecode, hexToBin, binToHex } from '@bitauth/libauth';
 import db from '../database/schema.js';
 import { streamService, Stream, StreamClaim } from '../services/streamService.js';
 import { StreamDeploymentService } from '../services/StreamDeploymentService.js';
@@ -865,9 +865,18 @@ router.get('/streams/:id/funding-info', async (req: Request, res: Response) => {
 
     const tokenType = row.token_type === 'CASHTOKENS' ? 'FUNGIBLE_TOKEN' : 'BCH';
     const fundingAmount = displayAmountToOnChain(Number(row.total_amount), row.token_type);
-    const nftCommitment = row.nft_commitment;
+    const now = Math.floor(Date.now() / 1000);
+    const nftCommitment = getPendingFundingCommitment(row, now);
     if (!nftCommitment) {
       return res.status(400).json({ error: 'Missing stream NFT commitment for funding' });
+    }
+
+    if (nftCommitment !== row.nft_commitment) {
+      db!.prepare(`
+        UPDATE streams
+        SET nft_commitment = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nftCommitment, now, id);
     }
 
     const fundingService = new StreamFundingService('chipnet');
@@ -969,14 +978,17 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
       });
     }
 
-    // Update stream status to ACTIVE and store funding tx_hash
-    // In production, indexer should watch blockchain and update automatically
-    // This is a manual confirmation for now
+    const now = Math.floor(Date.now() / 1000);
+    const contractService = new ContractService('chipnet');
+    const confirmedCommitment = await contractService.getNFTCommitment(row.contract_address)
+      || row.nft_commitment
+      || null;
+
     db!.prepare(`
       UPDATE streams
-      SET status = 'ACTIVE', tx_hash = ?, updated_at = ?
+      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, updated_at = ?
       WHERE id = ?
-    `).run(txHash, Math.floor(Date.now() / 1000), id);
+    `).run(txHash, confirmedCommitment, now, id);
     recordActivityEvent({
       entityType: 'stream',
       entityId: id,
@@ -990,7 +1002,7 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
         tokenType: row.token_type,
         tokenCategory: row.token_category || null,
       },
-      createdAt: Math.floor(Date.now() / 1000),
+      createdAt: now,
     });
 
     const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
@@ -2586,15 +2598,22 @@ router.post('/treasuries/:vaultId/batch-create/confirm', async (req: Request, re
     }
 
     const updatedAt = Math.floor(Date.now() / 1000);
+    const contractService = new ContractService('chipnet');
+    const confirmedCommitments = new Map<string, string | null>();
+    for (const row of rows) {
+      const commitment = await contractService.getNFTCommitment(row.contract_address);
+      confirmedCommitments.set(row.id, commitment || row.nft_commitment || null);
+    }
+
     const updateStmt = db!.prepare(`
       UPDATE streams
-      SET status = 'ACTIVE', tx_hash = ?, updated_at = ?
+      SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, updated_at = ?
       WHERE id = ?
     `);
 
     db!.transaction(() => {
       for (const row of rows) {
-        updateStmt.run(txHash, updatedAt, row.id);
+        updateStmt.run(txHash, confirmedCommitments.get(row.id) ?? null, updatedAt, row.id);
         recordActivityEvent({
           entityType: 'stream',
           entityId: row.id,
@@ -3383,6 +3402,90 @@ function parseRecurringCommitment(commitmentHex: string): { totalPaid: bigint; n
         + (bytes[27] * 0x100000000)
       : 0;
   return { totalPaid, nextPaymentTime, pauseStart };
+}
+
+function readUint40LE(bytes: Uint8Array, offset: number): number {
+  if (bytes.length < offset + 5) return 0;
+  return bytes[offset]
+    + (bytes[offset + 1] << 8)
+    + (bytes[offset + 2] << 16)
+    + (bytes[offset + 3] << 24)
+    + (bytes[offset + 4] * 0x100000000);
+}
+
+function writeUint40LE(bytes: Uint8Array, offset: number, value: number): void {
+  const safeValue = Math.max(0, Math.floor(value));
+  bytes[offset] = safeValue & 0xff;
+  bytes[offset + 1] = (safeValue >>> 8) & 0xff;
+  bytes[offset + 2] = (safeValue >>> 16) & 0xff;
+  bytes[offset + 3] = (safeValue >>> 24) & 0xff;
+  bytes[offset + 4] = Math.floor(safeValue / 0x100000000) & 0xff;
+}
+
+function shiftVestingCommitmentForFunding(
+  commitmentHex: string,
+  startTime: number,
+  nowSeconds: number,
+): string {
+  try {
+    const bytes = hexToBin(commitmentHex);
+    if (bytes.length < 20) return commitmentHex;
+    const currentCursor = readUint40LE(bytes, 10);
+    const desiredCursor = Math.max(Math.trunc(Number(startTime) || 0), nowSeconds);
+    const nextCursor = Math.max(currentCursor, desiredCursor);
+    if (nextCursor === currentCursor) return commitmentHex;
+    const updated = new Uint8Array(bytes);
+    writeUint40LE(updated, 10, nextCursor);
+    return binToHex(updated);
+  } catch {
+    return commitmentHex;
+  }
+}
+
+function shiftRecurringCommitmentForFunding(
+  commitmentHex: string,
+  startTime: number,
+  intervalSeconds: number,
+  nowSeconds: number,
+): string {
+  try {
+    const bytes = hexToBin(commitmentHex);
+    if (bytes.length < 23) return commitmentHex;
+    const safeInterval = Math.max(1, Math.trunc(Number(intervalSeconds) || 0));
+    if (!Number.isFinite(safeInterval) || safeInterval <= 0) {
+      return commitmentHex;
+    }
+    const desiredStart = Math.max(Math.trunc(Number(startTime) || 0), nowSeconds);
+    const desiredNextPayment = desiredStart + safeInterval;
+    const currentNextPayment = readUint40LE(bytes, 18);
+    const nextPayment = Math.max(currentNextPayment, desiredNextPayment);
+    if (nextPayment === currentNextPayment) return commitmentHex;
+    const updated = new Uint8Array(bytes);
+    writeUint40LE(updated, 18, nextPayment);
+    return binToHex(updated);
+  } catch {
+    return commitmentHex;
+  }
+}
+
+function getPendingFundingCommitment(row: any, nowSeconds: number): string | null {
+  const currentCommitment = typeof row?.nft_commitment === 'string' ? row.nft_commitment : null;
+  if (!currentCommitment) return null;
+
+  if (row?.stream_type === 'RECURRING') {
+    return shiftRecurringCommitmentForFunding(
+      currentCommitment,
+      Number(row?.start_time || 0),
+      Number(row?.interval_seconds || 0),
+      nowSeconds,
+    );
+  }
+
+  return shiftVestingCommitmentForFunding(
+    currentCommitment,
+    Number(row?.start_time || 0),
+    nowSeconds,
+  );
 }
 
 function toBigIntParam(value: unknown, name: string): bigint {
