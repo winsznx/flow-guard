@@ -1,7 +1,8 @@
 const DUST_DEFAULT = 1000n;
 const TOKEN_FUNDING_DEFAULT = 20_000n;
 const MIN_TOKEN_FUNDING = 546n;
-const STATEFUL_CONTRACT_RESERVE = 546n;
+const STATEFUL_CONTRACT_RESERVE_DEFAULT = 5_000n;
+const MIN_STATEFUL_CONTRACT_RESERVE = 2_500n;
 
 function parsePositiveIntEnv(value: string | undefined): bigint | null {
   if (!value || value.trim().length === 0) return null;
@@ -35,7 +36,8 @@ export function getTokenOutputDustSatoshis(): bigint {
 }
 
 export function getStatefulContractReserveSatoshis(): bigint {
-  return STATEFUL_CONTRACT_RESERVE;
+  const configured = parsePositiveIntEnv(process.env.STATEFUL_CONTRACT_RESERVE_SATOSHIS) ?? STATEFUL_CONTRACT_RESERVE_DEFAULT;
+  return configured < MIN_STATEFUL_CONTRACT_RESERVE ? MIN_STATEFUL_CONTRACT_RESERVE : configured;
 }
 
 export function getRequiredContractFundingSatoshis(
