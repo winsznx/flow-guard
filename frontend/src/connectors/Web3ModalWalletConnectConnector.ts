@@ -448,6 +448,23 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
     this.client.on('session_delete', (args) => {
       console.log('[Web3ModalWC] Session deleted:', args);
 
+      const currentTopic = this.session?.topic;
+      const deletedTopic = this._isRecord(args) && typeof args.topic === 'string'
+        ? args.topic
+        : null;
+
+      if (currentTopic) {
+        if (deletedTopic && deletedTopic !== currentTopic) {
+          console.log('[Web3ModalWC] Ignoring stale session delete event for topic:', deletedTopic);
+          return;
+        }
+        const currentSessionStillActive = this.client?.session.getAll().some((session) => session.topic === currentTopic);
+        if (currentSessionStillActive) {
+          console.log('[Web3ModalWC] Ignoring session delete because active session is still present');
+          return;
+        }
+      }
+
       // Emit disconnect event
       const listeners = this.eventListeners.get('disconnect');
       if (listeners) {
