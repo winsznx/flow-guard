@@ -62,6 +62,11 @@ interface SpendingRequest {
 export default function RequestDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [executing, setExecuting] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    tone: 'success' | 'warning' | 'error' | 'info';
+    title: string;
+    description?: string;
+  } | null>(null);
 
   // MOCK DATA
   const request: SpendingRequest = {
@@ -102,12 +107,19 @@ export default function RequestDetailPage() {
   };
 
   const handleExecute = async () => {
+    setFeedback({
+      tone: 'info',
+      title: 'Preparing execution lifecycle',
+      description: 'Checking signer/session configuration for this request.',
+    });
     setExecuting(true);
-    // Execution logic here
-    setTimeout(() => {
-      alert('Execution feature coming soon (requires wallet signature + backend)');
-      setExecuting(false);
-    }, 1000);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    setFeedback({
+      tone: 'warning',
+      title: 'Execution not configured for this route',
+      description: 'Wallet-sign + backend confirmation wiring is required before this request can execute on-chain.',
+    });
+    setExecuting(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -132,6 +144,12 @@ export default function RequestDetailPage() {
   const isExecutable = request.status === 'EXECUTABLE' &&
     request.currentApprovals >= request.requiredApprovals &&
     (!request.executionTimelock || request.executionTimelock.getTime() < Date.now());
+  const feedbackToneClasses: Record<'success' | 'warning' | 'error' | 'info', string> = {
+    success: 'border-success/40 bg-success/10 text-success',
+    warning: 'border-warning/40 bg-warning/10 text-warning',
+    error: 'border-error/40 bg-error/10 text-error',
+    info: 'border-primary/30 bg-primary/10 text-primary',
+  };
 
   return (
     <div className="min-h-screen pb-20">
@@ -287,6 +305,23 @@ export default function RequestDetailPage() {
             </div>
           </Card>
         </div>
+
+        {feedback && (
+          <Card
+            padding="lg"
+            className={`mt-6 border ${feedbackToneClasses[feedback.tone]}`}
+          >
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">{feedback.title}</p>
+                {feedback.description && (
+                  <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Execution Panel */}
         {isExecutable && (

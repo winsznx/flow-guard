@@ -7,7 +7,16 @@ import { approveProposalOnChain, executePayoutOnChain, getExplorerTxUrl } from '
 import { AddSignerModal } from '../components/vaults/AddSignerModal';
 import { useWallet } from '../hooks/useWallet';
 import { useNetwork } from '../hooks/useNetwork';
-import { CheckCircle, DollarSign, Unlock, ExternalLink, ChevronLeft, Wallet, Shield, FileText, Clock, ArrowUpRight, ArrowDownLeft, Activity, Zap, Users } from 'lucide-react';
+import { CheckCircle, DollarSign, Unlock, ExternalLink, ChevronLeft, Wallet, Shield, FileText, Clock, ArrowUpRight, ArrowDownLeft, Activity, Zap, Users, AlertCircle } from 'lucide-react';
+
+type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
+
+interface FeedbackState {
+  tone: FeedbackTone;
+  title: string;
+  description?: string;
+  txHash?: string;
+}
 
 export default function VaultDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -26,6 +35,7 @@ export default function VaultDetailPage() {
   const [currentCycle, setCurrentCycle] = useState<number>(0);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
 
   const loadTransactions = async () => {
     if (!id || !vault?.contractAddress) return;
@@ -114,20 +124,30 @@ export default function VaultDetailPage() {
 
   const handleApproveProposal = async (proposalId: string) => {
     if (!wallet.address) {
-      alert('WARNING: Please connect your wallet to approve proposals');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before approving proposals.',
+      });
       return;
     }
 
     try {
       setApprovingProposalId(proposalId);
+      setFeedback({
+        tone: 'info',
+        title: 'Signing approval transaction',
+        description: 'Approve the wallet request to submit your on-chain approval.',
+      });
       await approveProposalOnChain(wallet, proposalId, wallet.publicKey || '', {
         vaultId: id,
         proposalId,
       });
-      alert(
-        'SUCCESS: Approval recorded on-chain.\n\n' +
-        'Your signature was broadcast to chipnet and proposal state was updated.',
-      );
+      setFeedback({
+        tone: 'success',
+        title: 'Approval recorded on-chain',
+        description: 'Your signature was submitted and proposal state was refreshed.',
+      });
 
       // Reload proposals
       if (id) {
@@ -145,7 +165,11 @@ export default function VaultDetailPage() {
       } else if (errorMsg.includes('network') || errorMsg.includes('connection')) {
         userFriendlyMsg = 'Network connection error. Please check your internet connection and try again.';
       }
-      alert(`ERROR: Approval Failed\n\n${userFriendlyMsg}\n\nPlease try again or contact support if the issue persists.`);
+      setFeedback({
+        tone: 'error',
+        title: 'Approval failed',
+        description: `${userFriendlyMsg} Please try again or contact support if the issue persists.`,
+      });
     } finally {
       setApprovingProposalId(null);
     }
@@ -153,22 +177,34 @@ export default function VaultDetailPage() {
 
   const handleExecutePayout = async (proposalId: string) => {
     if (!wallet.address) {
-      alert('WARNING: Please connect your wallet to execute payouts');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before executing payouts.',
+      });
       return;
     }
 
     if (!vault?.contractAddress) {
-      alert('ERROR: Cannot execute payout\n\nThis vault does not have an on-chain contract address.');
+      setFeedback({
+        tone: 'error',
+        title: 'Execution unavailable',
+        description: 'This vault does not have an on-chain contract address.',
+      });
       return;
     }
 
     if (!wallet.isConnected) {
-      alert('WARNING: Wallet not fully connected\n\nPlease reconnect your wallet and try again.');
+      setFeedback({
+        tone: 'warning',
+        title: 'Wallet not fully connected',
+        description: 'Reconnect your wallet and try again.',
+      });
       return;
     }
 
     // Confirm with user before executing
-    const confirmed = confirm(
+    const confirmed = window.confirm(
       'EXECUTE PAYOUT?\n\n' +
       'This will broadcast a multi-signature transaction to the BCH blockchain.\n\n' +
       '• 2 vault signers must sign this transaction (current covenant requirement)\n' +
@@ -183,6 +219,11 @@ export default function VaultDetailPage() {
 
     try {
       setExecutingProposalId(proposalId);
+      setFeedback({
+        tone: 'info',
+        title: 'Starting payout execution',
+        description: 'Approve the wallet request to submit your execution signature.',
+      });
       console.log('Attempting on-chain payout execution...');
 
       const proposal = proposals.find(p => p.id === proposalId);
@@ -194,23 +235,24 @@ export default function VaultDetailPage() {
       });
 
       if (executeResult.status === 'pending') {
-        alert(
-          `SIGNATURE RECORDED\n\n` +
-          `Your execution signature has been stored.\n` +
-          `Collected: ${executeResult.signaturesCollected}/${executeResult.requiredSignatures}\n\n` +
-          `Another signer must submit the next signature to broadcast this payout.`,
-        );
+        setFeedback({
+          tone: 'info',
+          title: 'Signature recorded',
+          description:
+            `Collected ${executeResult.signaturesCollected}/${executeResult.requiredSignatures} signatures. ` +
+            'Another signer must submit the next signature to broadcast this payout.',
+        });
         return;
       }
 
       const txid = executeResult.txid || '';
       console.log('On-chain payout execution successful, txid:', txid);
-      alert(
-        `SUCCESS: Payout Executed Successfully!\n\n` +
-        `Funds have been sent from the vault contract to the recipient.\n\n` +
-        `Transaction ID: ${txid}\n\n` +
-        `View on explorer: ${getExplorerTxUrl(txid, network)}`,
-      );
+      setFeedback({
+        tone: 'success',
+        title: 'Payout executed successfully',
+        description: 'Funds were sent from the vault contract to the recipient.',
+        txHash: txid || undefined,
+      });
 
       // Reload proposals to show updated status
       if (id) {
@@ -240,20 +282,13 @@ export default function VaultDetailPage() {
       } else if (errorMsg.includes('network') || errorMsg.includes('connection')) {
         userFriendlyMsg = 'Network connection error. Please check your internet connection and try again.';
       }
-      if (isWiringGap) {
-        alert(`ERROR: Payout Execution Failed\n\n${userFriendlyMsg}`);
-      } else {
-        alert(
-          `ERROR: Payout Execution Failed\n\n` +
-          `${userFriendlyMsg}\n\n` +
-          `Possible reasons:\n` +
-          `• Missing signatures from required signer pair\n` +
-          `• Proposal not approved on-chain\n` +
-          `• Wallet signature rejected\n` +
-          `• Network error\n\n` +
-          `Please check the proposal status and try again.`
-        );
-      }
+      setFeedback({
+        tone: 'error',
+        title: 'Payout execution failed',
+        description: isWiringGap
+          ? userFriendlyMsg
+          : `${userFriendlyMsg} Possible causes: missing signatures, proposal state mismatch, wallet rejection, or network error.`,
+      });
     } finally {
       setExecutingProposalId(null);
     }
@@ -261,22 +296,34 @@ export default function VaultDetailPage() {
 
   const handleUnlockCycle = async (cycleNumber: number) => {
     if (!wallet.address) {
-      alert('WARNING: Please connect your wallet to unlock cycles');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before unlocking cycles.',
+      });
       return;
     }
 
     if (!wallet.isConnected) {
-      alert('WARNING: Wallet not fully connected\n\nPlease reconnect your wallet and try again.');
+      setFeedback({
+        tone: 'warning',
+        title: 'Wallet not fully connected',
+        description: 'Reconnect your wallet and try again.',
+      });
       return;
     }
 
     if (!id) {
-      alert('ERROR: Invalid vault ID');
+      setFeedback({
+        tone: 'error',
+        title: 'Invalid vault',
+        description: 'Vault ID is missing for cycle unlock.',
+      });
       return;
     }
 
     // Confirm with user before unlocking
-    const confirmed = confirm(
+    const confirmed = window.confirm(
       'UNLOCK CYCLE?\n\n' +
       'This updates cycle availability for the current treasury policy.\n\n' +
       `• Cycle #${cycleNumber} will be unlocked\n` +
@@ -291,6 +338,11 @@ export default function VaultDetailPage() {
 
     try {
       setUnlockingCycle(cycleNumber);
+      setFeedback({
+        tone: 'info',
+        title: `Unlocking cycle #${cycleNumber}`,
+        description: 'Submitting unlock request and syncing vault state.',
+      });
       console.log('Attempting cycle unlock...');
 
       const response = await fetch(`/api/vaults/${id}/unlock`, {
@@ -307,11 +359,11 @@ export default function VaultDetailPage() {
       }
 
       console.log('Cycle unlock successful');
-      alert(
-        `SUCCESS: Cycle Unlocked Successfully!\n\n` +
-        `Cycle #${cycleNumber} has been unlocked.\n` +
-        `${vault.unlockAmount || 0} BCH is now available for spending.`,
-      );
+      setFeedback({
+        tone: 'success',
+        title: `Cycle #${cycleNumber} unlocked`,
+        description: `${vault.unlockAmount || 0} BCH is now available for spending.`,
+      });
 
       // Reload vault to show updated balance and cycles
       if (id) {
@@ -339,16 +391,12 @@ export default function VaultDetailPage() {
       } else if (errorMsg.includes('network') || errorMsg.includes('connection')) {
         userFriendlyMsg = 'Network connection error. Please check your internet connection and try again.';
       }
-      alert(
-        `ERROR: Cycle Unlock Failed\n\n` +
-        `${userFriendlyMsg}\n\n` +
-        `Possible reasons:\n` +
-        `• Cycle not yet eligible for unlock (check cycle duration)\n` +
-        `• Cycle already unlocked\n` +
-        `• Unauthorized signer\n` +
-        `• Network error\n\n` +
-        `Please check the cycle status and try again.`,
-      );
+      setFeedback({
+        tone: 'error',
+        title: 'Cycle unlock failed',
+        description:
+          `${userFriendlyMsg} Possible causes: cycle not yet eligible, already unlocked, unauthorized signer, or network issue.`,
+      });
     } finally {
       setUnlockingCycle(null);
     }
@@ -398,6 +446,12 @@ export default function VaultDetailPage() {
   // Calculate unlocked/locked amounts
   const unlocked = vault.unlockAmount || 0;
   const locked = (vault.totalDeposit || 0) - unlocked;
+  const feedbackToneClasses: Record<FeedbackTone, string> = {
+    success: 'border-success/40 bg-success/10 text-success',
+    warning: 'border-warning/40 bg-warning/10 text-warning',
+    error: 'border-error/40 bg-error/10 text-error',
+    info: 'border-primary/30 bg-primary/10 text-primary',
+  };
 
   return (
     <div className="py-6 md:py-8">
@@ -455,6 +509,34 @@ export default function VaultDetailPage() {
             )}
           </div>
         </div>
+
+        {feedback && (
+          <Card
+            padding="lg"
+            className={`mb-8 border ${feedbackToneClasses[feedback.tone]}`}
+          >
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">{feedback.title}</p>
+                {feedback.description && (
+                  <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                )}
+                {feedback.txHash && (
+                  <a
+                    href={getExplorerTxUrl(feedback.txHash, network)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
+                  >
+                    View transaction
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8 md:mb-10 lg:mb-12">

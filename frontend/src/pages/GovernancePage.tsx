@@ -5,11 +5,12 @@
 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Vote, CheckCircle, XCircle, Clock, Users, TrendingUp, Lock, Unlock, X as CloseIcon } from 'lucide-react';
+import { Vote, CheckCircle, XCircle, Clock, Users, TrendingUp, Lock, Unlock, X as CloseIcon, AlertCircle, ExternalLink } from 'lucide-react';
 import { fetchVaults, castVote } from '../utils/api';
 import { useWallet } from '../hooks/useWallet';
 import { useWalletModal } from '../hooks/useWalletModal';
-import { lockTokensToVote, unlockVotingTokens } from '../utils/blockchain';
+import { lockTokensToVote, unlockVotingTokens, getExplorerTxUrl } from '../utils/blockchain';
+import { useNetwork } from '../hooks/useNetwork';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
 import { Input } from '../components/ui/Input';
@@ -33,10 +34,20 @@ interface Proposal {
   passed: boolean;
 }
 
+type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
+
+interface FeedbackState {
+  tone: FeedbackTone;
+  title: string;
+  description?: string;
+  txHash?: string;
+}
+
 export default function GovernancePage() {
   const wallet = useWallet();
   const { openModal } = useWalletModal();
   const navigate = useNavigate();
+  const network = useNetwork();
   const [activeTab, setActiveTab] = useState<'active' | 'past'>('active');
   const [selectedTreasury, setSelectedTreasury] = useState<string>('');
   const [treasuries, setTreasuries] = useState<any[]>([]);
@@ -50,6 +61,7 @@ export default function GovernancePage() {
   const [voteChoice, setVoteChoice] = useState<'FOR' | 'AGAINST' | 'ABSTAIN'>('FOR');
   const [stakeAmount, setStakeAmount] = useState('0.01');
   const [votingLoading, setVotingLoading] = useState(false);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
 
   useEffect(() => {
     const loadTreasuries = async () => {
@@ -235,17 +247,30 @@ export default function GovernancePage() {
 
   const handleVote = async () => {
     if (!wallet.isConnected || !votingModal.proposal) {
-      alert('Please connect your wallet');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before locking stake and voting.',
+      });
       return;
     }
 
     const amountSatoshis = Math.round(parseFloat(stakeAmount) * 100000000);
     if (amountSatoshis <= 0) {
-      alert('Stake amount must be greater than 0');
+      setFeedback({
+        tone: 'warning',
+        title: 'Invalid stake amount',
+        description: 'Stake amount must be greater than 0 BCH.',
+      });
       return;
     }
 
     setVotingLoading(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Signing vote transaction',
+      description: 'Approve the wallet request to lock stake and submit your vote on-chain.',
+    });
     try {
       const txHash = await lockTokensToVote(
         wallet,
@@ -254,7 +279,12 @@ export default function GovernancePage() {
         amountSatoshis
       );
 
-      alert(`Vote locked successfully!\n\nTransaction: ${txHash}\n\nYour ${stakeAmount} BCH has been locked and your vote for "${voteChoice}" has been recorded.`);
+      setFeedback({
+        tone: 'success',
+        title: 'Vote locked and recorded',
+        description: `${stakeAmount} BCH was locked and your "${voteChoice}" vote was submitted.`,
+        txHash,
+      });
 
       // Refresh proposals
       const res = await fetch(`/api/vaults/${selectedTreasury}/governance`);
@@ -264,7 +294,11 @@ export default function GovernancePage() {
       setVotingModal({ open: false, proposal: null });
     } catch (error: any) {
       console.error('Failed to vote:', error);
-      alert(`Failed to lock and vote: ${error.message}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Vote submission failed',
+        description: error.message || 'Failed to lock and submit vote.',
+      });
     } finally {
       setVotingLoading(false);
     }
@@ -272,17 +306,30 @@ export default function GovernancePage() {
 
   const handleUnlock = async (proposal: Proposal) => {
     if (!wallet.isConnected) {
-      alert('Please connect your wallet');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before unlocking voting stake.',
+      });
       return;
     }
 
     const votingEnded = new Date(proposal.votingEndsAt).getTime() < Date.now();
     if (!votingEnded) {
-      alert('Voting period has not ended yet. You can unlock after voting completes.');
+      setFeedback({
+        tone: 'warning',
+        title: 'Unlock unavailable',
+        description: 'Voting period has not ended yet. Unlock is available after voting completes.',
+      });
       return;
     }
 
     setVotingLoading(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Signing unlock transaction',
+      description: 'Approve the wallet request to unlock your voting stake.',
+    });
     try {
       const txHash = await unlockVotingTokens(
         wallet,
@@ -291,7 +338,12 @@ export default function GovernancePage() {
         0
       );
 
-      alert(`Tokens unlocked successfully!\n\nTransaction: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Voting stake unlocked',
+        description: 'Your locked voting tokens have been unlocked on-chain.',
+        txHash,
+      });
 
       // Refresh proposals
       const res = await fetch(`/api/vaults/${selectedTreasury}/governance`);
@@ -299,7 +351,11 @@ export default function GovernancePage() {
       setProposals(Array.isArray(data) ? data : []);
     } catch (error: any) {
       console.error('Failed to unlock:', error);
-      alert(`Failed to unlock tokens: ${error.message}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Unlock failed',
+        description: error.message || 'Failed to unlock voting stake.',
+      });
     } finally {
       setVotingLoading(false);
     }
@@ -309,6 +365,13 @@ export default function GovernancePage() {
     setVotingModal({ open: true, proposal });
     setVoteChoice('FOR');
     setStakeAmount('0.01');
+  };
+
+  const feedbackToneClasses: Record<FeedbackTone, string> = {
+    success: 'border-success/40 bg-success/10 text-success',
+    warning: 'border-warning/40 bg-warning/10 text-warning',
+    error: 'border-error/40 bg-error/10 text-error',
+    info: 'border-primary/30 bg-primary/10 text-primary',
   };
 
   if (!wallet.isConnected) {
@@ -459,6 +522,31 @@ export default function GovernancePage() {
             </div>
           )}
         </div>
+
+        {feedback && (
+          <div className={`mb-6 rounded-lg border p-4 ${feedbackToneClasses[feedback.tone]}`}>
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">{feedback.title}</p>
+                {feedback.description && (
+                  <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                )}
+                {feedback.txHash && (
+                  <a
+                    href={getExplorerTxUrl(feedback.txHash, network)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
+                  >
+                    View transaction
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Data Table */}
         {proposalsLoading ? (

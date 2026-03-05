@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Clock, TrendingUp, Plus, Zap, Wallet, Download, Pause, X as CloseIcon } from 'lucide-react';
+import { Calendar, Clock, TrendingUp, Plus, Zap, Wallet, Download, Pause, X as CloseIcon, AlertCircle, ExternalLink } from 'lucide-react';
 import { fetchBudgetPlans } from '../utils/api';
 import { useWallet } from '../hooks/useWallet';
 import {
@@ -13,7 +13,9 @@ import {
   releaseMilestone,
   pauseBudgetPlanOnChain,
   cancelBudgetPlanOnChain,
+  getExplorerTxUrl,
 } from '../utils/blockchain';
+import { useNetwork } from '../hooks/useNetwork';
 import { Button } from '../components/ui/Button';
 import { DataTable, Column } from '../components/shared/DataTable';
 import { StatsCard } from '../components/shared/StatsCard';
@@ -39,9 +41,19 @@ interface BudgetPlan {
   status: PlanStatus;
 }
 
+type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
+
+interface FeedbackState {
+  tone: FeedbackTone;
+  title: string;
+  description?: string;
+  txHash?: string;
+}
+
 export default function BudgetPlansPage() {
   const navigate = useNavigate();
   const wallet = useWallet();
+  const network = useNetwork();
   const [budgetPlans, setBudgetPlans] = useState<BudgetPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
@@ -50,6 +62,7 @@ export default function BudgetPlansPage() {
   // Action modal state
   const [actionModal, setActionModal] = useState<{ open: boolean; plan: BudgetPlan | null }>({ open: false, plan: null });
   const [actionLoading, setActionLoading] = useState(false);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
 
   const transformPlan = (plan: any): BudgetPlan => ({
     id: plan.id,
@@ -278,20 +291,36 @@ export default function BudgetPlansPage() {
 
   const handleFund = async () => {
     if (!wallet.isConnected || !actionModal.plan) {
-      alert('Please connect your wallet');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before funding this budget plan.',
+      });
       return;
     }
 
     setActionLoading(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Signing funding transaction',
+      description: 'Approve the wallet request to fund this budget plan.',
+    });
     try {
       const txHash = await fundBudgetPlan(wallet, actionModal.plan.id);
-      alert(`Budget plan funded successfully!\n\nTransaction: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Budget plan funded',
+        description: 'Funding transaction was confirmed by backend processing.',
+        txHash,
+      });
       await reloadPlans();
-
-      setActionModal({ open: false, plan: null });
     } catch (error: any) {
       console.error('Failed to fund budget plan:', error);
-      alert(`Failed to fund budget plan: ${error.message}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Funding failed',
+        description: error.message || 'Failed to fund budget plan.',
+      });
     } finally {
       setActionLoading(false);
     }
@@ -299,20 +328,36 @@ export default function BudgetPlansPage() {
 
   const handleRelease = async () => {
     if (!wallet.isConnected || !actionModal.plan) {
-      alert('Please connect your wallet');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before releasing this milestone.',
+      });
       return;
     }
 
     setActionLoading(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Signing release transaction',
+      description: 'Approve the wallet request to release this milestone.',
+    });
     try {
       const txHash = await releaseMilestone(wallet, actionModal.plan.id);
-      alert(`Milestone released successfully!\n\nTransaction: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Milestone released',
+        description: 'Release transaction was submitted on-chain.',
+        txHash,
+      });
       await reloadPlans();
-
-      setActionModal({ open: false, plan: null });
     } catch (error: any) {
       console.error('Failed to release milestone:', error);
-      alert(`Failed to release milestone: ${error.message}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Milestone release failed',
+        description: error.message || 'Failed to release milestone.',
+      });
     } finally {
       setActionLoading(false);
     }
@@ -320,19 +365,36 @@ export default function BudgetPlansPage() {
 
   const handlePause = async () => {
     if (!wallet.isConnected || !actionModal.plan) {
-      alert('Please connect your wallet');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before pausing this budget plan.',
+      });
       return;
     }
 
     setActionLoading(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Signing pause transaction',
+      description: 'Approve the wallet request to pause this budget plan.',
+    });
     try {
       const txHash = await pauseBudgetPlanOnChain(wallet, actionModal.plan.id);
-      alert(`Budget plan paused on-chain.\n\nTransaction: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Budget plan paused',
+        description: 'Pause transaction was submitted on-chain.',
+        txHash,
+      });
       await reloadPlans();
-      setActionModal({ open: false, plan: null });
     } catch (error: any) {
       console.error('Failed to pause budget plan:', error);
-      alert(`Failed to pause budget plan: ${error.message}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Pause failed',
+        description: error.message || 'Failed to pause budget plan.',
+      });
     } finally {
       setActionLoading(false);
     }
@@ -340,30 +402,55 @@ export default function BudgetPlansPage() {
 
   const handleCancel = async () => {
     if (!actionModal.plan) return;
-    if (!confirm('Are you sure you want to cancel this budget plan?')) {
+    if (!window.confirm('Are you sure you want to cancel this budget plan?')) {
       return;
     }
     if (!wallet.isConnected) {
-      alert('Please connect your wallet');
+      setFeedback({
+        tone: 'error',
+        title: 'Wallet not connected',
+        description: 'Connect your wallet before cancelling this budget plan.',
+      });
       return;
     }
 
     setActionLoading(true);
+    setFeedback({
+      tone: 'info',
+      title: 'Signing cancel transaction',
+      description: 'Approve the wallet request to cancel this budget plan.',
+    });
     try {
       const txHash = await cancelBudgetPlanOnChain(wallet, actionModal.plan.id);
-      alert(`Budget plan cancelled on-chain.\n\nTransaction: ${txHash}`);
+      setFeedback({
+        tone: 'success',
+        title: 'Budget plan cancelled',
+        description: 'Cancel transaction was submitted on-chain.',
+        txHash,
+      });
       await reloadPlans();
-      setActionModal({ open: false, plan: null });
     } catch (error: any) {
       console.error('Failed to cancel budget plan:', error);
-      alert(`Failed to cancel budget plan: ${error.message}`);
+      setFeedback({
+        tone: 'error',
+        title: 'Cancel failed',
+        description: error.message || 'Failed to cancel budget plan.',
+      });
     } finally {
       setActionLoading(false);
     }
   };
 
   const openActionModal = (plan: BudgetPlan) => {
+    setFeedback(null);
     setActionModal({ open: true, plan });
+  };
+
+  const feedbackToneClasses: Record<FeedbackTone, string> = {
+    success: 'border-success/40 bg-success/10 text-success',
+    warning: 'border-warning/40 bg-warning/10 text-warning',
+    error: 'border-error/40 bg-error/10 text-error',
+    info: 'border-primary/30 bg-primary/10 text-primary',
   };
 
   return (
@@ -506,6 +593,31 @@ export default function BudgetPlansPage() {
                   <CloseIcon className="w-6 h-6" />
                 </button>
               </div>
+
+              {feedback && (
+                <div className={`mb-6 rounded-lg border p-4 ${feedbackToneClasses[feedback.tone]}`}>
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold">{feedback.title}</p>
+                      {feedback.description && (
+                        <p className="mt-1 text-sm leading-6 text-textSecondary">{feedback.description}</p>
+                      )}
+                      {feedback.txHash && (
+                        <a
+                          href={getExplorerTxUrl(feedback.txHash, network)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
+                        >
+                          View transaction
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Plan Details */}
               <div className="bg-surfaceAlt rounded-lg p-4 mb-6">
