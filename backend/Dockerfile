@@ -5,27 +5,40 @@ RUN apk add --no-cache python3 py3-setuptools make g++ sqlite-dev
 
 WORKDIR /app
 
-# Copy package files
+# Copy root manifest files
 COPY package.json pnpm-lock.yaml ./
+
+# Copy contracts package and sources (needed for artifacts)
+COPY contracts/package.json contracts/pnpm-lock.yaml ./contracts/
+COPY contracts/core ./contracts/core
+COPY contracts/lib ./contracts/lib
+COPY contracts/README.md ./contracts/README.md
 
 # Install pnpm and dependencies
 RUN npm install -g pnpm
 RUN pnpm install --frozen-lockfile
 
-# Build contracts (workspace sibling) to produce artifacts
-COPY ../contracts/package.json ../contracts/pnpm-lock.yaml /contracts/
-RUN cd /contracts && pnpm install --frozen-lockfile && pnpm build
+# Install and build contracts to produce artifacts
+RUN pnpm --dir ./contracts install --frozen-lockfile
+RUN pnpm --dir ./contracts build
 
 # Rebuild better-sqlite3 from source for Alpine (for SQLite fallback)
 RUN cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 && npm run build-release
 
 # Copy backend source code
-COPY . .
-# Copy built contract artifacts into backend image
-COPY ../contracts/artifacts ./contracts/artifacts
+COPY backend/package.json backend/pnpm-lock.yaml ./
+COPY backend/tsconfig.json ./tsconfig.json
+COPY backend/src ./src
+COPY backend/.env.example ./.env.example
+
+# Copy built contract artifacts into backend image for runtime
+COPY contracts/artifacts ./contracts/artifacts
 
 # Build TypeScript
 RUN pnpm build
+
+# Point ContractFactory to baked artifacts
+ENV ARTIFACTS_ROOT=/app/contracts/artifacts
 
 # Expose port (use PORT env var, default to 3001)
 EXPOSE ${PORT:-3001}
