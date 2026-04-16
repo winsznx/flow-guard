@@ -1,23 +1,23 @@
 FROM --platform=linux/amd64 node:22-alpine
 
-RUN apk add --no-cache python3 py3-setuptools make g++ sqlite-dev
-
 WORKDIR /app
 
 COPY backend/package.json backend/pnpm-lock.yaml ./
 
 RUN npm install -g pnpm
-RUN pnpm install --frozen-lockfile
-
-RUN cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 && npm run build-release
+RUN pnpm install --prod --frozen-lockfile
 
 COPY backend/src ./src
 COPY backend/tsconfig.json ./tsconfig.json
 COPY contracts/artifacts ./contracts/artifacts
 
+# Install dev deps separately just for the TS build step, then drop them
+RUN pnpm install --frozen-lockfile
 RUN pnpm build
+RUN pnpm prune --prod
 
-RUN mkdir -p /app/data
+# TypeScript only emits .ts -> .js; copy non-TS runtime assets
+RUN mkdir -p dist/database && cp src/database/postgres-schema.sql dist/database/
 
 EXPOSE 3001
 
