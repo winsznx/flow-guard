@@ -1,7 +1,0 @@
-pragma cashscript ^0.8.0;
-
-// GuardrailChecks.cash
-// Library for validating spending caps and allowlists.
-
-// Checks if 'amount' is within 'periodCap' given 'spentSoFar'
-// Returns bool (since we can't throw inside a function easily in v0.8 without abort)

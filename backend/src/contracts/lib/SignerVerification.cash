@@ -1,7 +1,0 @@
-pragma cashscript ^0.8.0;
-
-// SignerVerification.cash
-// Library for M-of-N signature checks.
-
-// Pre-Layla: Verification logic is unrolled or uses hardcoded IF/ELSE for small N.
-// Post-Layla: Will use OP_BEGIN/OP_UNTIL loops.

@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import db from '../database/schema.js';
 
-export type ActivityEntityType = 'stream' | 'payment' | 'airdrop';
+export type ActivityEntityType = 'stream' | 'payment' | 'airdrop' | 'reward' | 'bounty' | 'grant';
 
 export interface ActivityEventInput {
   entityType: ActivityEntityType;
@@ -28,12 +28,12 @@ export interface ActivityEventRow {
   created_at: number;
 }
 
-export function recordActivityEvent(input: ActivityEventInput): void {
+export async function recordActivityEvent(input: ActivityEventInput): Promise<void> {
   const createdAt = Number.isFinite(input.createdAt)
     ? Math.max(0, Math.floor(Number(input.createdAt)))
     : Math.floor(Date.now() / 1000);
 
-  db!.prepare(`
+  await db!.prepare(`
     INSERT INTO activity_events (
       id, entity_type, entity_id, event_type, actor, amount, status, tx_hash, details, created_at
     )
@@ -52,13 +52,13 @@ export function recordActivityEvent(input: ActivityEventInput): void {
   );
 }
 
-export function listActivityEvents(
+export async function listActivityEvents(
   entityType: ActivityEntityType,
   entityId: string,
   limit = 100,
-): ActivityEventRow[] {
+): Promise<ActivityEventRow[]> {
   const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
-  const rows = db!.prepare(`
+  const rows = await db!.prepare(`
     SELECT id, entity_type, entity_id, event_type, actor, amount, status, tx_hash, details, created_at
     FROM activity_events
     WHERE entity_type = ? AND entity_id = ?
@@ -83,17 +83,17 @@ export function listActivityEvents(
   }));
 }
 
-export function getLatestActivityEvents(
+export async function getLatestActivityEvents(
   entityType: ActivityEntityType,
   entityIds: string[],
-): Map<string, ActivityEventRow> {
+): Promise<Map<string, ActivityEventRow>> {
   const dedupedIds = Array.from(new Set(entityIds.filter((id) => typeof id === 'string' && id.length > 0)));
   if (dedupedIds.length === 0) {
     return new Map();
   }
 
   const placeholders = dedupedIds.map(() => '?').join(', ');
-  const rows = db!.prepare(`
+  const rows = await db!.prepare(`
     SELECT id, entity_type, entity_id, event_type, actor, amount, status, tx_hash, details, created_at
     FROM activity_events
     WHERE entity_type = ? AND entity_id IN (${placeholders})

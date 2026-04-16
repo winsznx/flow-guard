@@ -320,7 +320,7 @@ function getApiErrorMessage(error: any, fallback: string): string {
   }
 
   if (diagnostics) {
-    return `${message}\n\nDiagnostics: ${JSON.stringify(diagnostics)}`;
+    console.debug('[blockchain] API error diagnostics:', diagnostics);
   }
 
   return message;
@@ -482,14 +482,10 @@ export async function signTransaction(
       console.warn('Alternative signing method failed:', altError);
     }
 
-    // If all signing methods fail, return the hex as-is
-    // The transaction may be pre-signed by CashScript's SignatureTemplate
-    // or may need to be signed on the backend
-    console.warn(
-      'Wallet does not support raw transaction hex signing. ' +
-      'Transaction may need to be signed differently or is already signed.'
+    throw new Error(
+      'Wallet does not support transaction signing for this operation. ' +
+      'Please use a CashScript-compatible wallet (e.g. Paytaca).'
     );
-    return txHex;
   } catch (error: any) {
     console.error('Failed to sign transaction:', error);
     throw new Error(`Signing failed: ${error.message || 'Unknown error'}`);

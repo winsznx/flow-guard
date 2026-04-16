@@ -58,7 +58,7 @@ export class VaultService {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run(
+    await stmt.run(
       id,
       vaultId,
       dto.name || null,
@@ -81,16 +81,16 @@ export class VaultService {
       null // tx_hash will be set when vault is funded
     );
 
-    const vault = this.getVaultById(id);
+    const vault = await this.getVaultById(id);
     if (!vault) {
       throw new Error('Failed to create vault');
     }
     return vault;
   }
 
-  static getVaultById(id: string): Vault | null {
+  static async getVaultById(id: string): Promise<Vault | null> {
     const stmt = db!.prepare('SELECT * FROM vaults WHERE id = ?');
-    const row = stmt.get(id) as any;
+    const row = await stmt.get(id) as any;
 
     if (!row) return null;
 
@@ -118,13 +118,13 @@ export class VaultService {
     };
   }
 
-  static getVaultByVaultId(vaultId: string): Vault | null {
+  static async getVaultByVaultId(vaultId: string): Promise<Vault | null> {
     const stmt = db!.prepare(`
       SELECT * FROM vaults
       WHERE vault_id = ? OR id = ?
       LIMIT 1
     `);
-    const row = stmt.get(vaultId, vaultId) as any;
+    const row = await stmt.get(vaultId, vaultId) as any;
 
     if (!row) return null;
 
@@ -152,12 +152,12 @@ export class VaultService {
     };
   }
 
-  static getUserVaults(userAddress: string): Vault[] {
+  static async getUserVaults(userAddress: string): Promise<Vault[]> {
     const stmt = db!.prepare(`
       SELECT * FROM vaults
       WHERE creator = ? OR signers LIKE ?
     `);
-    const rows = stmt.all(userAddress, `%${userAddress}%`) as any[];
+    const rows = await stmt.all(userAddress, `%${userAddress}%`) as any[];
 
     return rows.map(row => ({
       id: row.id,
@@ -182,9 +182,9 @@ export class VaultService {
     }));
   }
 
-  static getPublicVaults(): Vault[] {
+  static async getPublicVaults(): Promise<Vault[]> {
     const stmt = db!.prepare('SELECT * FROM vaults WHERE is_public = 1');
-    const rows = stmt.all() as any[];
+    const rows = await stmt.all() as any[];
 
     return rows.map(row => ({
       id: row.id,
@@ -228,17 +228,17 @@ export class VaultService {
     return this.isCreator(vault, userAddress) || this.isSigner(vault, userAddress);
   }
 
-  static updateVaultState(vaultId: string, newState: number): void {
+  static async updateVaultState(vaultId: string, newState: number): Promise<void> {
     const stmt = db!.prepare(`
-      UPDATE vaults 
-      SET state = ?, updated_at = CURRENT_TIMESTAMP 
+      UPDATE vaults
+      SET state = ?, updated_at = CURRENT_TIMESTAMP
       WHERE vault_id = ? OR id = ?
     `);
-    stmt.run(newState, vaultId, vaultId);
+    await stmt.run(newState, vaultId, vaultId);
   }
 
-  static addSigner(vaultId: string, newSignerAddress: string, requesterAddress: string): Vault {
-    const vault = this.getVaultByVaultId(vaultId);
+  static async addSigner(vaultId: string, newSignerAddress: string, requesterAddress: string): Promise<Vault> {
+    const vault = await this.getVaultByVaultId(vaultId);
     if (!vault) {
       throw new Error('Vault not found');
     }
@@ -257,13 +257,13 @@ export class VaultService {
     const updatedSigners = [...vault.signers, newSignerAddress];
 
     const stmt = db!.prepare(`
-      UPDATE vaults 
-      SET signers = ?, updated_at = CURRENT_TIMESTAMP 
+      UPDATE vaults
+      SET signers = ?, updated_at = CURRENT_TIMESTAMP
       WHERE vault_id = ?
     `);
-    stmt.run(JSON.stringify(updatedSigners), vaultId);
+    await stmt.run(JSON.stringify(updatedSigners), vaultId);
 
-    return this.getVaultByVaultId(vaultId)!;
+    return (await this.getVaultByVaultId(vaultId))!;
   }
 
   /**
@@ -272,8 +272,8 @@ export class VaultService {
    * @param amount The amount to add to balance (in BCH)
    * @param txid Optional transaction ID for tracking
    */
-  static updateBalance(vaultId: string, amount: number, txid?: string): Vault {
-    const vault = this.getVaultById(vaultId);
+  static async updateBalance(vaultId: string, amount: number, txid?: string): Promise<Vault> {
+    const vault = await this.getVaultById(vaultId);
     if (!vault) {
       throw new Error('Vault not found');
     }
@@ -289,7 +289,7 @@ export class VaultService {
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `);
-    stmt.run(newBalance, txid || null, vaultId);
+    await stmt.run(newBalance, txid || null, vaultId);
 
     // Log the transaction
     if (txid) {
@@ -297,7 +297,7 @@ export class VaultService {
         INSERT INTO transactions (id, tx_hash, vault_id, tx_type, amount, to_address, status)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
-      txStmt.run(
+      await txStmt.run(
         randomUUID(),
         txid,
         vault.vaultId,
@@ -308,6 +308,6 @@ export class VaultService {
       );
     }
 
-    return this.getVaultById(vaultId)!;
+    return (await this.getVaultById(vaultId))!;
   }
 }

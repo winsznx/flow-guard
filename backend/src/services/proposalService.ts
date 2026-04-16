@@ -47,18 +47,18 @@ export class ProposalService {
    * Create proposal with on-chain state management
    * This creates the proposal in the database and prepares for on-chain creation
    */
-  static createProposal(dto: CreateProposalDto, creator: string): Proposal {
+  static async createProposal(dto: CreateProposalDto, creator: string): Promise<Proposal> {
     const id = randomUUID();
-    
+
     // Get vault to check state and parameters
-    const vault = VaultService.getVaultByVaultId(dto.vaultId);
+    const vault = await VaultService.getVaultByVaultId(dto.vaultId);
     if (!vault) {
       throw new Error('Vault not found');
     }
 
     // Get next proposal ID for this vault (on-chain proposal ID)
     const vaultStmt = db!.prepare('SELECT COUNT(*) as count FROM proposals WHERE vault_id = ?');
-    const vaultRow = vaultStmt.get(dto.vaultId) as any;
+    const vaultRow = await vaultStmt.get(dto.vaultId) as any;
     const proposalId = (vaultRow?.count || 0) + 1;
 
     // Verify proposal can be created on-chain
@@ -85,7 +85,7 @@ export class ProposalService {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
-    stmt.run(
+    await stmt.run(
       id,
       dto.vaultId,
       proposalId,
@@ -100,9 +100,9 @@ export class ProposalService {
 
     // Mirror proposal lifecycle in vault state bitfield for compatibility with existing APIs.
     const newState = StateService.setProposalPending(currentState, proposalId);
-    VaultService.updateVaultState(dto.vaultId, newState);
+    await VaultService.updateVaultState(dto.vaultId, newState);
 
-    const proposal = this.getProposalById(id);
+    const proposal = await this.getProposalById(id);
     if (!proposal) {
       throw new Error('Failed to create proposal');
     }
@@ -117,12 +117,12 @@ export class ProposalService {
     proposalId: string,
     signerPublicKey: string
   ): Promise<{ transaction: any; newState: number }> {
-    const proposal = this.getProposalById(proposalId);
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.contractAddress || !vault.signerPubkeys) {
       throw new Error('Vault not found or missing contract information');
     }
@@ -163,9 +163,9 @@ export class ProposalService {
     return { transaction, newState };
   }
   
-  static getProposalById(id: string): Proposal | null {
+  static async getProposalById(id: string): Promise<Proposal | null> {
     const stmt = db!.prepare('SELECT * FROM proposals WHERE id = ?');
-    const row = stmt.get(id) as any;
+    const row = await stmt.get(id) as any;
     
     if (!row) return null;
     
@@ -188,9 +188,9 @@ export class ProposalService {
     };
   }
   
-  static getVaultProposals(vaultId: string): Proposal[] {
+  static async getVaultProposals(vaultId: string): Promise<Proposal[]> {
     const stmt = db!.prepare('SELECT * FROM proposals WHERE vault_id = ? ORDER BY created_at DESC');
-    const rows = stmt.all(vaultId) as any[];
+    const rows = await stmt.all(vaultId) as any[];
     
     return rows.map(row => ({
       id: row.id,
@@ -214,19 +214,19 @@ export class ProposalService {
   /**
    * Approve proposal with on-chain state management
    */
-  static approveProposal(dto: ApproveProposalDto): Proposal | null {
-    const proposal = this.getProposalById(dto.proposalId);
+  static async approveProposal(dto: ApproveProposalDto): Promise<Proposal | null> {
+    const proposal = await this.getProposalById(dto.proposalId);
     if (!proposal || proposal.status !== ProposalStatus.PENDING) {
       return null;
     }
-    
+
     // Check if already approved by this approver
     if (proposal.approvals.includes(dto.approver)) {
       return proposal;
     }
 
     // Get vault to check state
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault) {
       throw new Error('Vault not found');
     }
@@ -258,12 +258,12 @@ export class ProposalService {
     const newApprovalCount = newApprovals.length;
     
     const stmt = db!.prepare(`
-      UPDATE proposals 
+      UPDATE proposals
       SET approval_count = ?, approvals = ?, updated_at = CURRENT_TIMESTAMP,
           status = ?
       WHERE id = ?
     `);
-    stmt.run(
+    await stmt.run(
       newApprovalCount,
       JSON.stringify(newApprovals),
       isApproved ? ProposalStatus.APPROVED : ProposalStatus.PENDING,
@@ -271,9 +271,9 @@ export class ProposalService {
     );
 
     // Update vault state in database
-    VaultService.updateVaultState(proposal.vaultId, newState);
-    
-    return this.getProposalById(dto.proposalId);
+    await VaultService.updateVaultState(proposal.vaultId, newState);
+
+    return await this.getProposalById(dto.proposalId);
   }
 
   /**
@@ -283,12 +283,12 @@ export class ProposalService {
     proposalId: string,
     signerPublicKey: string
   ): Promise<{ transaction: any; newState: number; isApproved: boolean }> {
-    const proposal = this.getProposalById(proposalId);
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.contractAddress || !vault.signerPubkeys) {
       throw new Error('Vault not found or missing contract information');
     }
@@ -338,7 +338,7 @@ export class ProposalService {
     proposalId: string,
     funderAddress: string,
   ): Promise<CreateProposalWcBuildResult> {
-    const proposal = this.getProposalById(proposalId);
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
@@ -349,7 +349,7 @@ export class ProposalService {
       throw new Error('Proposal already has an on-chain creation transaction');
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.signerPubkeys || vault.signerPubkeys.length < 3) {
       throw new Error('Vault not found or missing signer configuration');
     }
@@ -362,7 +362,7 @@ export class ProposalService {
       throw new Error('Only vault creator/signers can create proposal covenant transactions');
     }
 
-    const vaultParamsRow = db!
+    const vaultParamsRow = await db!
       .prepare('SELECT constructor_params FROM vaults WHERE vault_id = ? OR id = ? LIMIT 1')
       .get(proposal.vaultId, proposal.vaultId) as { constructor_params?: string } | undefined;
     if (!vaultParamsRow?.constructor_params) {
@@ -421,7 +421,7 @@ export class ProposalService {
 
     const votingEndTimestamp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
     const executionTimelock = Math.floor(Date.now() / 1000);
-    const payoutHashHex = this.ensurePayoutHash(proposal.id);
+    const payoutHashHex = await this.ensurePayoutHash(proposal.id);
     const initialCommitment = this.buildInitialProposalCommitment({
       requiredApprovals: vault.approvalThreshold,
       votingEndTimestamp,
@@ -488,7 +488,7 @@ export class ProposalService {
     proposalId: string,
     signerAddress: string,
   ): Promise<ApproveProposalWcBuildResult> {
-    const proposal = this.getProposalById(proposalId);
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
@@ -499,7 +499,7 @@ export class ProposalService {
       throw new Error('Proposal covenant has not been created on-chain yet');
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.signerPubkeys) {
       throw new Error('Vault signer configuration is missing');
     }
@@ -610,14 +610,14 @@ export class ProposalService {
     };
   }
   
-  static markProposalExecuted(proposalId: string, txHash: string): void {
-    const proposal = this.getProposalById(proposalId);
+  static async markProposalExecuted(proposalId: string, txHash: string): Promise<void> {
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
 
     // Get vault to update state
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault) {
       throw new Error('Vault not found');
     }
@@ -629,29 +629,29 @@ export class ProposalService {
 
     // Update database
     const stmt = db!.prepare(`
-      UPDATE proposals 
+      UPDATE proposals
       SET status = ?, executed_at = CURRENT_TIMESTAMP, tx_hash = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `);
-    stmt.run(ProposalStatus.EXECUTED, txHash, proposalId);
+    await stmt.run(ProposalStatus.EXECUTED, txHash, proposalId);
 
     // Update vault state
-    VaultService.updateVaultState(proposal.vaultId, newState);
+    await VaultService.updateVaultState(proposal.vaultId, newState);
   }
 
   /**
    * Choose signer pairs for VaultCovenant.spend.
    * The covenant currently requires exactly two distinct signer pubkeys.
    */
-  static getPreferredExecuteSigners(
+  static async getPreferredExecuteSigners(
     proposalId: string,
-  ): { signerAddresses: string[]; signerPubkeys: string[] } {
-    const proposal = this.getProposalById(proposalId);
+  ): Promise<{ signerAddresses: string[]; signerPubkeys: string[] }> {
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.contractAddress || !vault.signerPubkeys) {
       throw new Error('Vault not found or missing contract information');
     }
@@ -695,7 +695,7 @@ export class ProposalService {
       throw new Error('Signer pubkeys for payout execution must be distinct');
     }
 
-    const proposal = this.getProposalById(proposalId);
+    const proposal = await this.getProposalById(proposalId);
     if (!proposal) {
       throw new Error('Proposal not found');
     }
@@ -703,7 +703,7 @@ export class ProposalService {
       throw new Error('Proposal is not approved');
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.contractAddress || !vault.signerPubkeys) {
       throw new Error('Vault not found or missing contract information');
     }
@@ -715,7 +715,7 @@ export class ProposalService {
       }
     }
 
-    const vaultRow = db!
+    const vaultRow = await db!
       .prepare('SELECT constructor_params FROM vaults WHERE vault_id = ? OR id = ? LIMIT 1')
       .get(proposal.vaultId, proposal.vaultId) as { constructor_params?: string } | undefined;
     if (!vaultRow?.constructor_params) {
@@ -787,7 +787,7 @@ export class ProposalService {
       throw new Error('Insufficient vault balance to pay recipient and preserve state UTXO');
     }
 
-    const payoutHashHex = this.ensurePayoutHash(proposal.id);
+    const payoutHashHex = await this.ensurePayoutHash(proposal.id);
     const payoutHash = hexToBin(payoutHashHex);
     if (payoutHash.length !== 32) {
       throw new Error('Payout hash must be exactly 32 bytes');
@@ -940,8 +940,8 @@ export class ProposalService {
     return count;
   }
 
-  private static ensurePayoutHash(proposalDbId: string): string {
-    const row = db!
+  private static async ensurePayoutHash(proposalDbId: string): Promise<string> {
+    const row = await db!
       .prepare('SELECT payout_hash, vault_id, proposal_id, recipient, amount, reason FROM proposals WHERE id = ?')
       .get(proposalDbId) as any;
     if (!row) {
@@ -956,7 +956,7 @@ export class ProposalService {
       .update(`${row.vault_id}:${row.proposal_id}:${row.recipient}:${row.amount}:${row.reason ?? ''}`)
       .digest('hex');
 
-    db!.prepare('UPDATE proposals SET payout_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    await db!.prepare('UPDATE proposals SET payout_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(generated, proposalDbId);
     return generated;
   }

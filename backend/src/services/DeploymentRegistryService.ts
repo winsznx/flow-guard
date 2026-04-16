@@ -116,10 +116,10 @@ function explorerTxUrl(network: Network, txHash: string | null): string | null {
   return `${TX_EXPLORER_BY_NETWORK[network]}/${txHash}`;
 }
 
-function readRows(): RegistryRow[] {
+async function readRows(): Promise<RegistryRow[]> {
   const rows: RegistryRow[] = [];
 
-  const vaultRows = db.prepare(`
+  const vaultRows = await db.prepare(`
     SELECT
       'vault' AS module,
       id,
@@ -146,7 +146,7 @@ function readRows(): RegistryRow[] {
     });
   }
 
-  const proposalRows = db.prepare(`
+  const proposalRows = await db.prepare(`
     SELECT
       'proposal' AS module,
       id,
@@ -173,7 +173,7 @@ function readRows(): RegistryRow[] {
     });
   }
 
-  const streamRows = db.prepare(`
+  const streamRows = await db.prepare(`
     SELECT
       'stream' AS module,
       id,
@@ -205,7 +205,7 @@ function readRows(): RegistryRow[] {
     });
   }
 
-  const paymentRows = db.prepare(`
+  const paymentRows = await db.prepare(`
     SELECT
       'payment' AS module,
       id,
@@ -232,7 +232,7 @@ function readRows(): RegistryRow[] {
     });
   }
 
-  const airdropRows = db.prepare(`
+  const airdropRows = await db.prepare(`
     SELECT
       'airdrop' AS module,
       id,
@@ -259,7 +259,7 @@ function readRows(): RegistryRow[] {
     });
   }
 
-  const budgetRows = db.prepare(`
+  const budgetRows = await db.prepare(`
     SELECT
       'budget' AS module,
       id,
@@ -286,7 +286,7 @@ function readRows(): RegistryRow[] {
     });
   }
 
-  const governanceRows = db.prepare(`
+  const governanceRows = await db.prepare(`
     SELECT
       'governance' AS module,
       id,
@@ -327,7 +327,7 @@ export class DeploymentRegistryService {
 
   async buildReport(options?: BuildOptions): Promise<DeploymentRegistryReport> {
     const verifyOnChain = options?.verifyOnChain ?? true;
-    const rows = readRows();
+    const rows = await readRows();
     const entries: DeploymentRegistryEntry[] = [];
 
     for (const row of rows) {

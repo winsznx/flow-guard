@@ -21,24 +21,25 @@ router.get('/explorer/stats', async (req, res) => {
     const blockHeight = await provider.getBlockHeight();
 
     // FlowGuard stats
-    const vaultCount = (db!.prepare('SELECT COUNT(*) as n FROM vaults').get() as any).n;
-    const streamCount = (db!.prepare('SELECT COUNT(*) as n FROM streams').get() as any).n;
-    const proposalCount = (db!.prepare('SELECT COUNT(*) as n FROM proposals').get() as any).n;
+    const vaultCount = (await db!.prepare('SELECT COUNT(*) as n FROM vaults').get() as any).n;
+    const streamCount = (await db!.prepare('SELECT COUNT(*) as n FROM streams').get() as any).n;
+    const proposalCount = (await db!.prepare('SELECT COUNT(*) as n FROM proposals').get() as any).n;
 
     // Activity counts
-    const activeStreams = (db!.prepare('SELECT COUNT(*) as n FROM streams WHERE status = ?').get('ACTIVE') as any).n;
-    const activeProposals = (db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE status = ?').get('PENDING') as any).n;
+    const activeStreams = (await db!.prepare('SELECT COUNT(*) as n FROM streams WHERE status = ?').get('ACTIVE') as any).n;
+    const activeProposals = (await db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE status = ?').get('PENDING') as any).n;
 
     // Volume calculations
-    const totalVaultValue = (db!.prepare('SELECT SUM(total_deposit) as s FROM vaults').get() as any)?.s || 0;
-    const totalStreamVolume = (db!.prepare('SELECT SUM(total_amount) as s FROM streams').get() as any)?.s || 0;
-    const totalProposalAmount = (db!.prepare('SELECT SUM(amount) as s FROM proposals').get() as any)?.s || 0;
+    const totalVaultValue = (await db!.prepare('SELECT SUM(total_deposit) as s FROM vaults').get() as any)?.s || 0;
+    const totalStreamVolume = (await db!.prepare('SELECT SUM(total_amount) as s FROM streams').get() as any)?.s || 0;
+    const totalProposalAmount = (await db!.prepare('SELECT SUM(amount) as s FROM proposals').get() as any)?.s || 0;
 
-    // Recent activity (24h)
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const recentVaults = (db!.prepare('SELECT COUNT(*) as n FROM vaults WHERE created_at >= ?').get(oneDayAgo) as any).n;
-    const recentStreams = (db!.prepare('SELECT COUNT(*) as n FROM streams WHERE created_at >= ?').get(oneDayAgo) as any).n;
-    const recentProposals = (db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE created_at >= ?').get(oneDayAgo) as any).n;
+    // Recent activity (24h) — vaults/proposals use TIMESTAMPTZ, streams uses BIGINT epoch seconds
+    const oneDayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const oneDayAgoEpoch = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+    const recentVaults = (await db!.prepare('SELECT COUNT(*) as n FROM vaults WHERE created_at >= ?').get(oneDayAgoIso) as any).n;
+    const recentStreams = (await db!.prepare('SELECT COUNT(*) as n FROM streams WHERE created_at >= ?').get(oneDayAgoEpoch) as any).n;
+    const recentProposals = (await db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE created_at >= ?').get(oneDayAgoIso) as any).n;
 
     res.json({
       network: {
@@ -140,7 +141,7 @@ router.get('/explorer/transactions', async (req, res) => {
         params.push(endIso);
       }
 
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows);
       params.length = 0;
     }
@@ -186,7 +187,7 @@ router.get('/explorer/transactions', async (req, res) => {
         params.push(endEpoch ?? Number.MAX_SAFE_INTEGER);
       }
 
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows);
       params.length = 0;
     }
@@ -232,7 +233,7 @@ router.get('/explorer/transactions', async (req, res) => {
         params.push(endEpoch ?? Number.MAX_SAFE_INTEGER);
       }
 
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows);
       params.length = 0;
     }
@@ -278,7 +279,7 @@ router.get('/explorer/transactions', async (req, res) => {
         params.push(endEpoch ?? Number.MAX_SAFE_INTEGER);
       }
 
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows);
       params.length = 0;
     }
@@ -324,24 +325,24 @@ router.get('/explorer/transactions', async (req, res) => {
         params.push(endIso);
       }
 
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows);
     }
 
     // Attach latest lifecycle event data for entities backed by activity_events.
-    const latestStreamEvents = getLatestActivityEvents(
+    const latestStreamEvents = await getLatestActivityEvents(
       'stream',
       results
         .filter((row) => row.entity_type === 'stream')
         .map((row) => String(row.entity_id)),
     );
-    const latestPaymentEvents = getLatestActivityEvents(
+    const latestPaymentEvents = await getLatestActivityEvents(
       'payment',
       results
         .filter((row) => row.entity_type === 'payment')
         .map((row) => String(row.entity_id)),
     );
-    const latestAirdropEvents = getLatestActivityEvents(
+    const latestAirdropEvents = await getLatestActivityEvents(
       'airdrop',
       results
         .filter((row) => row.entity_type === 'airdrop')
@@ -404,21 +405,21 @@ router.get('/explorer/address/:address', async (req, res) => {
     }
 
     // Get vaults created
-    const vaults = db!.prepare('SELECT * FROM vaults WHERE creator = ? ORDER BY created_at DESC').all(address) as any[];
+    const vaults = await db!.prepare('SELECT * FROM vaults WHERE creator = ? ORDER BY created_at DESC').all(address) as any[];
 
     // Get vaults where user is signer
-    const signerVaults = db!.prepare(`
+    const signerVaults = await db!.prepare(`
       SELECT * FROM vaults
       WHERE signer_pubkeys LIKE ?
       ORDER BY created_at DESC
     `).all(`%${address}%`) as any[];
 
     // Get streams (sent + received)
-    const streamsSent = db!.prepare('SELECT * FROM streams WHERE sender = ? ORDER BY created_at DESC').all(address) as any[];
-    const streamsReceived = db!.prepare('SELECT * FROM streams WHERE recipient = ? ORDER BY created_at DESC').all(address) as any[];
+    const streamsSent = await db!.prepare('SELECT * FROM streams WHERE sender = ? ORDER BY created_at DESC').all(address) as any[];
+    const streamsReceived = await db!.prepare('SELECT * FROM streams WHERE recipient = ? ORDER BY created_at DESC').all(address) as any[];
 
     // Get proposals (created + received)
-    const proposalsReceived = db!.prepare('SELECT * FROM proposals WHERE recipient = ? ORDER BY created_at DESC').all(address) as any[];
+    const proposalsReceived = await db!.prepare('SELECT * FROM proposals WHERE recipient = ? ORDER BY created_at DESC').all(address) as any[];
 
     // Calculate totals
     const totalSent = streamsSent.reduce((sum, s) => sum + s.total_amount, 0);
@@ -462,7 +463,7 @@ router.get('/explorer/contract/:address', async (req, res) => {
     const { address: contractAddress } = req.params;
 
     // Find vault by contract address
-    const vault = db!.prepare('SELECT * FROM vaults WHERE contract_address = ?').get(contractAddress) as any;
+    const vault = await db!.prepare('SELECT * FROM vaults WHERE contract_address = ?').get(contractAddress) as any;
 
     if (!vault) {
       return res.status(404).json({ error: 'Contract not found' });
@@ -479,13 +480,13 @@ router.get('/explorer/contract/:address', async (req, res) => {
     }
 
     // Get proposals for this vault
-    const proposals = db!.prepare('SELECT * FROM proposals WHERE vault_id = ? ORDER BY created_at DESC').all(vault.vault_id) as any[];
+    const proposals = await db!.prepare('SELECT * FROM proposals WHERE vault_id = ? ORDER BY created_at DESC').all(vault.vault_id) as any[];
 
     // Get cycles
-    const cycles = db!.prepare('SELECT * FROM cycles WHERE vault_id = ? ORDER BY cycle_number DESC').all(vault.vault_id) as any[];
+    const cycles = await db!.prepare('SELECT * FROM cycles WHERE vault_id = ? ORDER BY cycle_number DESC').all(vault.vault_id) as any[];
 
     // Get transactions (from general transactions table)
-    const transactions = db!.prepare('SELECT * FROM transactions WHERE vault_id = ? ORDER BY created_at DESC LIMIT 50').all(vault.vault_id) as any[];
+    const transactions = await db!.prepare('SELECT * FROM transactions WHERE vault_id = ? ORDER BY created_at DESC LIMIT 50').all(vault.vault_id) as any[];
 
     // Calculate contract stats
     const totalProposed = proposals.reduce((sum, p) => sum + p.amount, 0);
@@ -547,7 +548,7 @@ router.get('/explorer/search', async (req, res) => {
     };
 
     // Search vaults by name, ID, or address
-    results.vaults = db!.prepare(`
+    results.vaults = await db!.prepare(`
       SELECT vault_id, name, contract_address, creator, total_deposit, created_at
       FROM vaults
       WHERE LOWER(name) LIKE ? OR LOWER(vault_id) LIKE ? OR LOWER(contract_address) LIKE ?
@@ -555,7 +556,7 @@ router.get('/explorer/search', async (req, res) => {
     `).all(`%${query}%`, `%${query}%`, `%${query}%`);
 
     // Search streams by ID or addresses
-    results.streams = db!.prepare(`
+    results.streams = await db!.prepare(`
       SELECT stream_id, sender, recipient, total_amount, status, created_at
       FROM streams
       WHERE LOWER(stream_id) LIKE ? OR LOWER(sender) LIKE ? OR LOWER(recipient) LIKE ?
@@ -563,7 +564,7 @@ router.get('/explorer/search', async (req, res) => {
     `).all(`%${query}%`, `%${query}%`, `%${query}%`);
 
     // Search proposals by reason
-    results.proposals = db!.prepare(`
+    results.proposals = await db!.prepare(`
       SELECT id, vault_id, recipient, amount, reason, status, created_at
       FROM proposals
       WHERE LOWER(reason) LIKE ? OR LOWER(recipient) LIKE ?
@@ -599,7 +600,7 @@ router.get('/explorer/timeline', async (req, res) => {
     const timeline: any[] = [];
 
     // Get recent vaults
-    const vaults = db!.prepare('SELECT * FROM vaults ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
+    const vaults = await db!.prepare('SELECT * FROM vaults ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
     vaults.forEach(v => timeline.push({
       type: 'VAULT_CREATED',
       id: v.vault_id,
@@ -610,7 +611,7 @@ router.get('/explorer/timeline', async (req, res) => {
     }));
 
     // Get recent streams
-    const streams = db!.prepare('SELECT * FROM streams ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
+    const streams = await db!.prepare('SELECT * FROM streams ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
     streams.forEach(s => timeline.push({
       type: 'STREAM_CREATED',
       id: s.stream_id,
@@ -621,7 +622,7 @@ router.get('/explorer/timeline', async (req, res) => {
     }));
 
     // Get recent proposals
-    const proposals = db!.prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
+    const proposals = await db!.prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
     proposals.forEach(p => timeline.push({
       type: 'PROPOSAL_CREATED',
       id: p.id,

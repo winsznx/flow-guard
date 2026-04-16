@@ -126,11 +126,20 @@ export class VaultFundingService {
 
   private parseConstructorParams(rawJson: string): any[] {
     const params = JSON.parse(rawJson || '[]');
-    return params.map((param: any) => {
+    if (!Array.isArray(params)) throw new Error('Constructor params must be an array');
+    return params.map((param: any, i: number) => {
       if (param && typeof param === 'object') {
-        if (param.type === 'bigint') return BigInt(param.value);
-        if (param.type === 'bytes') return hexToBin(param.value);
-        if (param.type === 'boolean') return param.value === 'true' || param.value === true;
+        const val = typeof param.value === 'string' ? param.value : String(param.value ?? '');
+        if (val.length > 1024) throw new Error(`Constructor param ${i} value exceeds max length`);
+        if (param.type === 'bigint') {
+          if (!/^-?\d+$/.test(val)) throw new Error(`Constructor param ${i}: invalid bigint value`);
+          return BigInt(val);
+        }
+        if (param.type === 'bytes') {
+          if (!/^[0-9a-fA-F]*$/.test(val)) throw new Error(`Constructor param ${i}: invalid hex value`);
+          return hexToBin(val);
+        }
+        if (param.type === 'boolean') return val === 'true' || param.value === true;
         return param.value;
       }
       return param;

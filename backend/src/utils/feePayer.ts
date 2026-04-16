@@ -7,6 +7,31 @@ import {
 } from 'cashscript';
 import { publicKeyToP2pkhCashAddress } from '@bitauth/libauth';
 
+const RESERVATION_TTL_MS = 60_000;
+const reservedUtxos = new Map<string, number>();
+
+function utxoKey(utxo: { txid: string; vout: number }): string {
+  return `${utxo.txid}:${utxo.vout}`;
+}
+
+function isReserved(utxo: { txid: string; vout: number }): boolean {
+  const key = utxoKey(utxo);
+  const expiry = reservedUtxos.get(key);
+  if (!expiry) return false;
+  if (Date.now() > expiry) {
+    reservedUtxos.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function reserveUtxos(utxos: Array<{ txid: string; vout: number }>): void {
+  const expiry = Date.now() + RESERVATION_TTL_MS;
+  for (const utxo of utxos) {
+    reservedUtxos.set(utxoKey(utxo), expiry);
+  }
+}
+
 export interface FeePayerSelection {
   utxos: any[];
   total: bigint;
@@ -25,7 +50,7 @@ export async function selectFeePayerInputs(
 ): Promise<FeePayerSelection> {
   const utxos = await provider.getUtxos(address);
   const spendable = utxos
-    .filter((utxo: any) => !utxo.token)
+    .filter((utxo: any) => !utxo.token && !isReserved(utxo))
     .sort((a: any, b: any) => {
       const aSats = BigInt(a.satoshis);
       const bSats = BigInt(b.satoshis);
@@ -36,6 +61,7 @@ export async function selectFeePayerInputs(
 
   const singleInput = spendable.find((utxo: any) => BigInt(utxo.satoshis) >= requiredFee);
   if (singleInput) {
+    reserveUtxos([singleInput]);
     return { utxos: [singleInput], total: BigInt(singleInput.satoshis) };
   }
 
@@ -45,6 +71,7 @@ export async function selectFeePayerInputs(
     selected.push(utxo);
     total += BigInt(utxo.satoshis);
     if (total >= requiredFee) {
+      reserveUtxos(selected);
       return { utxos: selected, total };
     }
   }
@@ -94,12 +121,20 @@ export async function resolveFeePayer(
   }
 }
 
+let feePayerWarningLogged = false;
+
 function getConfiguredSponsor(network: Network): {
   address: string;
   unlocker: P2PKHUnlocker;
 } | null {
   const privateKeyHex = process.env.BACKEND_FEE_PAYER_KEY_HEX?.trim();
-  if (!privateKeyHex) return null;
+  if (!privateKeyHex) {
+    if (!feePayerWarningLogged) {
+      console.warn('[feePayer] BACKEND_FEE_PAYER_KEY_HEX not set — fee sponsorship disabled. Users must pay their own fees.');
+      feePayerWarningLogged = true;
+    }
+    return null;
+  }
 
   const template = new SignatureTemplate(privateKeyHex);
   const publicKey = template.getPublicKey();

@@ -52,20 +52,13 @@ export class MainnetConnector implements IWalletConnector {
         // Import wallet from seed phrase
         this.wallet = await this.importWallet(seedPhrase);
 
-        // Save wallet ID for future sessions
         const walletId = await this.wallet.toString();
         localStorage.setItem('mainnet_wallet_id', walletId);
-        localStorage.setItem('mainnet_wallet_seed', seedPhrase);
       } else {
         // Check if wallet exists in localStorage
         const savedWalletId = localStorage.getItem('mainnet_wallet_id');
-        const savedSeed = localStorage.getItem('mainnet_wallet_seed');
 
-        if (savedSeed) {
-          console.log('[MainnetConnector] Restoring from seed phrase');
-          // Restore from seed phrase (more reliable)
-          this.wallet = await this.importWallet(savedSeed);
-        } else if (savedWalletId) {
+        if (savedWalletId) {
           console.log('[MainnetConnector] Restoring from wallet ID');
           // Restore from wallet ID (fallback)
           this.wallet = await this.restoreWallet(savedWalletId);
@@ -79,11 +72,8 @@ export class MainnetConnector implements IWalletConnector {
           const seed = await this.getSeedPhrase();
 
           localStorage.setItem('mainnet_wallet_id', walletId);
-          localStorage.setItem('mainnet_wallet_seed', seed);
 
-          // Alert user to save their seed phrase
-          console.warn('NEW WALLET CREATED! Save this seed phrase:', seed);
-          alert(`⚠️ NEW WALLET CREATED!\n\nPlease save this seed phrase securely:\n\n${seed}\n\nYou will need it to restore your wallet.`);
+          alert(`⚠️ NEW WALLET CREATED!\n\nPlease save this seed phrase securely:\n\n${seed}\n\nYou will need it to restore your wallet. It will NOT be shown again.`);
         }
       }
 
@@ -193,8 +183,8 @@ export class MainnetConnector implements IWalletConnector {
    */
   async disconnect(): Promise<void> {
     this.wallet = null;
-    // Keep seed phrase in localStorage for reconnection
     localStorage.removeItem('mainnet_wallet_id');
+    localStorage.removeItem('mainnet_wallet_seed');
     console.log('[MainnetConnector] Disconnected');
   }
 
@@ -355,8 +345,9 @@ export class MainnetConnector implements IWalletConnector {
     }
 
     throw new Error(
-      'CashScript signing not fully supported in mainnet.cash connector.\n\n' +
-      'Use Paytaca extension for covenant transactions.'
+      'The seed-phrase wallet does not support covenant transaction signing. ' +
+      'Covenant operations (streams, payments, airdrops, vaults) require a CashScript-compatible wallet.\n\n' +
+      'Supported wallets: Paytaca browser extension, Cashonize, or any WalletConnect-compatible BCH wallet.'
     );
   }
 
@@ -395,14 +386,11 @@ export class MainnetConnector implements IWalletConnector {
   }
 
   /**
-   * Export wallet as WIF (Wallet Import Format)
+   * Export wallet as WIF — disabled for security.
+   * Users must back up their seed phrase on wallet creation.
    */
   async exportWIF(): Promise<string> {
-    if (!this.wallet) {
-      throw new Error('Wallet not connected');
-    }
-
-    return this.wallet.privateKeyWif || '';
+    throw new Error('WIF export is disabled for security. Back up your seed phrase instead.');
   }
 
   /**

@@ -53,14 +53,14 @@ router.get('/payments', async (req: Request, res: Response) => {
 
     let rows: any[];
     if (sender && recipient) {
-      rows = db!.prepare('SELECT * FROM payments WHERE sender = ? AND recipient = ? ORDER BY created_at DESC').all(sender, recipient);
+      rows = await db!.prepare('SELECT * FROM payments WHERE sender = ? AND recipient = ? ORDER BY created_at DESC').all(sender, recipient) as any[];
     } else if (sender) {
-      rows = db!.prepare('SELECT * FROM payments WHERE sender = ? ORDER BY created_at DESC').all(sender);
+      rows = await db!.prepare('SELECT * FROM payments WHERE sender = ? ORDER BY created_at DESC').all(sender) as any[];
     } else {
-      rows = db!.prepare('SELECT * FROM payments WHERE recipient = ? ORDER BY created_at DESC').all(recipient);
+      rows = await db!.prepare('SELECT * FROM payments WHERE recipient = ? ORDER BY created_at DESC').all(recipient) as any[];
     }
 
-    const latestByPaymentId = getLatestActivityEvents(
+    const latestByPaymentId = await getLatestActivityEvents(
       'payment',
       rows.map((row: any) => String(row.id)),
     );
@@ -88,13 +88,13 @@ router.get('/payments/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
 
-    const history = db!.prepare('SELECT * FROM payment_executions WHERE payment_id = ? ORDER BY paid_at DESC').all(id);
-    const storedEvents = listActivityEvents('payment', id, 200);
+    const history = await db!.prepare('SELECT * FROM payment_executions WHERE payment_id = ? ORDER BY paid_at DESC').all(id);
+    const storedEvents = await listActivityEvents('payment', id, 200);
     const events = storedEvents.length > 0
       ? storedEvents
       : buildFallbackPaymentEvents(payment, history);
@@ -152,7 +152,7 @@ router.post('/payments/create', async (req: Request, res: Response) => {
     }
 
     const id = randomUUID();
-    const countRow = db!.prepare('SELECT COUNT(*) as cnt FROM payments').get() as any;
+    const countRow = await db!.prepare('SELECT COUNT(*) as cnt FROM payments').get() as any;
     const paymentId = `#FG-PAY-${String((countRow?.cnt ?? 0) + 1).padStart(3, '0')}`;
     const now = Math.floor(Date.now() / 1000);
     const start = startDate || now;
@@ -163,7 +163,7 @@ router.post('/payments/create', async (req: Request, res: Response) => {
     // internal vaultId for covenant constructor compatibility.
     let actualVaultId = deriveStandaloneVaultId(`${id}:${sender}:${recipient}:${now}`);
     if (vaultId) {
-      const vaultRow = db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
+      const vaultRow = await db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
       if (vaultRow?.constructor_params) {
         const vaultParams = JSON.parse(vaultRow.constructor_params);
         if (vaultParams[0]?.type === 'bytes') {
@@ -190,7 +190,7 @@ router.post('/payments/create', async (req: Request, res: Response) => {
     });
 
     // Store with PENDING status - becomes ACTIVE after funding
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO payments (id, payment_id, vault_id, sender, recipient, recipient_name,
         token_type, token_category, amount_per_period, interval, interval_seconds,
         start_date, end_date, next_payment_date, total_paid, payment_count, status,
@@ -210,7 +210,7 @@ router.post('/payments/create', async (req: Request, res: Response) => {
       deployment.initialCommitment,
       'mutable'
     );
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'payment',
       entityId: id,
       eventType: 'created',
@@ -226,7 +226,7 @@ router.post('/payments/create', async (req: Request, res: Response) => {
       createdAt: now,
     });
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id);
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id);
 
     res.json({
       success: true,
@@ -259,7 +259,7 @@ router.post('/payments/:id/pause', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -319,7 +319,7 @@ router.post('/payments/:id/resume', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -372,7 +372,7 @@ router.post('/payments/:id/cancel', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -435,7 +435,7 @@ router.post('/payments/:id/confirm-pause', async (req: Request, res: Response) =
       });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -458,9 +458,9 @@ router.post('/payments/:id/confirm-pause', async (req: Request, res: Response) =
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare('UPDATE payments SET status = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE payments SET status = ?, updated_at = ? WHERE id = ?')
       .run('PAUSED', now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'payment',
       entityId: id,
       eventType: 'paused',
@@ -504,7 +504,7 @@ router.post('/payments/:id/confirm-resume', async (req: Request, res: Response) 
       });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -528,9 +528,9 @@ router.post('/payments/:id/confirm-resume', async (req: Request, res: Response) 
 
     const now = Math.floor(Date.now() / 1000);
     const nextPaymentDate = now + Number(payment.interval_seconds || 0);
-    db!.prepare('UPDATE payments SET status = ?, next_payment_date = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE payments SET status = ?, next_payment_date = ?, updated_at = ? WHERE id = ?')
       .run('ACTIVE', nextPaymentDate, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'payment',
       entityId: id,
       eventType: 'resumed',
@@ -574,7 +574,7 @@ router.post('/payments/:id/confirm-cancel', async (req: Request, res: Response) 
       });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -610,9 +610,9 @@ router.post('/payments/:id/confirm-cancel', async (req: Request, res: Response) 
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare('UPDATE payments SET status = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE payments SET status = ?, updated_at = ? WHERE id = ?')
       .run('CANCELLED', now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'payment',
       entityId: id,
       eventType: 'cancelled',
@@ -647,7 +647,7 @@ router.get('/payments/:id/funding-info', async (req: Request, res: Response) => 
   try {
     const { id } = req.params;
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -731,7 +731,7 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
       });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -785,12 +785,12 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
       || null;
 
     // Activate recurring schedule only after funding confirmation.
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE payments
       SET tx_hash = ?, status = 'ACTIVE', nft_commitment = ?, start_date = ?, next_payment_date = ?, activated_at = ?, updated_at = ?
       WHERE id = ?
     `).run(txHash, confirmedCommitment, activationStart, nextPaymentDate, now, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'payment',
       entityId: id,
       eventType: 'funded',
@@ -834,7 +834,7 @@ router.post('/payments/:id/claim', async (req: Request, res: Response) => {
     const { id } = req.params;
     const { recipientAddress, signerAddress } = req.body;
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
     }
@@ -976,9 +976,14 @@ router.post('/payments/:id/confirm-claim', async (req: Request, res: Response) =
       });
     }
 
-    const payment = db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
+    const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    const callerAddress = (req.headers['x-user-address'] as string || '').toLowerCase();
+    if (callerAddress && payment.recipient && callerAddress !== payment.recipient.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the payment recipient can confirm claims' });
     }
 
     const claimedAmountNumber = Number(claimedAmount);
@@ -1013,7 +1018,7 @@ router.post('/payments/:id/confirm-claim', async (req: Request, res: Response) =
     const nextPaymentDate = (payment.next_payment_date || now) + (normalizedIntervals * payment.interval_seconds);
 
     // Update payment statistics
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE payments
       SET total_paid = ?, payment_count = ?, next_payment_date = ?, updated_at = ?
       WHERE id = ?
@@ -1021,7 +1026,7 @@ router.post('/payments/:id/confirm-claim', async (req: Request, res: Response) =
 
     // Record claim in payment_executions table (if it exists)
     try {
-      db!.prepare(`
+      await db!.prepare(`
         INSERT INTO payment_executions (id, payment_id, amount, paid_at, tx_hash)
         VALUES (?, ?, ?, ?, ?)
       `).run(randomUUID(), id, claimedAmountNumber, now, txHash);
@@ -1029,7 +1034,7 @@ router.post('/payments/:id/confirm-claim', async (req: Request, res: Response) =
       // Table might not exist, ignore
       console.log('payment_executions table not found, skipping record');
     }
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'payment',
       entityId: id,
       eventType: 'claim',

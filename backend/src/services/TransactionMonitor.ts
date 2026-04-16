@@ -69,7 +69,7 @@ export class TransactionMonitor {
    * Check all pending transactions
    */
   private async checkPendingTransactions(): Promise<void> {
-    const pending = this.getPendingTransactions();
+    const pending = await this.getPendingTransactions();
 
     if (pending.length === 0) {
       return;
@@ -89,12 +89,12 @@ export class TransactionMonitor {
   /**
    * Get all pending transactions from database
    */
-  private getPendingTransactions(): PendingTransaction[] {
+  private async getPendingTransactions(): Promise<PendingTransaction[]> {
     const pending: PendingTransaction[] = [];
 
     try {
       // Get pending streams (PENDING status, has tx_hash)
-      const streams = db!.prepare(`
+      const streams = await db!.prepare(`
         SELECT id, tx_hash, created_at
         FROM streams
         WHERE status = 'PENDING' AND tx_hash IS NOT NULL AND tx_hash != ''
@@ -112,7 +112,7 @@ export class TransactionMonitor {
       }
 
       // Get pending payments
-      const payments = db!.prepare(`
+      const payments = await db!.prepare(`
         SELECT id, tx_hash, created_at
         FROM payments
         WHERE status = 'PENDING' AND tx_hash IS NOT NULL AND tx_hash != ''
@@ -130,7 +130,7 @@ export class TransactionMonitor {
       }
 
       // Get pending airdrops
-      const airdrops = db!.prepare(`
+      const airdrops = await db!.prepare(`
         SELECT id, tx_hash, created_at
         FROM airdrops
         WHERE status = 'PENDING' AND tx_hash IS NOT NULL AND tx_hash != ''
@@ -148,7 +148,7 @@ export class TransactionMonitor {
       }
 
       // Get pending budget plans
-      const budgetPlans = db!.prepare(`
+      const budgetPlans = await db!.prepare(`
         SELECT id, tx_hash, created_at
         FROM budget_plans
         WHERE status = 'PENDING' AND tx_hash IS NOT NULL AND tx_hash != ''
@@ -166,7 +166,7 @@ export class TransactionMonitor {
       }
 
       // Get pending vaults (deployment_tx_hash)
-      const vaults = db!.prepare(`
+      const vaults = await db!.prepare(`
         SELECT vault_id, deployment_tx_hash, created_at
         FROM vaults
         WHERE status = 'PENDING' AND deployment_tx_hash IS NOT NULL AND deployment_tx_hash != ''
@@ -205,14 +205,14 @@ export class TransactionMonitor {
         // If older than 1 hour, mark as failed
         if (age > 3600) {
           console.log(`[TransactionMonitor] Transaction ${tx.txHash} not found after 1 hour - marking as failed`);
-          this.markTransactionFailed(tx);
+          await this.markTransactionFailed(tx);
         }
         return;
       }
 
       // Transaction found - mark as confirmed
       console.log(`[TransactionMonitor] Transaction ${tx.txHash} confirmed - updating status`);
-      this.markTransactionConfirmed(tx);
+      await this.markTransactionConfirmed(tx);
 
     } catch (error: any) {
       // If error is "transaction not found", that's expected for pending txs
@@ -225,13 +225,13 @@ export class TransactionMonitor {
   /**
    * Mark transaction as confirmed and update resource status
    */
-  private markTransactionConfirmed(tx: PendingTransaction): void {
+  private async markTransactionConfirmed(tx: PendingTransaction): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
 
     try {
       switch (tx.resourceType) {
         case 'stream':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE streams
             SET status = ?, updated_at = ?
             WHERE id = ?
@@ -239,7 +239,7 @@ export class TransactionMonitor {
           break;
 
         case 'payment':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE payments
             SET status = ?, updated_at = ?
             WHERE id = ?
@@ -247,7 +247,7 @@ export class TransactionMonitor {
           break;
 
         case 'airdrop':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE airdrops
             SET status = ?, updated_at = ?
             WHERE id = ?
@@ -255,7 +255,7 @@ export class TransactionMonitor {
           break;
 
         case 'budget_plan':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE budget_plans
             SET status = ?, updated_at = ?
             WHERE id = ?
@@ -263,7 +263,7 @@ export class TransactionMonitor {
           break;
 
         case 'vault':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE vaults
             SET status = ?, updated_at = ?
             WHERE vault_id = ?
@@ -271,7 +271,7 @@ export class TransactionMonitor {
           break;
 
         case 'proposal':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE proposals
             SET status = ?, updated_at = ?
             WHERE id = ?
@@ -288,13 +288,13 @@ export class TransactionMonitor {
   /**
    * Mark transaction as failed (not found after timeout)
    */
-  private markTransactionFailed(tx: PendingTransaction): void {
+  private async markTransactionFailed(tx: PendingTransaction): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
 
     try {
       switch (tx.resourceType) {
         case 'stream':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE streams
             SET status = 'FAILED', updated_at = ?
             WHERE id = ?
@@ -302,7 +302,7 @@ export class TransactionMonitor {
           break;
 
         case 'payment':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE payments
             SET status = 'FAILED', updated_at = ?
             WHERE id = ?
@@ -310,7 +310,7 @@ export class TransactionMonitor {
           break;
 
         case 'airdrop':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE airdrops
             SET status = 'FAILED', updated_at = ?
             WHERE id = ?
@@ -318,7 +318,7 @@ export class TransactionMonitor {
           break;
 
         case 'budget_plan':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE budget_plans
             SET status = 'FAILED', updated_at = ?
             WHERE id = ?
@@ -326,7 +326,7 @@ export class TransactionMonitor {
           break;
 
         case 'vault':
-          db!.prepare(`
+          await db!.prepare(`
             UPDATE vaults
             SET status = 'FAILED', updated_at = ?
             WHERE vault_id = ?

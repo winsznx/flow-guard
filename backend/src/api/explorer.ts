@@ -5,7 +5,7 @@ import { streamService } from '../services/streamService.js';
 const router = Router();
 
 // Public activity feed — all FlowGuard activity across streams, payments, airdrops, vaults
-router.get('/explorer/activity', (req, res) => {
+router.get('/explorer/activity', async (req, res) => {
   try {
     const { type, token, status, limit } = req.query;
     const pageLimit = Math.min(Number(limit) || 50, 200);
@@ -19,7 +19,7 @@ router.get('/explorer/activity', (req, res) => {
       if (token && token !== 'ALL') { sql += ' AND token_type = ?'; params.push(token); }
       if (status && status !== 'ALL') { sql += ' AND status = ?'; params.push(status); }
       sql += ` ORDER BY created_at DESC LIMIT ${pageLimit}`;
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       const enriched = streamService.enrichStreams(rows.map(rowToExplorerStream));
       results.push(...enriched.map((stream) => ({
         id: stream.id,
@@ -48,7 +48,7 @@ router.get('/explorer/activity', (req, res) => {
       if (token && token !== 'ALL') { sql += ' AND token_type = ?'; params.push(token); }
       if (status && status !== 'ALL') { sql += ' AND status = ?'; params.push(status); }
       sql += ` ORDER BY created_at DESC LIMIT ${pageLimit}`;
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows.map(r => ({ ...r, created_at: Number(new Date(r.created_at)) / 1000 })));
     }
 
@@ -64,7 +64,7 @@ router.get('/explorer/activity', (req, res) => {
       if (token && token !== 'ALL') { sql += ' AND token_type = ?'; params.push(token); }
       if (status && status !== 'ALL') { sql += ' AND status = ?'; params.push(status); }
       sql += ` ORDER BY created_at DESC LIMIT ${pageLimit}`;
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows.map(r => ({ ...r, created_at: Number(new Date(r.created_at)) / 1000 })));
     }
 
@@ -80,7 +80,7 @@ router.get('/explorer/activity', (req, res) => {
       const params: any[] = [];
       if (status && status !== 'ALL') { sql += ' AND p.status = ?'; params.push(status); }
       sql += ` ORDER BY p.created_at DESC LIMIT ${pageLimit}`;
-      const rows = db!.prepare(sql).all(...params) as any[];
+      const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows.map(r => ({ ...r, created_at: Number(new Date(r.created_at)) / 1000 })));
     }
 

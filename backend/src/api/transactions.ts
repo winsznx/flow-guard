@@ -142,10 +142,10 @@ function toUserFacingBroadcastMessage(rawMessage: string): string {
  * GET /api/vaults/:id/transactions
  * Get all transactions for a vault
  */
-router.get('/vaults/:id/transactions', (req, res) => {
+router.get('/vaults/:id/transactions', async (req, res) => {
   try {
     const { id } = req.params;
-    const transactions = TransactionService.getVaultTransactions(id);
+    const transactions = await TransactionService.getVaultTransactions(id);
     res.json({ transactions });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -156,10 +156,10 @@ router.get('/vaults/:id/transactions', (req, res) => {
  * GET /api/transactions/:txHash
  * Get transaction by hash
  */
-router.get('/transactions/:txHash', (req, res) => {
+router.get('/transactions/:txHash', async (req, res) => {
   try {
     const { txHash } = req.params;
-    const transaction = TransactionService.getTransactionByHash(txHash);
+    const transaction = await TransactionService.getTransactionByHash(txHash);
 
     if (!transaction) {
       return res.status(404).json({ error: 'Transaction not found' });
@@ -175,9 +175,9 @@ router.get('/transactions/:txHash', (req, res) => {
  * GET /api/transactions/pending
  * Get all pending transactions
  */
-router.get('/transactions/pending', (req, res) => {
+router.get('/transactions/pending', async (req, res) => {
   try {
-    const transactions = TransactionService.getPendingTransactions();
+    const transactions = await TransactionService.getPendingTransactions();
     res.json({ transactions });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -290,7 +290,7 @@ async function buildStreamClaimTransaction(
 ): Promise<{ transaction: string; sourceOutputs: any[] }> {
   const artifact = ContractFactory.getArtifact(descriptor.contractType);
 
-  const streamRow = db!.prepare('SELECT * FROM streams WHERE stream_id = ?').get(descriptor.streamId) as any;
+  const streamRow = await db!.prepare('SELECT * FROM streams WHERE stream_id = ?').get(descriptor.streamId) as any;
   if (!streamRow) {
     throw new Error(`Stream ${descriptor.streamId} not found`);
   }
@@ -382,7 +382,7 @@ async function buildStreamCancelTransaction(
 ): Promise<{ transaction: string; sourceOutputs: any[] }> {
   const artifact = ContractFactory.getArtifact(descriptor.contractType);
 
-  const streamRow = db!.prepare('SELECT * FROM streams WHERE stream_id = ?').get(descriptor.streamId) as any;
+  const streamRow = await db!.prepare('SELECT * FROM streams WHERE stream_id = ?').get(descriptor.streamId) as any;
   if (!streamRow) {
     throw new Error(`Stream ${descriptor.streamId} not found`);
   }

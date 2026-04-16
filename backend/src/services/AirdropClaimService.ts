@@ -21,7 +21,7 @@ export interface ClaimTransactionParams {
   constructorParams: any[];
   currentCommitment: string;
   currentTime: number;
-  claimAuthorityPrivKey: string; // hex-encoded 32-byte private key for server-side authority co-signing
+  claimAuthorityPrivKey: string; // SENSITIVE — never log, never serialize to JSON
 }
 
 export interface ClaimTransaction {

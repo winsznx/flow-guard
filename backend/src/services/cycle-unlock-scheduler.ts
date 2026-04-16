@@ -70,11 +70,11 @@ export class CycleUnlockScheduler {
     try {
       // Get all vaults with contract addresses
       const stmt = db!.prepare(`
-        SELECT * FROM vaults 
-        WHERE contract_address IS NOT NULL 
+        SELECT * FROM vaults
+        WHERE contract_address IS NOT NULL
         AND cycle_duration > 0
       `);
-      const vaults = stmt.all() as any[];
+      const vaults = await stmt.all() as any[];
 
       if (vaults.length === 0) {
         return;
@@ -137,10 +137,10 @@ export class CycleUnlockScheduler {
 
     // Check if cycle record exists
     const stmt = db!.prepare(`
-      SELECT * FROM cycles 
+      SELECT * FROM cycles
       WHERE vault_id = ? AND cycle_number = ?
     `);
-    const existing = stmt.get(vaultId, cycleNumber) as any;
+    const existing = await stmt.get(vaultId, cycleNumber) as any;
 
     if (!existing) {
       // Create cycle record
@@ -151,10 +151,10 @@ export class CycleUnlockScheduler {
         ) VALUES (?, ?, ?, ?, ?, ?)
       `);
 
-      const vault = VaultService.getVaultByVaultId(vaultId);
+      const vault = await VaultService.getVaultByVaultId(vaultId);
       const unlockAmount = vault?.unlockAmount || 0;
 
-      insertStmt.run(
+      await insertStmt.run(
         id,
         vaultId,
         cycleNumber,
@@ -247,7 +247,7 @@ export class CycleUnlockScheduler {
     cycleNumber: number,
     _signerPublicKey?: string
   ): Promise<{ wcTransaction: any; newState: number; newPeriodId: number }> {
-    const vault = VaultService.getVaultByVaultId(vaultId);
+    const vault = await VaultService.getVaultByVaultId(vaultId);
     if (!vault || !vault.contractAddress || !vault.signerPubkeys) {
       throw new Error('Vault not found or missing contract information');
     }
@@ -337,7 +337,7 @@ export class CycleUnlockScheduler {
    */
   async unlockCycle(vaultId: string, cycleNumber: number): Promise<CycleUnlockResult> {
     try {
-      const vault = VaultService.getVaultByVaultId(vaultId);
+      const vault = await VaultService.getVaultByVaultId(vaultId);
       if (!vault) {
         return {
           vaultId,
@@ -364,15 +364,15 @@ export class CycleUnlockScheduler {
       const newState = StateService.setCycleUnlocked(currentState, cycleNumber);
 
       // Update vault state in database
-      VaultService.updateVaultState(vaultId, newState);
+      await VaultService.updateVaultState(vaultId, newState);
 
       // Update cycle record
       const stmt = db!.prepare(`
-        UPDATE cycles 
+        UPDATE cycles
         SET status = 'unlocked', unlocked_at = CURRENT_TIMESTAMP
         WHERE vault_id = ? AND cycle_number = ?
       `);
-      stmt.run(vaultId, cycleNumber);
+      await stmt.run(vaultId, cycleNumber);
 
       console.log(`Unlocked cycle ${cycleNumber} for vault ${vaultId}`);
 

@@ -78,12 +78,11 @@ contract VaultCovenant(
         require(checkSig(authSig, authPubkey));
         require(status == 0); // ACTIVE
 
-        require(newPeriodId > currentPeriodId);
+        require(newPeriodId == currentPeriodId + 1);
         require(newSpent == 0);
 
         if (periodDuration > 0) {
-            int requiredLocktime = lastUpdateTime + ((newPeriodId - currentPeriodId) * periodDuration);
-            require(tx.locktime >= requiredLocktime);
+            require(tx.locktime >= lastUpdateTime + periodDuration);
         }
 
         bytes newCommitment =
@@ -133,8 +132,9 @@ contract VaultCovenant(
         require(checkSig(sig1, pubkey1));
         require(checkSig(sig2, pubkey2));
 
-        if (newPeriodId > currentPeriodId) {
-            // Period rollover only valid if enough time elapsed
+        require(newPeriodId == currentPeriodId || newPeriodId == currentPeriodId + 1);
+
+        if (newPeriodId == currentPeriodId + 1) {
             if (periodDuration > 0) { require(tx.locktime >= lastUpdateTime + periodDuration); }
             require(newSpent == payoutAmount);
         } else {
@@ -164,6 +164,9 @@ contract VaultCovenant(
             toPaddedBytes(tx.locktime, 8) +
             0x0000000000000000000000000000;
 
+        int spendFeeDelta = tx.inputs[0].value - payoutAmount - tx.outputs[1].value;
+        require(spendFeeDelta >= 0 && spendFeeDelta <= 2000);
+
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
@@ -183,6 +186,10 @@ contract VaultCovenant(
         require(status == 0); // ACTIVE
 
         bytes newCommitment = c.split(1)[0] + 0x01 + c.split(2)[1].split(30)[0];
+
+        int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
+        require(feeDelta >= 0 && feeDelta <= 2000);
+
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
@@ -207,6 +214,10 @@ contract VaultCovenant(
         require(status == 1); // PAUSED
 
         bytes newCommitment = c.split(1)[0] + 0x00 + c.split(2)[1].split(30)[0];
+
+        int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
+        require(feeDelta >= 0 && feeDelta <= 2000);
+
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
@@ -234,6 +245,10 @@ contract VaultCovenant(
         require(status == 0 || status == 1); // ACTIVE or PAUSED
 
         bytes newCommitment = c.split(1)[0] + 0x02 + c.split(2)[1].split(30)[0];
+
+        int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
+        require(feeDelta >= 0 && feeDelta <= 2000);
+
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);

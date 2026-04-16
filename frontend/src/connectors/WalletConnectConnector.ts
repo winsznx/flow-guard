@@ -28,6 +28,7 @@ const WALLETCONNECT_PROJECT_ID =
 export class WalletConnectConnector implements IWalletConnector {
   type: WalletType = 'walletconnect' as WalletType;
   private client: SignClient | null = null;
+  private eventsActive = true;
   private session: SessionTypes.Struct | null = null;
   private currentAddress: string | null = null;
 
@@ -304,14 +305,13 @@ export class WalletConnectConnector implements IWalletConnector {
     } catch (error) {
       console.error('QR code generation error:', error);
       // Fallback to showing URI text
-      element.innerHTML = `
-        <div style="padding: 16px; background: #f9f9f9; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 10px;">
-          ${uri}
-        </div>
-        <p style="margin-top: 12px; font-size: 12px; color: #888;">
-          Copy this URI and paste in your wallet
-        </p>
-      `;
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'padding: 16px; background: #f9f9f9; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 10px;';
+      wrapper.textContent = uri;
+      const hint = document.createElement('p');
+      hint.style.cssText = 'margin-top: 12px; font-size: 12px; color: #888;';
+      hint.textContent = 'Copy this URI and paste in your wallet';
+      element.replaceChildren(wrapper, hint);
     }
   }
 
@@ -458,20 +458,19 @@ export class WalletConnectConnector implements IWalletConnector {
     if (!this.client) return;
 
     this.client.on('session_update', (args) => {
-      if (event === 'addressChanged') {
+      if (this.eventsActive && event === 'addressChanged') {
         callback(args);
       }
     });
 
     this.client.on('session_delete', () => {
-      if (event === 'disconnect') {
+      if (this.eventsActive && event === 'disconnect') {
         callback();
       }
     });
   }
 
   off(_event: string, _callback: (data?: any) => void): void {
-    // SignClient doesn't have removeListener
-    // Events are managed internally
+    this.eventsActive = false;
   }
 }

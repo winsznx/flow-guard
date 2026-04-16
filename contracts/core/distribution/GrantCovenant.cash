@@ -47,6 +47,7 @@ contract GrantCovenant(
 
         int newMilestonesCompleted = milestonesCompleted + 1;
         int newTotalReleased       = totalReleased + amountPerMilestone;
+        require(newTotalReleased <= totalAmount);
 
         require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
 

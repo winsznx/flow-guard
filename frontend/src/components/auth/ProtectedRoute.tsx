@@ -16,8 +16,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const wallet = useWallet();
   const { openModal } = useWalletModal();
 
-  // Show loading state while checking wallet connection
-  if (wallet.isConnecting) {
+  if (wallet.isConnecting || !wallet.initAttempted) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-gray-50">
         <div className="text-center">
@@ -28,7 +27,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
     );
   }
 
-  // If wallet is not connected, show message instead of redirecting
+  // If wallet is not connected after init, show connection prompt
   // This prevents redirect loops and gives better UX
   if (!wallet.isConnected) {
     return (

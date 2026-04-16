@@ -100,7 +100,8 @@ export class PaymentClaimService {
       );
     }
 
-    const totalPaidFromCommitment = Number(this.readUint64LE(commitment, 2));
+    const totalPaidBigint = this.readUint64LE(commitment, 2);
+    const totalPaidFromCommitment = Number(totalPaidBigint);
     const nextPaymentFromCommitment = this.readUint40LE(commitment, 18);
     const { intervals, amount: claimableAmount } = this.calculateClaimable({
       ...params,
@@ -112,9 +113,8 @@ export class PaymentClaimService {
       throw new Error('No payments available to claim at this time');
     }
 
-    // Update NFT commitment for RecurringPaymentCovenant:
-    // [0]=status, [1]=flags, [2-9]=total_paid, [10-17]=payment_count, [18-22]=next_payment, [23-27]=pause_start
-    const newTotalPaid = totalPaidFromCommitment + claimableAmount;
+    const newTotalPaidBigint = totalPaidBigint + BigInt(claimableAmount);
+    const newTotalPaid = Number(newTotalPaidBigint);
     const newNextPaymentTime = nextPaymentFromCommitment + intervalSeconds;
 
     const newCommitment = new Uint8Array(40);
@@ -136,7 +136,7 @@ export class PaymentClaimService {
     ).getBigUint64(0, true);
     const newPaymentCount = currentPaymentCount + 1n;
 
-    new DataView(newCommitment.buffer, 2, 8).setBigUint64(0, BigInt(newTotalPaid), true);
+    new DataView(newCommitment.buffer, 2, 8).setBigUint64(0, newTotalPaidBigint, true);
     new DataView(newCommitment.buffer, 10, 8).setBigUint64(0, newPaymentCount, true);
     this.setUint40LE(newCommitment, 18, newNextPaymentTime);
     this.setUint40LE(newCommitment, 23, 0); // pause_start reset

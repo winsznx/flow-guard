@@ -34,7 +34,7 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] {
 }
 
 // Get all proposals (for stats/dashboard)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { status } = req.query;
     let query = 'SELECT * FROM proposals';
@@ -45,9 +45,9 @@ router.get('/', (req, res) => {
       params.push(String(status).toLowerCase());
     }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY created_at DESC LIMIT 100';
 
-    const rows = db.prepare(query).all(...params) as any[];
+    const rows = await db.prepare(query).all(...params) as any[];
     const proposals = rows.map((row: any) => ({
       id: row.id,
       vaultId: row.vault_id,
@@ -75,15 +75,15 @@ router.get('/', (req, res) => {
 });
 
 // Create proposal
-router.post('/vaults/:vaultId/proposals', (req, res) => {
+router.post('/vaults/:vaultId/proposals', async (req, res) => {
   try {
     const dto: CreateProposalDto = {
       vaultId: req.params.vaultId,
       ...req.body,
     };
     const creator = req.headers['x-user-address'] as string || 'unknown';
-    
-    const proposal = ProposalService.createProposal(dto, creator);
+
+    const proposal = await ProposalService.createProposal(dto, creator);
     res.status(201).json(proposal);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -91,9 +91,9 @@ router.post('/vaults/:vaultId/proposals', (req, res) => {
 });
 
 // List proposals for a vault
-router.get('/vaults/:vaultId/proposals', (req, res) => {
+router.get('/vaults/:vaultId/proposals', async (req, res) => {
   try {
-    const proposals = ProposalService.getVaultProposals(req.params.vaultId);
+    const proposals = await ProposalService.getVaultProposals(req.params.vaultId);
     res.json(proposals);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -101,9 +101,9 @@ router.get('/vaults/:vaultId/proposals', (req, res) => {
 });
 
 // Get proposal by ID
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const proposal = ProposalService.getProposalById(req.params.id);
+    const proposal = await ProposalService.getProposalById(req.params.id);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -114,14 +114,14 @@ router.get('/:id', (req, res) => {
 });
 
 // Approve proposal
-router.post('/:id/approve', (req, res) => {
+router.post('/:id/approve', async (req, res) => {
   try {
     const dto: ApproveProposalDto = {
       proposalId: req.params.id,
       approver: req.headers['x-user-address'] as string || 'unknown',
     };
-    
-    const proposal = ProposalService.approveProposal(dto);
+
+    const proposal = await ProposalService.approveProposal(dto);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found or not approvable' });
     }
@@ -140,7 +140,7 @@ router.post('/:id/create-onchain', async (req, res) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const proposal = ProposalService.getProposalById(proposalId);
+    const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -148,7 +148,7 @@ router.post('/:id/create-onchain', async (req, res) => {
     const built = await ProposalService.createOnChainProposalFundingTransaction(proposalId, funderAddress);
     const serialized = serializeWcTransaction(built.wcTransaction);
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE proposals
       SET contract_address = ?, constructor_params = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -180,7 +180,7 @@ router.post('/:id/approve-onchain', async (req, res) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const proposal = ProposalService.getProposalById(proposalId);
+    const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -209,7 +209,7 @@ router.post('/:id/confirm-create', async (req, res) => {
       return res.status(400).json({ error: 'txHash is required' });
     }
 
-    const proposal = ProposalService.getProposalById(proposalId);
+    const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -245,7 +245,7 @@ router.post('/:id/confirm-create', async (req, res) => {
       });
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE proposals
       SET tx_hash = ?, status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -258,7 +258,7 @@ router.post('/:id/confirm-create', async (req, res) => {
       toAddress: proposal.contractAddress,
     });
 
-    const updated = ProposalService.getProposalById(proposalId);
+    const updated = await ProposalService.getProposalById(proposalId);
     return res.json({
       success: true,
       proposal: updated,
@@ -290,7 +290,7 @@ router.post('/:id/confirm-approval', async (req, res) => {
       return res.status(400).json({ error: 'txHash is required' });
     }
 
-    const proposal = ProposalService.getProposalById(proposalId);
+    const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -326,7 +326,7 @@ router.post('/:id/confirm-approval', async (req, res) => {
       });
     }
 
-    const updatedProposal = ProposalService.approveProposal({
+    const updatedProposal = await ProposalService.approveProposal({
       proposalId,
       approver: signerAddress,
     });
@@ -369,7 +369,7 @@ async function handleExecuteProposal(req: any, res: any): Promise<any> {
       return res.status(400).json({ error: 'x-user-address header is required for execute signing' });
     }
 
-    const proposal = ProposalService.getProposalById(proposalId);
+    const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -377,7 +377,7 @@ async function handleExecuteProposal(req: any, res: any): Promise<any> {
       return res.status(400).json({ error: 'Proposal must be approved before execution signing' });
     }
 
-    const vault = VaultService.getVaultByVaultId(proposal.vaultId);
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
     if (!vault || !vault.contractAddress || !vault.signerPubkeys) {
       return res.status(400).json({ error: 'Vault is missing contract configuration for on-chain execution' });
     }
@@ -393,7 +393,7 @@ async function handleExecuteProposal(req: any, res: any): Promise<any> {
       return res.status(403).json({ error: 'Only vault signers can participate in payout execution signing' });
     }
 
-    const existingSession = db.prepare(
+    const existingSession = await db.prepare(
       `SELECT * FROM proposal_execution_sessions
        WHERE proposal_id = ? AND status = 'pending'
        ORDER BY created_at DESC
@@ -447,7 +447,7 @@ async function handleExecuteProposal(req: any, res: any): Promise<any> {
     const serialized = serializeWcTransaction(executeTx.wcTransaction);
     const sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    db.prepare(
+    await db.prepare(
       `INSERT INTO proposal_execution_sessions (
          id, proposal_id, vault_id, signer_addresses, signer_pubkeys, signed_by,
          required_signatures, tx_hex, source_outputs, status
@@ -504,7 +504,7 @@ router.post('/:id/execute-signature', async (req, res) => {
       return res.status(400).json({ error: 'sessionId and signedTransaction are required' });
     }
 
-    const session = db.prepare(
+    const session = await db.prepare(
       `SELECT * FROM proposal_execution_sessions
        WHERE id = ? AND proposal_id = ? AND status = 'pending'
        LIMIT 1`,
@@ -544,7 +544,7 @@ router.post('/:id/execute-signature', async (req, res) => {
     const updatedSignedBy = [...signedBy, signerAddress];
     const signaturesCollected = updatedSignedBy.length;
 
-    db.prepare(
+    await db.prepare(
       `UPDATE proposal_execution_sessions
        SET tx_hex = ?, signed_by = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
@@ -570,8 +570,8 @@ router.post('/:id/execute-signature', async (req, res) => {
     const contractService = new ContractService('chipnet');
     const txid = await contractService.broadcastTransaction(signedTransaction);
 
-    ProposalService.markProposalExecuted(proposalId, txid);
-    db.prepare(
+    await ProposalService.markProposalExecuted(proposalId, txid);
+    await db.prepare(
       `UPDATE proposal_execution_sessions
        SET status = 'completed', broadcast_tx_hash = ?, tx_hex = ?, signed_by = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,

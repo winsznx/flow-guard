@@ -87,6 +87,9 @@ contract RecurringPaymentCovenant(
             0x0000000000 +
             0x000000000000000000000000;
 
+        int payFeeDelta = tx.inputs[0].value - amountPerInterval - tx.outputs[1].value;
+        require(payFeeDelta >= 0 && payFeeDelta <= 2000);
+
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
@@ -193,20 +196,20 @@ contract RecurringPaymentCovenant(
         require((flagsByte & 0x01) == 0x01);
         require(status == 0 || status == 1);
 
-        // For unlimited streams (totalAmount == 0), any remaining BCH is returned
-        int remainingPool = 0;
-        if (totalAmount > 0) {
-            remainingPool = totalAmount - totalPaid;
-        }
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
 
-        if (remainingPool > 0) {
-            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+        if (totalAmount > 0) {
+            int remainingPool = totalAmount - totalPaid;
+            require(remainingPool > 0);
             if ((flagsByte & 0x04) == 0x04) {
                 require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
                 require(tx.outputs[0].tokenAmount == remainingPool);
             } else {
                 require(tx.outputs[0].value == remainingPool);
             }
+        } else {
+            int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
+            require(feeDelta >= 0 && feeDelta <= 2000);
         }
     }
 }

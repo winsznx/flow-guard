@@ -95,9 +95,11 @@ contract ProposalCovenant(
         bytes c = tx.inputs[0].nftCommitment;
         int status            = int(c.split(1)[1].split(1)[0]);
         int executionTimelock = int(c.split(9)[1].split(5)[0]);
+        bytes20 payoutHash    = c.split(14)[1].split(20)[0];
 
         require(status == 1); // APPROVED
         require(tx.locktime >= executionTimelock);
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(payoutHash));
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 

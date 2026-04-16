@@ -1,9 +1,0 @@
-pragma cashscript ^0.8.0;
-
-// StateEncoding.cash
-// Library for encoding/decoding NFT commitment bytes.
-// Follows CashTokens spec for variable length commitments.
-
-// Placeholder for byte manipulation logic
-// Pre-Layla: Uses manual bit shifting and splitting
-// Post-Layla: Will use native Bitwise opcodes

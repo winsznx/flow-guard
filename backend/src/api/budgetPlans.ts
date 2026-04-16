@@ -87,7 +87,7 @@ router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
 
     // Get vault's contract vaultId
     let actualVaultId = '0000000000000000000000000000000000000000000000000000000000000000';
-    const vaultRow = db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
+    const vaultRow = await db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
     if (vaultRow?.constructor_params) {
       const vaultParams = JSON.parse(vaultRow.constructor_params);
       if (vaultParams[0]?.type === 'bytes') {
@@ -115,7 +115,7 @@ router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
     const id = randomUUID();
     const now = Math.floor(Date.now() / 1000);
 
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO budget_plans (
         id, vault_id, creator, recipient, recipient_name,
         token_type, token_category, total_amount, released_amount,
@@ -137,7 +137,7 @@ router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
 
     // Update recipient label if the frontend sent the legacy recipientLabel key.
     if (!recipientName && recipientLabel) {
-      db!.prepare(`
+      await db!.prepare(`
         UPDATE budget_plans
         SET recipient_name = ?
         WHERE id = ?
@@ -145,17 +145,18 @@ router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
     }
 
     // Store milestones
-    milestoneList.forEach((milestone: any, index: number) => {
-      db!.prepare(`
+    for (let index = 0; index < milestoneList.length; index++) {
+      const milestone = milestoneList[index];
+      await db!.prepare(`
         INSERT INTO budget_milestones (id, budget_id, milestone_index, amount, description, duration_seconds, status)
         VALUES (?, ?, ?, ?, ?, ?, 'PENDING')
       `).run(
         randomUUID(), id, index, milestone.amount,
         milestone.description || null, milestone.durationSeconds
       );
-    });
+    }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
 
     res.status(201).json({
       success: true,
@@ -186,7 +187,7 @@ router.get('/budget-plans/:id/funding-info', async (req, res) => {
       return res.status(401).json({ error: 'User address required' });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -262,7 +263,7 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
       });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -302,7 +303,7 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
 
     // Update plan with tx_hash and set status to ACTIVE
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE budget_plans
       SET tx_hash = ?, status = 'ACTIVE', updated_at = ?
       WHERE id = ?
@@ -337,7 +338,7 @@ router.post('/budget-plans/:id/release', async (req, res) => {
     const { id } = req.params;
     const { recipientAddress, signerAddress } = req.body;
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -433,7 +434,7 @@ router.post('/budget-plans/:id/confirm-release', async (req, res) => {
       });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -471,14 +472,14 @@ router.post('/budget-plans/:id/confirm-release', async (req, res) => {
     const newMilestoneIndex = plan.current_milestone + 1;
 
     // Update plan statistics
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE budget_plans
       SET released_amount = ?, current_milestone = ?, updated_at = ?
       WHERE id = ?
     `).run(newReleasedAmount, newMilestoneIndex, now, id);
 
     // Record release
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO budget_releases (id, budget_id, milestone_index, amount, released_at, tx_hash)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(randomUUID(), id, newMilestoneIndex, Number(releasedAmount), now, txHash);
@@ -506,10 +507,10 @@ router.post('/budget-plans/:id/confirm-release', async (req, res) => {
 });
 
 // Get all budget plans for a vault
-router.get('/vaults/:vaultId/budget-plans', (req, res) => {
+router.get('/vaults/:vaultId/budget-plans', async (req, res) => {
   try {
     const { vaultId } = req.params;
-    const rows = db!.prepare('SELECT * FROM budget_plans WHERE vault_id = ? ORDER BY created_at DESC').all(vaultId) as any[];
+    const rows = await db!.prepare('SELECT * FROM budget_plans WHERE vault_id = ? ORDER BY created_at DESC').all(vaultId) as any[];
     res.json(rows.map(mapBudgetPlanRow));
   } catch (error: any) {
     console.error('Error fetching budget plans:', error);
@@ -518,9 +519,9 @@ router.get('/vaults/:vaultId/budget-plans', (req, res) => {
 });
 
 // Get all budget plans (across all vaults)
-router.get('/budget-plans', (req, res) => {
+router.get('/budget-plans', async (req, res) => {
   try {
-    const rows = db!.prepare('SELECT * FROM budget_plans ORDER BY created_at DESC').all() as any[];
+    const rows = await db!.prepare('SELECT * FROM budget_plans ORDER BY created_at DESC').all() as any[];
     res.json(rows.map(mapBudgetPlanRow));
   } catch (error: any) {
     console.error('Error fetching budget plans:', error);
@@ -529,17 +530,17 @@ router.get('/budget-plans', (req, res) => {
 });
 
 // Get a specific budget plan with milestones
-router.get('/budget-plans/:id', (req, res) => {
+router.get('/budget-plans/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const row = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
 
     if (!row) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
 
-    const milestones = db!.prepare('SELECT * FROM budget_milestones WHERE budget_id = ? ORDER BY milestone_index').all(id);
-    const releases = db!.prepare('SELECT * FROM budget_releases WHERE budget_id = ? ORDER BY released_at DESC').all(id);
+    const milestones = await db!.prepare('SELECT * FROM budget_milestones WHERE budget_id = ? ORDER BY milestone_index').all(id);
+    const releases = await db!.prepare('SELECT * FROM budget_releases WHERE budget_id = ? ORDER BY released_at DESC').all(id);
 
     res.json({ plan: mapBudgetPlanRow(row), milestones, releases });
   } catch (error: any) {
@@ -557,7 +558,7 @@ router.post('/budget-plans/:id/pause', async (req, res) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -624,7 +625,7 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
       });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -657,7 +658,7 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare('UPDATE budget_plans SET status = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE budget_plans SET status = ?, updated_at = ? WHERE id = ?')
       .run('PAUSED', now, id);
 
     res.json({ success: true, txHash, status: 'PAUSED', state: 'confirmed', retryable: false });
@@ -683,7 +684,7 @@ router.post('/budget-plans/:id/cancel', async (req, res) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -773,7 +774,7 @@ router.post('/budget-plans/:id/confirm-cancel', async (req, res) => {
       });
     }
 
-    const plan = db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
       return res.status(404).json({ error: 'Budget plan not found' });
     }
@@ -806,7 +807,7 @@ router.post('/budget-plans/:id/confirm-cancel', async (req, res) => {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare('UPDATE budget_plans SET status = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE budget_plans SET status = ?, updated_at = ? WHERE id = ?')
       .run('CANCELLED', now, id);
 
     res.json({ success: true, txHash, status: 'CANCELLED', state: 'confirmed', retryable: false });

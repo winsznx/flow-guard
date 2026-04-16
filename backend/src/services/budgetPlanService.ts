@@ -30,7 +30,7 @@ export class BudgetPlanService {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run(
+    await stmt.run(
       id,
       dto.vaultId,
       dto.planName || null,
@@ -48,36 +48,36 @@ export class BudgetPlanService {
       BudgetPlanStatus.ACTIVE
     );
 
-    const plan = this.getBudgetPlanById(id);
+    const plan = await this.getBudgetPlanById(id);
     if (!plan) {
       throw new Error('Failed to create budget plan');
     }
     return plan;
   }
 
-  static getBudgetPlanById(id: string): BudgetPlan | null {
+  static async getBudgetPlanById(id: string): Promise<BudgetPlan | null> {
     const stmt = db!.prepare('SELECT * FROM budget_plans WHERE id = ?');
-    const row = stmt.get(id) as any;
+    const row = await stmt.get(id) as any;
 
     if (!row) return null;
 
     return this.mapRowToBudgetPlan(row);
   }
 
-  static getBudgetPlansByVault(vaultId: string): BudgetPlan[] {
+  static async getBudgetPlansByVault(vaultId: string): Promise<BudgetPlan[]> {
     const stmt = db!.prepare('SELECT * FROM budget_plans WHERE vault_id = ? ORDER BY created_at DESC');
-    const rows = stmt.all(vaultId) as any[];
+    const rows = await stmt.all(vaultId) as any[];
     return rows.map(row => this.mapRowToBudgetPlan(row));
   }
 
-  static getAllBudgetPlans(): BudgetPlan[] {
+  static async getAllBudgetPlans(): Promise<BudgetPlan[]> {
     const stmt = db!.prepare(`
       SELECT bp.*, v.name as vault_name
       FROM budget_plans bp
       LEFT JOIN vaults v ON bp.vault_id = v.vault_id
       ORDER BY bp.created_at DESC
     `);
-    const rows = stmt.all() as any[];
+    const rows = await stmt.all() as any[];
     return rows.map(row => {
       const plan = this.mapRowToBudgetPlan(row);
       return {
@@ -87,19 +87,19 @@ export class BudgetPlanService {
     });
   }
 
-  static getActiveBudgetPlans(): BudgetPlan[] {
+  static async getActiveBudgetPlans(): Promise<BudgetPlan[]> {
     const stmt = db!.prepare('SELECT * FROM budget_plans WHERE status = ? ORDER BY next_unlock ASC');
-    const rows = stmt.all(BudgetPlanStatus.ACTIVE) as any[];
+    const rows = await stmt.all(BudgetPlanStatus.ACTIVE) as any[];
     return rows.map(row => this.mapRowToBudgetPlan(row));
   }
 
-  static updateBudgetPlanStatus(id: string, status: BudgetPlanStatus): void {
-    const stmt = db!.prepare('UPDATE budget_plans SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    stmt.run(status, id);
+  static async updateBudgetPlanStatus(id: string, status: BudgetPlanStatus): Promise<void> {
+    const stmt = db!.prepare("UPDATE budget_plans SET status = ?, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = ?");
+    await stmt.run(status, id);
   }
 
-  static recordRelease(id: string, amount: number): void {
-    const plan = this.getBudgetPlanById(id);
+  static async recordRelease(id: string, amount: number): Promise<void> {
+    const plan = await this.getBudgetPlanById(id);
     if (!plan) {
       throw new Error('Budget plan not found');
     }
@@ -116,11 +116,11 @@ export class BudgetPlanService {
 
     const stmt = db!.prepare(`
       UPDATE budget_plans
-      SET total_released = ?, next_unlock = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      SET total_released = ?, next_unlock = ?, status = ?, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
       WHERE id = ?
     `);
 
-    stmt.run(
+    await stmt.run(
       newTotalReleased,
       status === BudgetPlanStatus.COMPLETED ? null : nextUnlock.toISOString(),
       status,
@@ -128,14 +128,14 @@ export class BudgetPlanService {
     );
   }
 
-  static getEligibleReleases(): BudgetPlan[] {
+  static async getEligibleReleases(): Promise<BudgetPlan[]> {
     const now = new Date().toISOString();
     const stmt = db!.prepare(`
       SELECT * FROM budget_plans
       WHERE status = ? AND next_unlock <= ?
       ORDER BY next_unlock ASC
     `);
-    const rows = stmt.all(BudgetPlanStatus.ACTIVE, now) as any[];
+    const rows = await stmt.all(BudgetPlanStatus.ACTIVE, now) as any[];
     return rows.map(row => this.mapRowToBudgetPlan(row));
   }
 

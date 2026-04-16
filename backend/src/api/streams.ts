@@ -122,21 +122,21 @@ router.get('/streams', async (req: Request, res: Response) => {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const totalRow = db!.prepare(`SELECT COUNT(*) as count FROM streams ${whereClause}`).get(...params) as { count: number };
+    const totalRow = await db!.prepare(`SELECT COUNT(*) as count FROM streams ${whereClause}`).get(...params) as { count: number };
     const total = Number(totalRow?.count || 0);
-    const rows = db!.prepare(`
+    const rows = await db!.prepare(`
       SELECT *
       FROM streams
       ${whereClause}
       ORDER BY created_at DESC
       LIMIT ?
       OFFSET ?
-    `).all(...params, safeLimit, offset);
+    `).all(...params, safeLimit, offset) as any[];
 
     const streams = rows.map(rowToStream);
 
     const enrichedStreams = streamService.enrichStreams(streams);
-    const latestByStreamId = getLatestActivityEvents(
+    const latestByStreamId = await getLatestActivityEvents(
       'stream',
       enrichedStreams.map((stream) => String(stream.id)),
     );
@@ -205,7 +205,7 @@ router.get('/streams/activity', async (req: Request, res: Response) => {
     }
 
     const whereClause = conditions.join(' AND ');
-    const countRow = db!.prepare(`
+    const countRow = await db!.prepare(`
       SELECT COUNT(*) as count
       FROM activity_events ae
       INNER JOIN streams s ON s.id = ae.entity_id
@@ -213,7 +213,7 @@ router.get('/streams/activity', async (req: Request, res: Response) => {
     `).get(...params) as { count: number };
     const total = Number(countRow?.count || 0);
 
-    const rows = db!.prepare(`
+    const rows = await db!.prepare(`
       SELECT
         ae.id,
         ae.entity_type,
@@ -329,14 +329,14 @@ router.get('/streams/batch-runs', async (req: Request, res: Response) => {
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const countRow = db!.prepare(`
+    const countRow = await db!.prepare(`
       SELECT COUNT(*) as count
       FROM stream_batches sb
       ${whereClause}
     `).get(...params) as { count: number };
     const total = Number(countRow?.count || 0);
 
-    const rows = db!.prepare(`
+    const rows = await db!.prepare(`
       SELECT
         sb.*,
         SUM(CASE WHEN s.status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_streams,
@@ -371,7 +371,7 @@ router.get('/streams/batch-runs', async (req: Request, res: Response) => {
 router.get('/streams/batch-runs/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const batchRow = db!.prepare(`
+    const batchRow = await db!.prepare(`
       SELECT
         sb.*,
         SUM(CASE WHEN s.status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_streams,
@@ -388,14 +388,14 @@ router.get('/streams/batch-runs/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Stream batch not found' });
     }
 
-    const streamRows = db!.prepare(`
+    const streamRows = await db!.prepare(`
       SELECT *
       FROM streams
       WHERE batch_id = ?
       ORDER BY created_at ASC, stream_id ASC
     `).all(id) as any[];
 
-    const events = listBatchActivityEvents(streamRows.map((row) => String(row.id)), 500);
+    const events = await listBatchActivityEvents(streamRows.map((row) => String(row.id)), 500);
 
     res.json({
       success: true,
@@ -412,12 +412,12 @@ router.get('/streams/batch-runs/:id', async (req: Request, res: Response) => {
 router.get('/streams/batch-runs/:id/export', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const batchRow = db!.prepare('SELECT * FROM stream_batches WHERE id = ?').get(id) as StreamBatchRow | undefined;
+    const batchRow = await db!.prepare('SELECT * FROM stream_batches WHERE id = ?').get(id) as StreamBatchRow | undefined;
     if (!batchRow) {
       return res.status(404).json({ error: 'Stream batch not found' });
     }
 
-    const rows = db!.prepare(`
+    const rows = await db!.prepare(`
       SELECT *
       FROM streams
       WHERE batch_id = ?
@@ -467,12 +467,12 @@ router.get('/streams/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
 
-    const claimRows = db!.prepare('SELECT * FROM stream_claims WHERE stream_id = ? ORDER BY claimed_at DESC').all(id) as any[];
+    const claimRows = await db!.prepare('SELECT * FROM stream_claims WHERE stream_id = ? ORDER BY claimed_at DESC').all(id) as any[];
 
     const stream = rowToStream(row);
     const claims: StreamClaim[] = claimRows.map(c => ({
@@ -483,7 +483,7 @@ router.get('/streams/:id', async (req: Request, res: Response) => {
       claimed_at: c.claimed_at,
       tx_hash: c.tx_hash || undefined,
     }));
-    const storedEvents = listActivityEvents('stream', id, 200);
+    const storedEvents = await listActivityEvents('stream', id, 200);
     const events = storedEvents.length > 0
       ? storedEvents
       : buildFallbackStreamEvents(row, claimRows);
@@ -575,7 +575,7 @@ router.post('/streams/create', async (req: Request, res: Response) => {
     // constructor vaultId expected by on-chain covenant invariants.
     let actualVaultId = deriveStandaloneVaultId(`${id}:${sender}:${recipient}:${now}`);
     if (vaultId) {
-      const vaultRow = db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
+      const vaultRow = await db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
       if (vaultRow?.constructor_params) {
         const vaultParams = JSON.parse(vaultRow.constructor_params);
         if (vaultParams[0]?.type === 'bytes') {
@@ -745,14 +745,14 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       deployment = await deploymentService.deployVestingStream(deploymentParams);
     }
 
-    const countRow = db!.prepare('SELECT COUNT(*) as cnt FROM streams').get() as any;
+    const countRow = await db!.prepare('SELECT COUNT(*) as cnt FROM streams').get() as any;
     const streamId = streamService.generateStreamId(
       normalizedTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
       Number(countRow?.cnt || 0) + 1,
     );
 
     // Store with PENDING status - becomes ACTIVE after funding tx confirmed
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO streams (id, stream_id, vault_id, sender, recipient, token_type, token_category,
         total_amount, withdrawn_amount, stream_type, start_time, end_time, interval_seconds, cliff_timestamp,
         cancelable, transferable, refillable, status, schedule_template, launch_source, launch_title,
@@ -788,7 +788,7 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       deployment.initialCommitment,
       'mutable'
     );
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'created',
@@ -817,7 +817,7 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       createdAt: now,
     });
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(row));
 
     res.json({
@@ -846,7 +846,7 @@ router.get('/streams/:id/funding-info', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -930,7 +930,7 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -979,12 +979,12 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
       || row.nft_commitment
       || null;
 
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, activated_at = ?, updated_at = ?
       WHERE id = ?
     `).run(txHash, confirmedCommitment, now, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'funded',
@@ -1000,7 +1000,7 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
       createdAt: now,
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     res.json({
@@ -1037,7 +1037,7 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Recipient address required' });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1216,7 +1216,7 @@ router.post('/streams/:id/confirm-claim', async (req: Request, res: Response) =>
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1253,14 +1253,14 @@ router.post('/streams/:id/confirm-claim', async (req: Request, res: Response) =>
     // Update withdrawn amount
     const newWithdrawnAmount = row.withdrawn_amount + claimedAmount;
 
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET withdrawn_amount = ?, updated_at = ?
       WHERE id = ?
     `).run(newWithdrawnAmount, Math.floor(Date.now() / 1000), id);
 
     // Record claim in stream_claims table
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO stream_claims (id, stream_id, recipient, amount, claimed_at, tx_hash)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(
@@ -1271,7 +1271,7 @@ router.post('/streams/:id/confirm-claim', async (req: Request, res: Response) =>
       Math.floor(Date.now() / 1000),
       txHash
     );
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'claim',
@@ -1285,7 +1285,7 @@ router.post('/streams/:id/confirm-claim', async (req: Request, res: Response) =>
       createdAt: Math.floor(Date.now() / 1000),
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     res.json({
@@ -1317,7 +1317,7 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1471,7 +1471,7 @@ router.post('/streams/:id/pause', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1540,7 +1540,7 @@ router.post('/streams/:id/confirm-pause', async (req: Request, res: Response) =>
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1573,12 +1573,12 @@ router.post('/streams/:id/confirm-pause', async (req: Request, res: Response) =>
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET status = 'PAUSED', tx_hash = ?, nft_commitment = ?, updated_at = ?
       WHERE id = ?
     `).run(txHash, nextCommitment, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'paused',
@@ -1588,7 +1588,7 @@ router.post('/streams/:id/confirm-pause', async (req: Request, res: Response) =>
       createdAt: now,
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     return res.json({
@@ -1624,7 +1624,7 @@ router.post('/streams/:id/resume', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1690,7 +1690,7 @@ router.post('/streams/:id/confirm-resume', async (req: Request, res: Response) =
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1723,12 +1723,12 @@ router.post('/streams/:id/confirm-resume', async (req: Request, res: Response) =
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET status = 'ACTIVE', tx_hash = ?, nft_commitment = ?, updated_at = ?
       WHERE id = ?
     `).run(txHash, nextCommitment, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'resumed',
@@ -1738,7 +1738,7 @@ router.post('/streams/:id/confirm-resume', async (req: Request, res: Response) =
       createdAt: now,
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     return res.json({
@@ -1780,7 +1780,7 @@ router.post('/streams/:id/refill', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Refill amount must be greater than zero' });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1867,7 +1867,7 @@ router.post('/streams/:id/confirm-refill', async (req: Request, res: Response) =
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -1908,12 +1908,12 @@ router.post('/streams/:id/confirm-refill', async (req: Request, res: Response) =
       || null;
     const newTotalAmount = Number(row.total_amount || 0) + refillAmountDisplay;
 
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET total_amount = ?, tx_hash = ?, nft_commitment = ?, updated_at = ?
       WHERE id = ?
     `).run(newTotalAmount, txHash, nextCommitment, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'refilled',
@@ -1927,7 +1927,7 @@ router.post('/streams/:id/confirm-refill', async (req: Request, res: Response) =
       createdAt: now,
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     return res.json({
@@ -1970,7 +1970,7 @@ router.post('/streams/:id/transfer', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'New recipient must be a P2PKH cash address' });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -2050,7 +2050,7 @@ router.post('/streams/:id/confirm-transfer', async (req: Request, res: Response)
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -2089,12 +2089,12 @@ router.post('/streams/:id/confirm-transfer', async (req: Request, res: Response)
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET recipient = ?, tx_hash = ?, nft_commitment = ?, updated_at = ?
       WHERE id = ?
     `).run(newRecipientAddress, txHash, nextCommitment, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'transferred',
@@ -2108,7 +2108,7 @@ router.post('/streams/:id/confirm-transfer', async (req: Request, res: Response)
       createdAt: now,
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     return res.json({
@@ -2145,7 +2145,7 @@ router.post('/streams/:id/cancel', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -2266,7 +2266,7 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
       });
     }
 
-    const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
       return res.status(404).json({ error: 'Stream not found' });
     }
@@ -2294,12 +2294,12 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE streams
       SET status = 'CANCELLED', tx_hash = ?, updated_at = ?
       WHERE id = ?
     `).run(txHash, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'stream',
       entityId: id,
       eventType: 'cancelled',
@@ -2317,7 +2317,7 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
       createdAt: now,
     });
 
-    const updatedRow = db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
+    const updatedRow = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     const stream = streamService.enrichStream(rowToStream(updatedRow));
 
     return res.json({
@@ -2383,7 +2383,7 @@ router.post('/treasuries/:vaultId/batch-create', async (req: Request, res: Respo
     }
 
     const batchId = randomUUID();
-    const countRow = db!.prepare('SELECT COUNT(*) as cnt FROM streams').get() as any;
+    const countRow = await db!.prepare('SELECT COUNT(*) as cnt FROM streams').get() as any;
     const sequenceBase = Number(countRow?.cnt || 0) + 1;
     const now = Math.floor(Date.now() / 1000);
 
@@ -2459,67 +2459,65 @@ router.post('/treasuries/:vaultId/batch-create', async (req: Request, res: Respo
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    db!.transaction(() => {
-      insertBatchStmt.run(
+    await insertBatchStmt.run(
+      batchId,
+      vaultId,
+      senderAddress,
+      normalizedBatchTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
+      tokenCategory || null,
+      preparedStreams.length,
+      preparedStreams.reduce((sum, prepared) => sum + Number(prepared.totalAmount || 0), 0),
+      normalizedLaunchContext?.source || null,
+      normalizedLaunchContext?.title || null,
+      normalizedLaunchContext?.description || null,
+      normalizedLaunchContext?.preferredLane || null,
+      now,
+      now,
+    );
+
+    for (const prepared of preparedStreams) {
+      await insertStmt.run(
+        prepared.id,
+        prepared.streamId,
+        prepared.vaultId,
         batchId,
-        vaultId,
-        senderAddress,
-        normalizedBatchTokenType === 'BCH' ? 'BCH' : 'CASHTOKENS',
-        tokenCategory || null,
-        preparedStreams.length,
-        preparedStreams.reduce((sum, prepared) => sum + Number(prepared.totalAmount || 0), 0),
-        normalizedLaunchContext?.source || null,
-        normalizedLaunchContext?.title || null,
-        normalizedLaunchContext?.description || null,
-        normalizedLaunchContext?.preferredLane || null,
-        now,
-        now,
+        prepared.sender,
+        prepared.recipient,
+        prepared.tokenType,
+        prepared.tokenCategory,
+        prepared.totalAmount,
+        prepared.streamType,
+        prepared.startTime,
+        prepared.endTime,
+        prepared.intervalSeconds,
+        prepared.cliffTimestamp,
+        prepared.cancelable ? 1 : 0,
+        prepared.refillable ? 1 : 0,
+        prepared.scheduleTemplate,
+        prepared.launchSource,
+        prepared.launchTitle,
+        prepared.launchDescription,
+        prepared.preferredLane,
+        prepared.description,
+        prepared.createdAt,
+        prepared.createdAt,
+        prepared.contractAddress,
+        JSON.stringify(prepared.constructorParams),
+        prepared.nftCommitment,
+        'mutable',
       );
 
-      for (const prepared of preparedStreams) {
-        insertStmt.run(
-          prepared.id,
-          prepared.streamId,
-          prepared.vaultId,
-          batchId,
-          prepared.sender,
-          prepared.recipient,
-          prepared.tokenType,
-          prepared.tokenCategory,
-          prepared.totalAmount,
-          prepared.streamType,
-          prepared.startTime,
-          prepared.endTime,
-          prepared.intervalSeconds,
-          prepared.cliffTimestamp,
-          prepared.cancelable ? 1 : 0,
-          prepared.refillable ? 1 : 0,
-          prepared.scheduleTemplate,
-          prepared.launchSource,
-          prepared.launchTitle,
-          prepared.launchDescription,
-          prepared.preferredLane,
-          prepared.description,
-          prepared.createdAt,
-          prepared.createdAt,
-          prepared.contractAddress,
-          JSON.stringify(prepared.constructorParams),
-          prepared.nftCommitment,
-          'mutable',
-        );
-
-        recordActivityEvent({
-          entityType: 'stream',
-          entityId: prepared.id,
-          eventType: 'created',
-          actor: prepared.sender,
-          amount: prepared.totalAmount,
-          status: 'PENDING',
-          details: prepared.activityDetails,
-          createdAt: prepared.createdAt,
-        });
-      }
-    })();
+      await recordActivityEvent({
+        entityType: 'stream',
+        entityId: prepared.id,
+        eventType: 'created',
+        actor: prepared.sender,
+        amount: prepared.totalAmount,
+        status: 'PENDING',
+        details: prepared.activityDetails,
+        createdAt: prepared.createdAt,
+      });
+    }
 
     const fundingService = new StreamFundingService('chipnet');
     const fundingTx = await fundingService.buildBatchFundingTransaction({
@@ -2534,10 +2532,10 @@ router.post('/treasuries/:vaultId/batch-create', async (req: Request, res: Respo
       })),
     });
 
-    const createdRows = preparedStreams.map((prepared) => {
-      const row = db!.prepare('SELECT * FROM streams WHERE id = ?').get(prepared.id) as any;
+    const createdRows = await Promise.all(preparedStreams.map(async (prepared) => {
+      const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(prepared.id) as any;
       return streamService.enrichStream(rowToStream(row));
-    });
+    }));
 
     res.json({
       success: true,
@@ -2588,7 +2586,7 @@ router.post('/treasuries/:vaultId/batch-create/confirm', async (req: Request, re
     }
 
     const placeholders = streamIds.map(() => '?').join(', ');
-    const rows = db!
+    const rows = await db!
       .prepare(`SELECT * FROM streams WHERE id IN (${placeholders}) AND vault_id = ?`)
       .all(...streamIds, vaultId) as any[];
 
@@ -2666,38 +2664,36 @@ router.post('/treasuries/:vaultId/batch-create/confirm', async (req: Request, re
       WHERE id = ?
     `);
 
-    db!.transaction(() => {
-      for (const row of rows) {
-        updateStmt.run(txHash, confirmedCommitments.get(row.id) ?? null, updatedAt, updatedAt, row.id);
-        recordActivityEvent({
-          entityType: 'stream',
-          entityId: row.id,
-          eventType: 'funded',
-          actor: row.sender,
-          amount: Number(row.total_amount),
-          status: 'ACTIVE',
-          txHash,
-          details: {
-            contractAddress: row.contract_address,
-            tokenType: row.token_type,
-            tokenCategory: row.token_category || null,
-            batchFunding: true,
-          },
-          createdAt: updatedAt,
-        });
-      }
+    for (const row of rows) {
+      await updateStmt.run(txHash, confirmedCommitments.get(row.id) ?? null, updatedAt, updatedAt, row.id);
+      await recordActivityEvent({
+        entityType: 'stream',
+        entityId: row.id,
+        eventType: 'funded',
+        actor: row.sender,
+        amount: Number(row.total_amount),
+        status: 'ACTIVE',
+        txHash,
+        details: {
+          contractAddress: row.contract_address,
+          tokenType: row.token_type,
+          tokenCategory: row.token_category || null,
+          batchFunding: true,
+        },
+        createdAt: updatedAt,
+      });
+    }
 
-      const resolvedBatchId = (batchId as string | undefined) || uniqueBatchIds[0];
-      if (resolvedBatchId) {
-        db!.prepare(`
-          UPDATE stream_batches
-          SET status = 'ACTIVE', tx_hash = ?, updated_at = ?
-          WHERE id = ?
-        `).run(txHash, updatedAt, resolvedBatchId);
-      }
-    })();
+    const resolvedBatchId = (batchId as string | undefined) || uniqueBatchIds[0];
+    if (resolvedBatchId) {
+      await db!.prepare(`
+        UPDATE stream_batches
+        SET status = 'ACTIVE', tx_hash = ?, updated_at = ?
+        WHERE id = ?
+      `).run(txHash, updatedAt, resolvedBatchId);
+    }
 
-    const updatedRows = db!
+    const updatedRows = await db!
       .prepare(`SELECT * FROM streams WHERE id IN (${placeholders})`)
       .all(...streamIds) as any[];
 
@@ -2744,7 +2740,7 @@ router.get('/explorer/streams', async (req: Request, res: Response) => {
     }
 
     query += ' ORDER BY created_at DESC LIMIT 100';
-    const rows = db!.prepare(query).all(...params) as any[];
+    const rows = await db!.prepare(query).all(...params) as any[];
     const streams = streamService.enrichStreams(rows.map(rowToStream));
 
     res.json({
@@ -2847,11 +2843,11 @@ function rowToStreamBatch(row: Record<string, unknown>) {
   };
 }
 
-function listBatchActivityEvents(streamIds: string[], limit = 300) {
+async function listBatchActivityEvents(streamIds: string[], limit = 300) {
   const ids = streamIds.filter((id) => typeof id === 'string' && id.length > 0);
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(', ');
-  const rows = db!.prepare(`
+  const rows = await db!.prepare(`
     SELECT id, entity_type, entity_id, event_type, actor, amount, status, tx_hash, details, created_at
     FROM activity_events
     WHERE entity_type = 'stream' AND entity_id IN (${placeholders})
@@ -3099,7 +3095,7 @@ async function preparePendingStreamRecord(params: {
 
   let actualVaultId = deriveStandaloneVaultId(`${id}:${sender}:${recipient}:${createdAt}`);
   if (vaultId) {
-    const vaultRow = db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
+    const vaultRow = await db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
     if (vaultRow?.constructor_params) {
       const vaultParams = JSON.parse(vaultRow.constructor_params);
       if (vaultParams[0]?.type === 'bytes') {

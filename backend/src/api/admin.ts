@@ -38,10 +38,10 @@ function classifyOverallStatus(statuses: ServiceStatus[]): ServiceStatus {
   return 'healthy';
 }
 
-function countRows(tableName: string): number {
+async function countRows(tableName: string): Promise<number> {
   try {
-    const row = db!.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get() as { count?: number } | undefined;
-    return row?.count || 0;
+    const row = await db!.prepare(`SELECT COUNT(*)::int as count FROM "${tableName}"`).get() as { count?: number } | undefined;
+    return Number(row?.count ?? 0);
   } catch {
     return 0;
   }
@@ -126,15 +126,15 @@ async function getBackendStatus(network: 'mainnet' | 'chipnet', electrumServer?:
     await provider.disconnect().catch(() => undefined);
   }
 
-  const vaultCount = countRows('vaults');
-  const streamCount = countRows('streams');
-  const proposalCount = countRows('proposals');
-  const airdropCount = countRows('airdrops');
-  const paymentCount = countRows('payments');
-  const budgetPlanCount = countRows('budget_plans');
+  const vaultCount = await countRows('vaults');
+  const streamCount = await countRows('streams');
+  const proposalCount = await countRows('proposals');
+  const airdropCount = await countRows('airdrops');
+  const paymentCount = await countRows('payments');
+  const budgetPlanCount = await countRows('budget_plans');
 
   const queryStartedAt = Date.now();
-  db!.prepare('SELECT COUNT(*) as count FROM streams').get();
+  await db!.prepare('SELECT COUNT(*) as count FROM streams').get();
   const queryLatencyMs = Date.now() - queryStartedAt;
 
   return {
@@ -146,7 +146,7 @@ async function getBackendStatus(network: 'mainnet' | 'chipnet', electrumServer?:
       uptimeSeconds: Math.floor(process.uptime()),
     },
     database: {
-      engine: 'sqlite',
+      engine: 'postgres',
       counts: {
         vaults: vaultCount,
         streams: streamCount,
@@ -260,6 +260,140 @@ router.post('/admin/indexer/resync', async (req: Request, res: Response) => {
     message: 'Remote indexer resync control is not implemented yet.',
     fromBlock: req.body?.fromBlock ?? null,
   });
+});
+
+/**
+ * GET /admin/export
+ * Dumps the entire Postgres database as a JSON document.
+ *
+ * Authentication: requires the `x-admin-token` header to match the
+ * ADMIN_EXPORT_TOKEN environment variable. If the env var is unset,
+ * the endpoint is disabled.
+ *
+ * Usage:
+ *   curl -H "x-admin-token: $ADMIN_EXPORT_TOKEN" \
+ *     https://api.flowguard.cash/api/admin/export > backup.json
+ */
+router.get('/admin/export', async (req: Request, res: Response) => {
+  const expectedToken = process.env.ADMIN_EXPORT_TOKEN?.trim();
+  if (!expectedToken) {
+    return res.status(503).json({
+      success: false,
+      error: 'Export endpoint disabled',
+      message: 'Set ADMIN_EXPORT_TOKEN env var to enable.',
+    });
+  }
+
+  const providedToken = req.headers['x-admin-token'];
+  if (providedToken !== expectedToken) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized',
+      message: 'Invalid or missing x-admin-token header.',
+    });
+  }
+
+  try {
+    const tableRowsResult = await db!
+      .prepare(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`)
+      .all() as Array<{ table_name: string }>;
+
+    const tables: Record<string, { rowCount: number; rows: any[] }> = {};
+
+    for (const { table_name } of tableRowsResult) {
+      const rows = await db!.prepare(`SELECT * FROM "${table_name}"`).all() as any[];
+      const serialized = rows.map((row) => {
+        const out: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(row)) {
+          if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+            out[key] = { __type: 'bytes', hex: Buffer.from(value).toString('hex') };
+          } else if (typeof value === 'bigint') {
+            out[key] = { __type: 'bigint', value: value.toString() };
+          } else if (value instanceof Date) {
+            out[key] = value.toISOString();
+          } else {
+            out[key] = value;
+          }
+        }
+        return out;
+      });
+      tables[table_name] = {
+        rowCount: serialized.length,
+        rows: serialized,
+      };
+    }
+
+    const totalRows = Object.values(tables).reduce((sum, t) => sum + t.rowCount, 0);
+
+    res.setHeader('Content-Disposition', `attachment; filename="flowguard-export-${Date.now()}.json"`);
+    res.json({
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      engine: 'postgres',
+      totalTables: tableRowsResult.length,
+      totalRows,
+      tables,
+    });
+  } catch (error: any) {
+    console.error('[admin/export] Export failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Export failed',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /admin/export/summary
+ * Lightweight preview of what would be exported (table names and row counts).
+ * Useful for verifying the export before downloading the full dump.
+ */
+router.get('/admin/export/summary', async (req: Request, res: Response) => {
+  const expectedToken = process.env.ADMIN_EXPORT_TOKEN?.trim();
+  if (!expectedToken) {
+    return res.status(503).json({
+      success: false,
+      error: 'Export endpoint disabled',
+      message: 'Set ADMIN_EXPORT_TOKEN env var to enable.',
+    });
+  }
+
+  const providedToken = req.headers['x-admin-token'];
+  if (providedToken !== expectedToken) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized',
+    });
+  }
+
+  try {
+    const tableRows = await db!
+      .prepare(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`)
+      .all() as Array<{ name: string }>;
+
+    const summary = await Promise.all(tableRows.map(async ({ name }) => {
+      const row = await db!.prepare(`SELECT COUNT(*) as count FROM "${name}"`).get() as { count?: number };
+      return { table: name, rowCount: Number(row?.count ?? 0) };
+    }));
+
+    const totalRows = summary.reduce((sum, s) => sum + s.rowCount, 0);
+
+    res.json({
+      success: true,
+      exportedAt: new Date().toISOString(),
+      totalTables: summary.length,
+      totalRows,
+      tables: summary,
+    });
+  } catch (error: any) {
+    console.error('[admin/export/summary] Failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Summary failed',
+      message: error.message,
+    });
+  }
 });
 
 export default router;

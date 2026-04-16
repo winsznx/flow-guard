@@ -13,7 +13,7 @@ async function unlockCyclePolicyState(
   cycleNumber: number,
   userAddress: string,
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
-  const vault = VaultService.getVaultByVaultId(vaultId);
+  const vault = await VaultService.getVaultByVaultId(vaultId);
   if (!vault) {
     return { ok: false, status: 404, error: 'Vault not found' };
   }
@@ -32,10 +32,10 @@ async function unlockCyclePolicyState(
 }
 
 // Get cycle history for a vault
-router.get('/vaults/:vaultId/cycles', (req, res) => {
+router.get('/vaults/:vaultId/cycles', async (req, res) => {
   try {
     const stmt = db!.prepare('SELECT * FROM cycles WHERE vault_id = ? ORDER BY cycle_number DESC');
-    const rows = stmt.all(req.params.vaultId) as any[];
+    const rows = await stmt.all(req.params.vaultId) as any[];
     
     const cycles = rows.map(row => ({
       id: row.id,
@@ -56,15 +56,15 @@ router.get('/vaults/:vaultId/cycles', (req, res) => {
 });
 
 // Get current cycle for a vault
-router.get('/vaults/:vaultId/cycles/current', (req, res) => {
+router.get('/vaults/:vaultId/cycles/current', async (req, res) => {
   try {
     const stmt = db!.prepare(`
-      SELECT * FROM cycles 
-      WHERE vault_id = ? 
-      ORDER BY cycle_number DESC 
+      SELECT * FROM cycles
+      WHERE vault_id = ?
+      ORDER BY cycle_number DESC
       LIMIT 1
     `);
-    const row = stmt.get(req.params.vaultId) as any;
+    const row = await stmt.get(req.params.vaultId) as any;
     
     if (!row) {
       return res.status(404).json({ error: 'No cycles found' });
@@ -123,7 +123,7 @@ router.post('/vaults/:vaultId/unlock-onchain', async (req, res) => {
       return res.status(400).json({ error: 'cycleNumber is required' });
     }
 
-    const vault = VaultService.getVaultByVaultId(vaultId);
+    const vault = await VaultService.getVaultByVaultId(vaultId);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -162,7 +162,7 @@ router.post('/vaults/:vaultId/confirm-unlock-onchain', async (req, res) => {
       return res.status(400).json({ error: 'txHash is required' });
     }
 
-    const vault = VaultService.getVaultByVaultId(vaultId);
+    const vault = await VaultService.getVaultByVaultId(vaultId);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -185,7 +185,7 @@ router.post('/vaults/:vaultId/confirm-unlock-onchain', async (req, res) => {
 
     if (!alreadyUnlocked) {
       const newState = StateService.setCycleUnlocked(currentState, Number(cycleNumber));
-      VaultService.updateVaultState(vaultId, newState);
+      await VaultService.updateVaultState(vaultId, newState);
     }
 
     return res.json({
@@ -208,9 +208,9 @@ router.post('/vaults/:vaultId/confirm-unlock-onchain', async (req, res) => {
 });
 
 // Get eligible cycles for unlock
-router.get('/vaults/:vaultId/cycles/eligible', (req, res) => {
+router.get('/vaults/:vaultId/cycles/eligible', async (req, res) => {
   try {
-    const vault = VaultService.getVaultByVaultId(req.params.vaultId);
+    const vault = await VaultService.getVaultByVaultId(req.params.vaultId);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }

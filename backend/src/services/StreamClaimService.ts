@@ -77,7 +77,7 @@ export class StreamClaimService {
       if (elapsed >= duration) {
         vestedTotal = totalAmount;
       } else if (elapsed > 0 && duration > 0) {
-        vestedTotal = Math.floor((totalAmount * elapsed) / duration);
+        vestedTotal = Number((BigInt(totalAmount) * BigInt(elapsed)) / BigInt(duration));
       }
     } else if (streamType === 'STEP') {
       if (!stepInterval || !stepAmount) {
@@ -171,7 +171,7 @@ export class StreamClaimService {
       );
     }
     const commitmentHex = binToHex(commitment);
-    const totalReleasedFromCommitment = this.readUint64LEFromHex(commitmentHex, 2);
+    const totalReleasedFromCommitment = Number(this.readUint64LEFromHex(commitmentHex, 2));
     const claimableAmount = this.calculateClaimableAmount({
       ...params,
       totalReleased: totalReleasedFromCommitment,
@@ -181,13 +181,12 @@ export class StreamClaimService {
       throw new Error('No funds available to claim at this time');
     }
 
-    // Update NFT commitment: total_released at bytes 2-9
+    const newTotalReleased = BigInt(totalReleasedFromCommitment) + BigInt(claimableAmount);
+    const newStatus = newTotalReleased >= BigInt(params.totalAmount) ? 3 : 0;
     const newCommitment = new Uint8Array(commitment);
-    const newTotalReleased = totalReleasedFromCommitment + claimableAmount;
-    const newStatus = newTotalReleased >= params.totalAmount ? 3 : 0;
     newCommitment[0] = newStatus;
     const dv = new DataView(newCommitment.buffer, newCommitment.byteOffset + 2, 8);
-    dv.setBigUint64(0, BigInt(newTotalReleased), true);
+    dv.setBigUint64(0, newTotalReleased, true);
 
     const claimAmountBig = BigInt(claimableAmount);
     const fee = 1500n;
@@ -289,7 +288,7 @@ export class StreamClaimService {
 
   validateClaim(params: ClaimTransactionParams): { valid: boolean; error?: string } {
     const { currentTime, startTime, endTime, currentCommitment } = params;
-    const totalReleasedFromCommitment = this.readUint64LEFromHex(currentCommitment, 2);
+    const totalReleasedFromCommitment = Number(this.readUint64LEFromHex(currentCommitment, 2));
     const effectiveStart = this.readUint40LEFromHex(currentCommitment, 10) || startTime;
 
     if (currentTime < effectiveStart) {
@@ -325,18 +324,17 @@ export class StreamClaimService {
     }
   }
 
-  private readUint64LEFromHex(commitmentHex: string, offset: number): number {
+  private readUint64LEFromHex(commitmentHex: string, offset: number): bigint {
     try {
       const commitment = hexToBin(commitmentHex);
-      if (commitment.length < offset + 8) return 0;
-      const value = new DataView(
+      if (commitment.length < offset + 8) return 0n;
+      return new DataView(
         commitment.buffer,
         commitment.byteOffset + offset,
         8,
       ).getBigUint64(0, true);
-      return Number(value);
     } catch {
-      return 0;
+      return 0n;
     }
   }
 

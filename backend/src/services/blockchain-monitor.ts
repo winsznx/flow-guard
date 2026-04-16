@@ -57,7 +57,7 @@ export class BlockchainMonitor {
     try {
       // Get all vaults that have contract addresses
       const stmt = db!.prepare('SELECT * FROM vaults WHERE contract_address IS NOT NULL');
-      const vaults = stmt.all() as any[];
+      const vaults = await stmt.all() as any[];
 
       if (vaults.length === 0) {
         console.log('No vaults with contract addresses to monitor');
@@ -97,7 +97,7 @@ export class BlockchainMonitor {
         WHERE id = ?
       `);
 
-      stmt.run(balance, vaultId);
+      await stmt.run(balance, vaultId);
 
       console.log(`Updated vault ${vaultId} balance: ${balance} satoshis`);
     } catch (error) {

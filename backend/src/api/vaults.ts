@@ -32,7 +32,7 @@ async function confirmVaultFunding(args: {
     };
   }
 
-  const vault = VaultService.getVaultById(args.vaultDbId);
+  const vault = await VaultService.getVaultById(args.vaultDbId);
   if (!vault) {
     return {
       status: 404,
@@ -134,7 +134,7 @@ async function confirmVaultFunding(args: {
     };
   }
 
-  const updatedVault = VaultService.updateBalance(args.vaultDbId, args.amount, args.txid);
+  const updatedVault = await VaultService.updateBalance(args.vaultDbId, args.amount, args.txid);
   return {
     status: 200,
     body: {
@@ -176,15 +176,15 @@ router.post('/', async (req, res) => {
 });
 
 // List user's vaults with role information (must come before /:id route)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const userAddress = req.headers['x-user-address'] as string || 'unknown';
-    
+
     // Get vaults where user is creator or signer
-    const userVaults = VaultService.getUserVaults(userAddress);
-    
+    const userVaults = await VaultService.getUserVaults(userAddress);
+
     // Get public vaults that user is not already part of
-    const publicVaults = VaultService.getPublicVaults().filter(
+    const publicVaults = (await VaultService.getPublicVaults()).filter(
       vault => !VaultService.isCreator(vault, userAddress) && !VaultService.isSigner(vault, userAddress)
     );
     
@@ -217,9 +217,9 @@ router.get('/', (req, res) => {
 });
 
 // Get vault by ID (with visibility check)
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const vault = VaultService.getVaultById(req.params.id);
+    const vault = await VaultService.getVaultById(req.params.id);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -249,9 +249,9 @@ router.get('/:id', (req, res) => {
 });
 
 // Get vault state
-router.get('/:id/state', (req, res) => {
+router.get('/:id/state', async (req, res) => {
   try {
-    const vault = VaultService.getVaultById(req.params.id);
+    const vault = await VaultService.getVaultById(req.params.id);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -268,23 +268,23 @@ router.get('/:id/state', (req, res) => {
 });
 
 // Add signer to vault (creator-only)
-router.post('/:id/signers', (req, res) => {
+router.post('/:id/signers', async (req, res) => {
   try {
     const dbId = req.params.id;
     const { signerAddress } = req.body;
     const requesterAddress = req.headers['x-user-address'] as string || 'unknown';
-    
+
     if (!signerAddress) {
       return res.status(400).json({ error: 'Signer address is required' });
     }
-    
+
     // Get vault by database ID first to get the vaultId
-    const vault = VaultService.getVaultById(dbId);
+    const vault = await VaultService.getVaultById(dbId);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
-    
-    const updatedVault = VaultService.addSigner(vault.vaultId, signerAddress, requesterAddress);
+
+    const updatedVault = await VaultService.addSigner(vault.vaultId, signerAddress, requesterAddress);
     res.json(updatedVault);
   } catch (error: any) {
     if (error.message.includes('not found')) {
@@ -304,7 +304,7 @@ router.post('/:id/signers', (req, res) => {
 // Returns contract address and amount details for frontend to use
 router.get('/:id/deposit', async (req, res) => {
   try {
-    const vault = VaultService.getVaultById(req.params.id);
+    const vault = await VaultService.getVaultById(req.params.id);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -327,7 +327,7 @@ router.get('/:id/deposit', async (req, res) => {
     let warning: string | undefined;
 
     if (amountToDepositSats > 0n) {
-      const constructorParamsRow = db
+      const constructorParamsRow = await db
         .prepare('SELECT constructor_params FROM vaults WHERE id = ?')
         .get(req.params.id) as any;
 

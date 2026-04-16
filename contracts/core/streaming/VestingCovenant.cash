@@ -131,7 +131,6 @@ contract VestingCovenant(
         int remaining = totalAmount - totalReleased;
 
         if (remaining > 0) {
-            // Any unclaimed vested portion goes to recipient
             require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
             if ((flagsByte & 0x04) == 0x04) {
                 require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
@@ -140,6 +139,9 @@ contract VestingCovenant(
                 require(tx.outputs[0].value == remaining);
             }
         }
+
+        int completeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(completeFee >= 0 && completeFee <= 2000);
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 
@@ -190,6 +192,7 @@ contract VestingCovenant(
         require(pauseStart > 0);
 
         // Advance cursor by the pause duration
+        require(tx.locktime > pauseStart);
         int pauseDuration = tx.locktime - pauseStart;
         int newCursor = cursor + pauseDuration;
 
@@ -247,8 +250,19 @@ contract VestingCovenant(
         int claimableNow = vestedAtCancel - totalReleased;
         int unvested = totalAmount - vestedAtCancel;
 
-        // Output[0]: claimable vested to recipient (if any)
-        if (claimableNow > 0) {
+        if (claimableNow > 0 && unvested > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+            require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+                require(tx.outputs[0].tokenAmount == claimableNow);
+                require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+                require(tx.outputs[1].tokenAmount == unvested);
+            } else {
+                require(tx.outputs[0].value == claimableNow);
+                require(tx.outputs[1].value == unvested);
+            }
+        } else if (claimableNow > 0) {
             require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
             if ((flagsByte & 0x04) == 0x04) {
                 require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
@@ -256,16 +270,13 @@ contract VestingCovenant(
             } else {
                 require(tx.outputs[0].value == claimableNow);
             }
-        }
-
-        // Output[1] (or [0] if no claimable): unvested back to sender
-        if (unvested > 0) {
-            require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+        } else if (unvested > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
             if ((flagsByte & 0x04) == 0x04) {
-                require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
-                require(tx.outputs[1].tokenAmount == unvested);
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+                require(tx.outputs[0].tokenAmount == unvested);
             } else {
-                require(tx.outputs[1].value == unvested);
+                require(tx.outputs[0].value == unvested);
             }
         }
     }

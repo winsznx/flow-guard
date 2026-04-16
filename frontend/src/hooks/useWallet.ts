@@ -123,6 +123,7 @@ const useWalletStore = create<WalletStore>((set, get) => ({
       // Save to localStorage
       localStorage.setItem('wallet_type', walletType);
       localStorage.setItem('wallet_address', walletInfo.address);
+      localStorage.setItem('wallet_connected_at', String(Date.now()));
       if (walletInfo.publicKey) {
         localStorage.setItem('wallet_publickey', walletInfo.publicKey);
       }
@@ -324,53 +325,59 @@ export function useWallet() {
       return;
     }
 
-    const initWallet = async () => {
-      console.log('[useWallet] Attempting initialization...');
-      setInitAttempted(true);
+    const savedWalletType = localStorage.getItem('wallet_type') as WalletType | null;
+    const savedAddress = localStorage.getItem('wallet_address');
+    const connectedAt = Number(localStorage.getItem('wallet_connected_at') || '0');
+    const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-      // Prevent concurrent initialization attempts
-      if (isConnectingRef) {
-        console.log('[useWallet] Connection already in progress, skipping init...');
-        return;
+    if (!savedWalletType || !savedAddress || (connectedAt > 0 && Date.now() - connectedAt > SESSION_MAX_AGE_MS)) {
+      if (connectedAt > 0 && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
+        localStorage.removeItem('wallet_type');
+        localStorage.removeItem('wallet_address');
+        localStorage.removeItem('wallet_publickey');
+        localStorage.removeItem('wallet_connected_at');
       }
+      console.log('[useWallet] No saved wallet found or session expired');
+      setInitAttempted(true);
+      return;
+    }
 
-      const savedWalletType = localStorage.getItem('wallet_type') as WalletType | null;
-      const savedAddress = localStorage.getItem('wallet_address');
+    if (isConnectingRef) {
+      console.log('[useWallet] Connection already in progress, skipping init...');
+      return;
+    }
 
-      if (savedWalletType && savedAddress) {
-        console.log('[useWallet] Found saved wallet, reconnecting...', savedWalletType);
-        try {
-          // Reconnect to saved wallet
-          await connect(savedWalletType);
-        } catch (error) {
-          console.error('[useWallet] Failed to reconnect wallet:', error);
-          const message = error instanceof Error ? error.message : String(error || '');
-          const isTransientWalletConnectError =
-            savedWalletType === WalletType.WALLETCONNECT
-            && /(timeout|relay|websocket|network|temporar|stale session)/i.test(message);
+    let cancelled = false;
 
-          if (isTransientWalletConnectError) {
-            // Keep saved WC session metadata so reconnect can recover without forcing a fresh login.
-            console.warn('[useWallet] WalletConnect reconnect failed transiently; preserving saved session metadata');
-            setInitAttempted(false);
-            return;
-          }
+    const initWallet = async () => {
+      if (cancelled) return;
+      console.log('[useWallet] Reconnecting saved wallet...', savedWalletType);
+      try {
+        await connect(savedWalletType);
+      } catch (error) {
+        if (cancelled) return;
+        console.error('[useWallet] Failed to reconnect wallet:', error);
+        const message = error instanceof Error ? error.message : String(error || '');
+        const isTransientWalletConnectError =
+          savedWalletType === WalletType.WALLETCONNECT
+          && /(timeout|relay|websocket|network|temporar|stale session)/i.test(message);
 
-          // Clear invalid saved data
-          localStorage.removeItem('wallet_type');
-          localStorage.removeItem('wallet_address');
-          setInitAttempted(false); // Allow retry on next mount
+        if (isTransientWalletConnectError) {
+          console.warn('[useWallet] WalletConnect reconnect failed transiently; preserving saved session metadata');
+          return;
         }
-      } else {
-        console.log('[useWallet] No saved wallet found');
+
+        localStorage.removeItem('wallet_type');
+        localStorage.removeItem('wallet_address');
+      } finally {
+        if (!cancelled) setInitAttempted(true);
       }
     };
 
-    // Small delay to prevent race conditions
-    const timeoutId = setTimeout(initWallet, 100);
+    initWallet();
 
-    return () => clearTimeout(timeoutId);
-  }, [initAttempted, isConnectingRef, connect, setInitAttempted]); // Depend on global flag
+    return () => { cancelled = true; };
+  }, [initAttempted, isConnectingRef, connect, setInitAttempted]);
 
   /**
    * Listen for wallet events (address changes, disconnection)
@@ -431,6 +438,7 @@ export function useWallet() {
     balance,
     isConnected,
     isConnecting,
+    initAttempted,
     network,
     error,
     connect,

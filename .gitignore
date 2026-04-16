@@ -3,6 +3,12 @@ node_modules/
 .pnp
 .pnp.js
 
+# Database backups (contain private keys and user data — keep local only)
+railway-backup/
+*.db
+*.sqlite
+*.sqlite3
+
 # Package manager lock conflicts (project uses pnpm)
 package-lock.json
 yarn.lock
@@ -70,3 +76,14 @@ temp/
 # Deployment platform configs (use Railway, not Render)
 render.yaml
 fly.toml
+
+# Migration-specific artifacts (sensitive — contain connection strings / keys / user data)
+docs/AUDIT_FINDINGS.md
+docs/guides/data-export.md
+backend/scripts/test-supabase.mjs
+backend/scripts/apply-schema.mjs
+backend/scripts/import-sqlite-to-pg.mjs
+backend/scripts/verify-import.mjs
+
+# Local reference material (not part of the project)
+bch refrences/

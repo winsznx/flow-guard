@@ -29,7 +29,7 @@ function rowToProposal(row: any) {
 }
 
 // List proposals for a vault
-router.get('/vaults/:vaultId/governance', (req, res) => {
+router.get('/vaults/:vaultId/governance', async (req, res) => {
   try {
     const { status } = req.query;
     let sql = 'SELECT * FROM governance_proposals WHERE vault_id = ?';
@@ -41,7 +41,7 @@ router.get('/vaults/:vaultId/governance', (req, res) => {
     }
 
     sql += ' ORDER BY created_at DESC';
-    const rows = db!.prepare(sql).all(...params) as any[];
+    const rows = await db!.prepare(sql).all(...params) as any[];
     res.json(rows.map(rowToProposal));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -49,12 +49,12 @@ router.get('/vaults/:vaultId/governance', (req, res) => {
 });
 
 // Create a governance proposal
-router.post('/vaults/:vaultId/governance', (req, res) => {
+router.post('/vaults/:vaultId/governance', async (req, res) => {
   try {
     const userAddress = req.headers['x-user-address'] as string;
     if (!userAddress) return res.status(401).json({ error: 'Authentication required' });
 
-    const vault = VaultService.getVaultByVaultId(req.params.vaultId);
+    const vault = await VaultService.getVaultByVaultId(req.params.vaultId);
     if (!vault) return res.status(404).json({ error: 'Vault not found' });
 
     const { title, description, quorum, votingDurationDays } = req.body;
@@ -64,12 +64,12 @@ router.post('/vaults/:vaultId/governance', (req, res) => {
     const votingEndsAt = new Date(Date.now() + durationDays * 86400 * 1000).toISOString();
 
     const id = randomUUID();
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO governance_proposals (id, vault_id, title, description, proposer, quorum, voting_ends_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(id, req.params.vaultId, title, description || null, userAddress, Number(quorum) || 0, votingEndsAt);
 
-    const row = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(id) as any;
+    const row = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(id) as any;
     res.status(201).json(rowToProposal(row));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -77,12 +77,12 @@ router.post('/vaults/:vaultId/governance', (req, res) => {
 });
 
 // Get a single proposal with vote breakdown
-router.get('/governance/:proposalId', (req, res) => {
+router.get('/governance/:proposalId', async (req, res) => {
   try {
-    const row = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    const row = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
     if (!row) return res.status(404).json({ error: 'Proposal not found' });
 
-    const votes = db!.prepare('SELECT * FROM governance_votes WHERE proposal_id = ? ORDER BY created_at DESC').all(req.params.proposalId) as any[];
+    const votes = await db!.prepare('SELECT * FROM governance_votes WHERE proposal_id = ? ORDER BY created_at DESC').all(req.params.proposalId) as any[];
     res.json({ ...rowToProposal(row), votes });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -90,12 +90,12 @@ router.get('/governance/:proposalId', (req, res) => {
 });
 
 // Cast a vote
-router.post('/governance/:proposalId/vote', (req, res) => {
+router.post('/governance/:proposalId/vote', async (req, res) => {
   try {
     const userAddress = req.headers['x-user-address'] as string;
     if (!userAddress) return res.status(401).json({ error: 'Authentication required' });
 
-    const proposal = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    const proposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
     if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
     if (proposal.status !== 'ACTIVE') return res.status(400).json({ error: 'Proposal is not active' });
 
@@ -107,16 +107,16 @@ router.post('/governance/:proposalId/vote', (req, res) => {
     const voteWeight = Number(weight) || 1;
     const voteId = randomUUID();
 
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO governance_votes (id, proposal_id, voter, vote, weight)
       VALUES (?, ?, ?, ?, ?)
     `).run(voteId, req.params.proposalId, userAddress, vote, voteWeight);
 
     // Update tally
     const tallyCol = vote === 'FOR' ? 'votes_for' : vote === 'AGAINST' ? 'votes_against' : 'votes_abstain';
-    db!.prepare(`UPDATE governance_proposals SET ${tallyCol} = ${tallyCol} + ?, updated_at = datetime('now') WHERE id = ?`).run(voteWeight, req.params.proposalId);
+    await db!.prepare(`UPDATE governance_proposals SET ${tallyCol} = ${tallyCol} + ?, updated_at = NOW()::TEXT WHERE id = ?`).run(voteWeight, req.params.proposalId);
 
-    const updatedProposal = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    const updatedProposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
     res.json(rowToProposal(updatedProposal));
   } catch (error: any) {
     if (error.message?.includes('UNIQUE constraint')) {
@@ -144,7 +144,7 @@ router.post('/governance/:proposalId/lock', async (req, res) => {
       return res.status(400).json({ error: 'Stake amount must be greater than 0' });
     }
 
-    const proposal = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    const proposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -247,7 +247,7 @@ router.post('/governance/:proposalId/confirm-lock', async (req, res) => {
       });
     }
 
-    const proposal = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    const proposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
@@ -255,7 +255,7 @@ router.post('/governance/:proposalId/confirm-lock', async (req, res) => {
     // Record vote in database — store contract data for later unlock
     const voteId = randomUUID();
 
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO governance_votes (id, proposal_id, voter, vote, weight, contract_address, constructor_params, nft_commitment, vote_id, lock_tx_hash, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
@@ -274,7 +274,7 @@ router.post('/governance/:proposalId/confirm-lock', async (req, res) => {
 
     // Update proposal tally
     const tallyCol = voteChoice === 'FOR' ? 'votes_for' : voteChoice === 'AGAINST' ? 'votes_against' : 'votes_abstain';
-    db!.prepare(`UPDATE governance_proposals SET ${tallyCol} = ${tallyCol} + ? WHERE id = ?`).run(voteWeight, req.params.proposalId);
+    await db!.prepare(`UPDATE governance_proposals SET ${tallyCol} = ${tallyCol} + ? WHERE id = ?`).run(voteWeight, req.params.proposalId);
 
     res.json({
       success: true,
@@ -309,13 +309,13 @@ router.post('/governance/:proposalId/unlock', async (req, res) => {
       return res.status(400).json({ error: 'Voter address is required' });
     }
 
-    const proposal = db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    const proposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
     }
 
     // Load stored vote record to get contract data from confirm-lock
-    const voteRecord = db!.prepare(
+    const voteRecord = await db!.prepare(
       'SELECT * FROM governance_votes WHERE proposal_id = ? AND voter = ?'
     ).get(req.params.proposalId, voterAddress) as any;
 
@@ -392,7 +392,7 @@ router.post('/governance/:proposalId/confirm-unlock', async (req, res) => {
       });
     }
 
-    const voteRecord = db!.prepare(
+    const voteRecord = await db!.prepare(
       'SELECT * FROM governance_votes WHERE proposal_id = ? AND voter = ?'
     ).get(req.params.proposalId, voterAddress) as any;
     if (!voteRecord) {
@@ -415,7 +415,7 @@ router.post('/governance/:proposalId/confirm-unlock', async (req, res) => {
     }
 
     // Update vote record with unlock tx_hash
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE governance_votes
       SET updated_at = ?
       WHERE proposal_id = ? AND voter = ?

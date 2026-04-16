@@ -45,7 +45,7 @@ export class TransactionService {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
     `);
 
-    stmt.run(
+    await stmt.run(
       id,
       options.vaultId || null,
       options.proposalId || null,
@@ -56,7 +56,7 @@ export class TransactionService {
       options.toAddress || null
     );
 
-    const transaction = this.getTransaction(id);
+    const transaction = await this.getTransaction(id);
     if (!transaction) {
       throw new Error(`Failed to retrieve transaction ${id} after insertion`);
     }
@@ -66,9 +66,9 @@ export class TransactionService {
   /**
    * Get transaction by ID
    */
-  static getTransaction(id: string): TransactionRecord | null {
+  static async getTransaction(id: string): Promise<TransactionRecord | null> {
     const stmt = db!.prepare('SELECT * FROM transactions WHERE id = ?');
-    const row = stmt.get(id) as any;
+    const row = await stmt.get(id) as any;
 
     if (!row) return null;
 
@@ -91,9 +91,9 @@ export class TransactionService {
   /**
    * Get transaction by tx hash
    */
-  static getTransactionByHash(txHash: string): TransactionRecord | null {
+  static async getTransactionByHash(txHash: string): Promise<TransactionRecord | null> {
     const stmt = db!.prepare('SELECT * FROM transactions WHERE tx_hash = ?');
-    const row = stmt.get(txHash) as any;
+    const row = await stmt.get(txHash) as any;
 
     if (!row) return null;
 
@@ -116,14 +116,14 @@ export class TransactionService {
   /**
    * Get all transactions for a vault
    */
-  static getVaultTransactions(vaultId: string): TransactionRecord[] {
+  static async getVaultTransactions(vaultId: string): Promise<TransactionRecord[]> {
     const stmt = db!.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM transactions
       WHERE vault_id = ?
          OR vault_id = (SELECT vault_id FROM vaults WHERE id = ? LIMIT 1)
       ORDER BY created_at DESC
     `);
-    const rows = stmt.all(vaultId, vaultId) as any[];
+    const rows = await stmt.all(vaultId, vaultId) as any[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -156,19 +156,19 @@ export class TransactionService {
     `);
 
     const confirmedAt = status === 'confirmed' ? new Date().toISOString() : null;
-    stmt.run(status, blockHeight || null, confirmedAt, txHash);
+    await stmt.run(status, blockHeight || null, confirmedAt, txHash);
   }
 
   /**
    * Get all pending transactions
    */
-  static getPendingTransactions(): TransactionRecord[] {
+  static async getPendingTransactions(): Promise<TransactionRecord[]> {
     const stmt = db!.prepare(`
-      SELECT * FROM transactions 
+      SELECT * FROM transactions
       WHERE status = 'pending'
       ORDER BY created_at ASC
     `);
-    const rows = stmt.all() as any[];
+    const rows = await stmt.all() as any[];
 
     return rows.map((row) => ({
       id: row.id,

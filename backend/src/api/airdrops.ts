@@ -26,6 +26,7 @@ import {
   recordActivityEvent,
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
 
 const router = Router();
 
@@ -41,9 +42,9 @@ router.get('/airdrops', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Creator address is required' });
     }
 
-    const rows = db!.prepare('SELECT * FROM airdrops WHERE creator = ? ORDER BY created_at DESC').all(creator);
-    const campaigns = attachLatestAirdropEvents(
-      rows.map((row: any) => normalizeCampaignForResponse(req, row)),
+    const rows = await db!.prepare('SELECT * FROM airdrops WHERE creator = ? ORDER BY created_at DESC').all(creator);
+    const campaigns = await attachLatestAirdropEvents(
+      (rows as any[]).map((row: any) => normalizeCampaignForResponse(req, row)),
     );
 
     res.json({
@@ -70,7 +71,7 @@ router.get('/airdrops/claimable', async (req: Request, res: Response) => {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const rows = db!.prepare(`
+    const rows = await db!.prepare(`
       SELECT a.* FROM airdrops a
       WHERE a.status = 'ACTIVE'
         AND (a.end_date IS NULL OR a.end_date > ?)
@@ -79,8 +80,8 @@ router.get('/airdrops/claimable', async (req: Request, res: Response) => {
           WHERE c.campaign_id = a.id AND c.claimer = ?
         ) < COALESCE(a.max_claims_per_address, 1)
     `).all(now, address);
-    const campaigns = attachLatestAirdropEvents(
-      rows.map((row: any) => normalizeCampaignForResponse(req, row)),
+    const campaigns = await attachLatestAirdropEvents(
+      (rows as any[]).map((row: any) => normalizeCampaignForResponse(req, row)),
     );
 
     res.json({
@@ -105,7 +106,7 @@ router.get('/airdrops/claim/:token', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid claim token format' });
     }
 
-    const campaign = db!
+    const campaign = await db!
       .prepare('SELECT * FROM airdrops WHERE claim_link LIKE ? LIMIT 1')
       .get(`%/claim/${token}`) as any;
 
@@ -132,13 +133,13 @@ router.get('/airdrops/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const claims = db!.prepare('SELECT * FROM airdrop_claims WHERE campaign_id = ? ORDER BY claimed_at DESC').all(id);
-    const storedEvents = listActivityEvents('airdrop', id, 200);
+    const claims = await db!.prepare('SELECT * FROM airdrop_claims WHERE campaign_id = ? ORDER BY claimed_at DESC').all(id);
+    const storedEvents = await listActivityEvents('airdrop', id, 200);
     const events = storedEvents.length > 0
       ? storedEvents
       : buildFallbackAirdropEvents(campaign, claims);
@@ -214,7 +215,7 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
       : Math.floor(normalizedTotalAmount / normalizedAmountPerClaim);
 
     const id = randomUUID();
-    const countRow = db!.prepare('SELECT COUNT(*) as cnt FROM airdrops').get() as any;
+    const countRow = await db!.prepare('SELECT COUNT(*) as cnt FROM airdrops').get() as any;
     const campaignId = `#FG-DROP-${String((countRow?.cnt ?? 0) + 1).padStart(3, '0')}`;
     const now = Math.floor(Date.now() / 1000);
     const claimToken = randomUUID();
@@ -227,7 +228,7 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
     // Get vault's contract vaultId
     let actualVaultId = deriveStandaloneVaultId(`${id}:${creator}:${now}`);
     if (vaultId) {
-      const vaultRow = db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
+      const vaultRow = await db!.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vaultId) as any;
       if (vaultRow?.constructor_params) {
         const vaultParams = JSON.parse(vaultRow.constructor_params);
         if (vaultParams[0]?.type === 'bytes') {
@@ -250,7 +251,7 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
     });
 
     // Store with PENDING status - becomes ACTIVE after funding tx confirmed
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO airdrops (id, campaign_id, vault_id, creator, title, description,
         campaign_type, token_type, token_category, total_amount, amount_per_claim,
         total_recipients, claimed_count, claim_link, start_date, end_date, status,
@@ -269,9 +270,9 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
       JSON.stringify(deployment.constructorParams),
       deployment.initialCommitment,
       'mutable',
-      deployment.claimAuthorityPrivKey,
+      encryptPrivateKey(deployment.claimAuthorityPrivKey),
     );
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'airdrop',
       entityId: id,
       eventType: 'created',
@@ -288,7 +289,7 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
       createdAt: now,
     });
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id);
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id);
 
     res.json({
       success: true,
@@ -336,7 +337,7 @@ router.post('/airdrops/:id/generate-merkle', async (req: Request, res: Response)
       });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -347,7 +348,7 @@ router.post('/airdrops/:id/generate-merkle', async (req: Request, res: Response)
 
     // Store merkle root and recipients data
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE airdrops
       SET merkle_root = ?, merkle_data = ?, total_recipients = ?, updated_at = ?
       WHERE id = ?
@@ -374,7 +375,7 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
   try {
     const { id } = req.params;
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -468,7 +469,7 @@ router.post('/airdrops/:id/confirm-funding', async (req: Request, res: Response)
       });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -508,12 +509,12 @@ router.post('/airdrops/:id/confirm-funding', async (req: Request, res: Response)
     const now = Math.floor(Date.now() / 1000);
 
     // Update campaign with tx_hash and set status to ACTIVE
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE airdrops
       SET tx_hash = ?, status = 'ACTIVE', updated_at = ?
       WHERE id = ?
     `).run(txHash, now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'airdrop',
       entityId: id,
       eventType: 'funded',
@@ -557,7 +558,7 @@ router.get('/airdrops/:id/proof/:address', async (req: Request, res: Response) =
   try {
     const { id, address } = req.params;
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -619,7 +620,7 @@ router.post('/airdrops/:id/claim', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Claimer address is required' });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -708,7 +709,7 @@ router.post('/airdrops/:id/claim', async (req: Request, res: Response) => {
       constructorParams,
       currentCommitment,
       currentTime: now,
-      claimAuthorityPrivKey: campaign.claim_authority_privkey,
+      claimAuthorityPrivKey: decryptPrivateKey(campaign.claim_authority_privkey),
     });
 
     const claimedDisplayAmount = onChainAmountToDisplay(claimTx.claimAmount, campaign.token_type);
@@ -750,7 +751,7 @@ router.post('/airdrops/:id/confirm-claim', async (req: Request, res: Response) =
       });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -783,18 +784,18 @@ router.post('/airdrops/:id/confirm-claim', async (req: Request, res: Response) =
     const now = Math.floor(Date.now() / 1000);
 
     // Record claim
-    db!.prepare(`
+    await db!.prepare(`
       INSERT INTO airdrop_claims (id, campaign_id, claimer, amount, claimed_at, tx_hash)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(randomUUID(), id, claimerAddress, claimedAmountNumber, now, txHash);
 
     // Update campaign statistics
-    db!.prepare(`
+    await db!.prepare(`
       UPDATE airdrops
       SET claimed_count = claimed_count + 1, updated_at = ?
       WHERE id = ?
     `).run(now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'airdrop',
       entityId: id,
       eventType: 'claim',
@@ -838,7 +839,7 @@ router.post('/airdrops/:id/pause', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -904,7 +905,7 @@ router.post('/airdrops/:id/confirm-pause', async (req: Request, res: Response) =
       });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -930,9 +931,9 @@ router.post('/airdrops/:id/confirm-pause', async (req: Request, res: Response) =
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare('UPDATE airdrops SET status = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE airdrops SET status = ?, updated_at = ? WHERE id = ?')
       .run('PAUSED', now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'airdrop',
       entityId: id,
       eventType: 'paused',
@@ -968,7 +969,7 @@ router.post('/airdrops/:id/cancel', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -1050,7 +1051,7 @@ router.post('/airdrops/:id/confirm-cancel', async (req: Request, res: Response) 
       });
     }
 
-    const campaign = db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
@@ -1083,9 +1084,9 @@ router.post('/airdrops/:id/confirm-cancel', async (req: Request, res: Response) 
     }
 
     const now = Math.floor(Date.now() / 1000);
-    db!.prepare('UPDATE airdrops SET status = ?, updated_at = ? WHERE id = ?')
+    await db!.prepare('UPDATE airdrops SET status = ?, updated_at = ? WHERE id = ?')
       .run('CANCELLED', now, id);
-    recordActivityEvent({
+    await recordActivityEvent({
       entityType: 'airdrop',
       entityId: id,
       eventType: 'cancelled',
@@ -1328,11 +1329,11 @@ function normalizeCampaignForResponse(req: Request, campaign: any): any {
   };
 }
 
-function attachLatestAirdropEvents(campaigns: any[]): any[] {
+async function attachLatestAirdropEvents(campaigns: any[]): Promise<any[]> {
   if (!Array.isArray(campaigns) || campaigns.length === 0) {
     return campaigns;
   }
-  const latestByCampaignId = getLatestActivityEvents(
+  const latestByCampaignId = await getLatestActivityEvents(
     'airdrop',
     campaigns.map((campaign) => String(campaign.id)),
   );
