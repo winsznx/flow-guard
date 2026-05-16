@@ -69,14 +69,17 @@ export class RewardDistributionService {
     if (typeof authPubKey === 'string') {
       throw new Error(`Invalid authority private key: ${authPubKey}`);
     }
-    const expectedAuthorityHash = this.readBytes20(constructorParams[1], 'authorityHash');
-    const derivedAuthorityHash = hash160(authPubKey);
-    if (typeof derivedAuthorityHash === 'string') {
-      throw new Error(`Failed to derive authority hash: ${derivedAuthorityHash}`);
+    // Audit C-06: RewardCovenant constructor now has TWO authority slots.
+    //   [1] authorityHash      = creator wallet (admin paths only)
+    //   [2] claimAuthorityHash = backend co-signer (reward issuance path)
+    const expectedClaimAuthorityHash = this.readBytes20(constructorParams[2], 'claimAuthorityHash');
+    const derivedClaimAuthorityHash = hash160(authPubKey);
+    if (typeof derivedClaimAuthorityHash === 'string') {
+      throw new Error(`Failed to derive claim authority hash: ${derivedClaimAuthorityHash}`);
     }
-    if (binToHex(derivedAuthorityHash) !== binToHex(expectedAuthorityHash)) {
+    if (binToHex(derivedClaimAuthorityHash) !== binToHex(expectedClaimAuthorityHash)) {
       throw new Error(
-        'Authority key mismatch: campaign constructor authorityHash does not match stored authority private key',
+        'Claim authority key mismatch: campaign constructor claimAuthorityHash does not match stored claim authority private key',
       );
     }
 
@@ -130,9 +133,10 @@ export class RewardDistributionService {
     }
 
     const rewardAmountBig = BigInt(rewardAmount);
-    // Constructor param indices (RewardCovenant):
-    // [0]=vaultId [1]=authorityHash [2]=maxRewardAmount [3]=totalPool [4]=startTimestamp [5]=endTimestamp
-    const maxRewardAmount = this.toBigIntParam(constructorParams[2], 'maxRewardAmount');
+    // Constructor param indices (RewardCovenant, audit C-06 layout):
+    // [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
+    // [3]=maxRewardAmount [4]=totalPool [5]=startTimestamp [6]=endTimestamp
+    const maxRewardAmount = this.toBigIntParam(constructorParams[3], 'maxRewardAmount');
     if (rewardAmountBig > maxRewardAmount) {
       throw new Error(
         `Reward amount exceeds max reward amount `
@@ -145,7 +149,7 @@ export class RewardDistributionService {
     const newCommitment = new Uint8Array(commitment);
     const totalDistributedOnChain = this.readUint64LE(commitment, 3);
     const newTotalDistributed = totalDistributedOnChain + rewardAmountBig;
-    const totalPool = this.toBigIntParam(constructorParams[3], 'totalPool');
+    const totalPool = this.toBigIntParam(constructorParams[4], 'totalPool');
     if (newTotalDistributed > totalPool) {
       throw new Error('Distribution exceeds remaining campaign pool');
     }
@@ -177,7 +181,7 @@ export class RewardDistributionService {
     }
     const recipientHash = b.slice(3, 23);
 
-    const fee = 1500n;
+    const fee = 2500n;
     const feePayerAddress = signer || recipientAddress;
     const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : rewardAmountBig;
@@ -287,8 +291,9 @@ export class RewardDistributionService {
   }
 
   private resolveDistributionLocktime(constructorParams: any[], now: bigint): bigint {
-    const startTimestamp = this.toBigIntParam(constructorParams?.[4] ?? 0, 'startTimestamp');
-    const endTimestamp = this.toBigIntParam(constructorParams?.[5] ?? 0, 'endTimestamp');
+    // Indices match the C-06 constructor layout (claimAuthorityHash at [2]).
+    const startTimestamp = this.toBigIntParam(constructorParams?.[5] ?? 0, 'startTimestamp');
+    const endTimestamp = this.toBigIntParam(constructorParams?.[6] ?? 0, 'endTimestamp');
 
     if (startTimestamp > 0n && endTimestamp > 0n && startTimestamp > endTimestamp) {
       throw new Error('Campaign has invalid distribution schedule');

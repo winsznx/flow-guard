@@ -290,7 +290,7 @@ export class CycleUnlockScheduler {
 
     const newPeriodId = currentPeriodId + 1;
     const newSpent = 0n;
-    const feeReserve = 1500n;
+    const feeReserve = 2500n;
     const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Insufficient vault balance to pay unlock fee from treasury UTXO');

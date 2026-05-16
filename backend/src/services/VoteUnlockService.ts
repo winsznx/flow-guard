@@ -72,7 +72,7 @@ export class VoteUnlockService {
     const lockedTokens = contractUtxo.token?.amount ?? 0n;
     const category = contractUtxo.token?.category || tokenCategory;
 
-    const fee = 1500n;
+    const fee = 2500n;
     const voterAmount = contractUtxo.satoshis - fee;
     if (voterAmount < 546n) {
       throw new Error('Insufficient contract balance to cover transaction fee');

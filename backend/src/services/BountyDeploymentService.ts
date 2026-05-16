@@ -138,6 +138,7 @@ export class BountyDeploymentService {
   private buildContract(
     vaultId: Uint8Array,
     authorityHash: Uint8Array,
+    claimAuthorityHash: Uint8Array,
     rewardPerWinnerSat: bigint,
     maxWinners: bigint,
     startTimestamp: bigint,
@@ -145,9 +146,16 @@ export class BountyDeploymentService {
   ) {
     const artifact = ContractFactory.getArtifact('BountyCovenant');
 
+    // Audit C-06: BountyCovenant now has two authority slots.
+    //   authorityHash      = creator's wallet hash (admin paths + cancel refund)
+    //   claimAuthorityHash = backend co-signer hash (claim path only)
+    // Constructor index map (must mirror contracts/core/distribution/BountyCovenant.cash):
+    //   [0] vaultId, [1] authorityHash, [2] claimAuthorityHash,
+    //   [3] rewardPerWinner, [4] maxWinners, [5] startTimestamp, [6] endTimestamp
     const constructorArgs = [
       vaultId,
       authorityHash,
+      claimAuthorityHash,
       rewardPerWinnerSat,
       maxWinners,
       startTimestamp,
@@ -159,6 +167,7 @@ export class BountyDeploymentService {
     const constructorParams: ConstructorParam[] = [
       { type: 'bytes', value: binToHex(vaultId) },
       { type: 'bytes', value: binToHex(authorityHash) },
+      { type: 'bytes', value: binToHex(claimAuthorityHash) },
       { type: 'bigint', value: rewardPerWinnerSat.toString() },
       { type: 'bigint', value: maxWinners.toString() },
       { type: 'bigint', value: startTimestamp.toString() },
@@ -174,8 +183,12 @@ export class BountyDeploymentService {
     }
 
     const vaultId = hexToBin(params.vaultId);
+    // authorityHash binds to the creator's wallet so cancel-refund pays the
+    // creator on chain (audit C-06). claimAuthorityHash binds to a freshly
+    // generated keypair the backend uses to co-sign claims after off-chain
+    // proof review. The two are intentionally distinct.
     const authorityHash = this.addressToHash160(params.authorityAddress);
-    const { privKey: authPrivKey, hash: _authHash } = this.generateAuthorityKeypair();
+    const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
     const rewardPerWinnerSat = BigInt(this.toOnChainAmount(params.rewardPerWinner, params.tokenType));
@@ -184,7 +197,7 @@ export class BountyDeploymentService {
     const endTimestamp = BigInt(params.endTime || 0);
 
     const { contract, constructorParams } = this.buildContract(
-      vaultId, authorityHash,
+      vaultId, authorityHash, claimAuthorityHash,
       rewardPerWinnerSat, maxWinners, startTimestamp, endTimestamp,
     );
 
@@ -208,7 +221,7 @@ export class BountyDeploymentService {
       campaignId: binToHex(campaignId),
       constructorParams,
       initialCommitment: binToHex(initialCommitment),
-      authorityPrivKey: binToHex(authPrivKey),
+      authorityPrivKey: binToHex(claimAuthPrivKey),
       fundingTxRequired: fundingTx,
     };
   }
@@ -220,7 +233,7 @@ export class BountyDeploymentService {
 
     const vaultId = hexToBin(params.vaultId);
     const authorityHash = hexToBin(params.authorityHash);
-    const { privKey: authPrivKey, hash: _authHash } = this.generateAuthorityKeypair();
+    const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
 
     const timestampBuf = new Uint8Array(8);
     new DataView(timestampBuf.buffer).setBigUint64(0, BigInt(params.startTime || Date.now()), true);
@@ -238,7 +251,7 @@ export class BountyDeploymentService {
     const endTimestamp = BigInt(params.endTime || 0);
 
     const { contract, constructorParams } = this.buildContract(
-      vaultId, authorityHash,
+      vaultId, authorityHash, claimAuthorityHash,
       rewardPerWinnerSat, maxWinners, startTimestamp, endTimestamp,
     );
 
@@ -262,7 +275,7 @@ export class BountyDeploymentService {
       campaignId: binToHex(campaignId),
       constructorParams,
       initialCommitment: binToHex(initialCommitment),
-      authorityPrivKey: binToHex(authPrivKey),
+      authorityPrivKey: binToHex(claimAuthPrivKey),
       fundingTxRequired: fundingTx,
     };
   }

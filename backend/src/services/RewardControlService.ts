@@ -66,7 +66,7 @@ export class RewardControlService {
     newCommitment.set(commitment.slice(1, 24), 1);
     newCommitment.fill(0, 24);
 
-    const feeReserve = 1200n;
+    const feeReserve = 2000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
@@ -140,8 +140,11 @@ export class RewardControlService {
       throw new Error('Campaign is not cancelable');
     }
 
+    // Constructor (audit C-06):
+    //   [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
+    //   [3]=maxRewardAmount [4]=totalPool [5]=startTimestamp [6]=endTimestamp
     const totalDistributed = this.readUint64LE(commitment, 3);
-    const totalPool = this.toBigIntParam(params.constructorParams[3], 'totalPool');
+    const totalPool = this.toBigIntParam(params.constructorParams[4], 'totalPool');
     const remainingPool = this.clampToZero(totalPool - totalDistributed);
     if (remainingPool <= 0n) {
       throw new Error('No remaining pool available to cancel');
@@ -159,7 +162,7 @@ export class RewardControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 1500n;
+    const feeReserve = 2500n;
     const feePayer = params.feePayerAddress
       ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
       : null;

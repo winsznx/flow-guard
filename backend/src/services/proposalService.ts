@@ -781,7 +781,7 @@ export class ProposalService {
       throw new Error('Payout exceeds the vault recipient cap');
     }
 
-    const feeReserve = 1500n;
+    const feeReserve = 2500n;
     const stateOutputSatoshis = contractUtxo.satoshis - payoutSatoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Insufficient vault balance to pay recipient and preserve state UTXO');

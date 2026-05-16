@@ -73,7 +73,7 @@ export class GrantControlService {
     newCommitment.set(commitment.slice(1, 36), 1);
     newCommitment.fill(0, 36);
 
-    const feeReserve = 1200n;
+    const feeReserve = 2000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
@@ -147,8 +147,11 @@ export class GrantControlService {
       throw new Error('Grant is not cancelable');
     }
 
+    // Constructor (audit C-06):
+    //   [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
+    //   [3]=milestonesTotal [4]=amountPerMilestone [5]=totalAmount
     const totalReleased = this.readUint64LE(commitment, 3);
-    const totalAmount = this.toBigIntParam(params.constructorParams[4], 'totalAmount');
+    const totalAmount = this.toBigIntParam(params.constructorParams[5], 'totalAmount');
     const remainingAmount = this.clampToZero(totalAmount - totalReleased);
     if (remainingAmount <= 0n) {
       throw new Error('No remaining amount available to cancel');
@@ -166,7 +169,7 @@ export class GrantControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 1500n;
+    const feeReserve = 2500n;
     const feePayer = params.feePayerAddress
       ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
       : null;
@@ -268,7 +271,7 @@ export class GrantControlService {
     newCommitment.set(newRecipientHash, 16);
     newCommitment.fill(0, 36);
 
-    const feeReserve = 1200n;
+    const feeReserve = 2000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);

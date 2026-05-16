@@ -152,6 +152,7 @@ export class RewardDeploymentService {
   private buildContract(
     vaultId: Uint8Array,
     authorityHash: Uint8Array,
+    claimAuthorityHash: Uint8Array,
     maxRewardAmountSat: bigint,
     totalPoolSat: bigint,
     startTimestamp: bigint,
@@ -159,9 +160,13 @@ export class RewardDeploymentService {
   ) {
     const artifact = ContractFactory.getArtifact('RewardCovenant');
 
+    // Audit C-06: RewardCovenant now has two authority slots.
+    //   [1] authorityHash      = creator wallet (admin: pause/resume/cancel)
+    //   [2] claimAuthorityHash = backend co-signer (reward issuance only)
     const constructorArgs = [
       vaultId,
       authorityHash,
+      claimAuthorityHash,
       maxRewardAmountSat,
       totalPoolSat,
       startTimestamp,
@@ -173,6 +178,7 @@ export class RewardDeploymentService {
     const constructorParams: ConstructorParam[] = [
       { type: 'bytes', value: binToHex(vaultId) },
       { type: 'bytes', value: binToHex(authorityHash) },
+      { type: 'bytes', value: binToHex(claimAuthorityHash) },
       { type: 'bigint', value: maxRewardAmountSat.toString() },
       { type: 'bigint', value: totalPoolSat.toString() },
       { type: 'bigint', value: startTimestamp.toString() },
@@ -189,7 +195,7 @@ export class RewardDeploymentService {
 
     const vaultId = hexToBin(params.vaultId);
     const authorityHash = this.addressToHash160(params.authorityAddress);
-    const { privKey: authPrivKey, hash: _authHash } = this.generateAuthorityKeypair();
+    const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
     const maxRewardAmountSat = BigInt(this.toOnChainAmount(params.maxRewardAmount, params.tokenType));
@@ -198,7 +204,7 @@ export class RewardDeploymentService {
     const endTimestamp = BigInt(params.endTime || 0);
 
     const { contract, constructorParams } = this.buildContract(
-      vaultId, authorityHash,
+      vaultId, authorityHash, claimAuthorityHash,
       maxRewardAmountSat, totalPoolSat, startTimestamp, endTimestamp,
     );
 
@@ -222,7 +228,7 @@ export class RewardDeploymentService {
       campaignId: binToHex(campaignId),
       constructorParams,
       initialCommitment: binToHex(initialCommitment),
-      authorityPrivKey: binToHex(authPrivKey),
+      authorityPrivKey: binToHex(claimAuthPrivKey),
       fundingTxRequired: fundingTx,
     };
   }
@@ -234,7 +240,7 @@ export class RewardDeploymentService {
 
     const vaultId = hexToBin(params.vaultId);
     const authorityHash = hexToBin(params.authorityHash);
-    const { privKey: authPrivKey, hash: _authHash } = this.generateAuthorityKeypair();
+    const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
 
     const timestampBuf = new Uint8Array(8);
     new DataView(timestampBuf.buffer).setBigUint64(0, BigInt(params.startTime || Date.now()), true);
@@ -252,7 +258,7 @@ export class RewardDeploymentService {
     const endTimestamp = BigInt(params.endTime || 0);
 
     const { contract, constructorParams } = this.buildContract(
-      vaultId, authorityHash,
+      vaultId, authorityHash, claimAuthorityHash,
       maxRewardAmountSat, totalPoolSat, startTimestamp, endTimestamp,
     );
 
@@ -276,7 +282,7 @@ export class RewardDeploymentService {
       campaignId: binToHex(campaignId),
       constructorParams,
       initialCommitment: binToHex(initialCommitment),
-      authorityPrivKey: binToHex(authPrivKey),
+      authorityPrivKey: binToHex(claimAuthPrivKey),
       fundingTxRequired: fundingTx,
     };
   }

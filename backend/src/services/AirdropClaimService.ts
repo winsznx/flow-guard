@@ -173,7 +173,7 @@ export class AirdropClaimService {
     }
     const claimerHash = b.slice(3, 23);
 
-    const fee = 1500n;
+    const fee = 2500n;
     const feePayerAddress = signer || claimer;
     const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;

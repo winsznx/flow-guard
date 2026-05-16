@@ -83,7 +83,7 @@ export class StreamCancelService {
     );
 
     const contractBalance = contractUtxo.satoshis;
-    const fee = 1500n;
+    const fee = 2500n;
     const feePayerAddress = params.feePayerAddress || params.sender;
     const feePayer = feePayerAddress
       ? await resolveFeePayer(

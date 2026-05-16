@@ -142,7 +142,7 @@ export class PaymentClaimService {
     this.setUint40LE(newCommitment, 23, 0); // pause_start reset
 
     const claimAmountBig = BigInt(claimableAmount);
-    const fee = 1500n;
+    const fee = 2500n;
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
     if (contractBalance < recipientOutputSatoshis) {
       throw new Error('Insufficient contract balance to satisfy payment output');

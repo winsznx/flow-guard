@@ -66,7 +66,7 @@ export class BountyControlService {
     newCommitment.set(commitment.slice(1, 19), 1);
     newCommitment.fill(0, 19);
 
-    const feeReserve = 1200n;
+    const feeReserve = 2000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
@@ -141,11 +141,13 @@ export class BountyControlService {
     }
 
     // BountyCovenant commitment layout:
-    // [2-9]=total_paid, [10-13]=winners_count
-    // Constructor: [2]=rewardPerWinner, [3]=maxWinners
+    //   [2-9]=total_paid, [10-13]=winners_count
+    // Constructor (audit C-06):
+    //   [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
+    //   [3]=rewardPerWinner [4]=maxWinners [5]=startTimestamp [6]=endTimestamp
     const winnersCount = this.readUint32LE(commitment, 10);
-    const rewardPerWinner = this.toBigIntParam(params.constructorParams[2], 'rewardPerWinner');
-    const maxWinners = this.toBigIntParam(params.constructorParams[3], 'maxWinners');
+    const rewardPerWinner = this.toBigIntParam(params.constructorParams[3], 'rewardPerWinner');
+    const maxWinners = this.toBigIntParam(params.constructorParams[4], 'maxWinners');
     const remainingPool = this.clampToZero((maxWinners - winnersCount) * rewardPerWinner);
     if (remainingPool <= 0n) {
       throw new Error('No remaining pool available to cancel');
@@ -163,7 +165,7 @@ export class BountyControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 1500n;
+    const feeReserve = 2500n;
     const feePayer = params.feePayerAddress
       ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
       : null;

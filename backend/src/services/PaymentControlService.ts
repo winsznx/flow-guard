@@ -192,7 +192,7 @@ export class PaymentControlService {
       ),
     );
 
-    const feeReserve = 1200n;
+    const feeReserve = 2000n;
     let spentSatoshis = 0n;
     if (remainingPool > 0n) {
       if (params.tokenType === 'FUNGIBLE_TOKEN') {

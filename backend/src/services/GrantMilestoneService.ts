@@ -61,14 +61,18 @@ export class GrantMilestoneService {
     if (typeof authPubKey === 'string') {
       throw new Error(`Invalid authority private key: ${authPubKey}`);
     }
-    const expectedAuthorityHash = this.readBytes20(constructorParams[1], 'authorityHash');
-    const derivedAuthorityHash = hash160(authPubKey);
-    if (typeof derivedAuthorityHash === 'string') {
-      throw new Error(`Failed to derive authority hash: ${derivedAuthorityHash}`);
+    // Audit C-06: GrantCovenant constructor now has TWO authority slots.
+    //   [1] authorityHash      = creator wallet (admin paths only)
+    //   [2] claimAuthorityHash = backend co-signer (releaseMilestone path)
+    // The release service signs with the backend key, which must match slot [2].
+    const expectedClaimAuthorityHash = this.readBytes20(constructorParams[2], 'claimAuthorityHash');
+    const derivedClaimAuthorityHash = hash160(authPubKey);
+    if (typeof derivedClaimAuthorityHash === 'string') {
+      throw new Error(`Failed to derive claim authority hash: ${derivedClaimAuthorityHash}`);
     }
-    if (binToHex(derivedAuthorityHash) !== binToHex(expectedAuthorityHash)) {
+    if (binToHex(derivedClaimAuthorityHash) !== binToHex(expectedClaimAuthorityHash)) {
       throw new Error(
-        'Authority key mismatch: grant constructor authorityHash does not match stored authority private key',
+        'Claim authority key mismatch: grant constructor claimAuthorityHash does not match stored claim authority private key',
       );
     }
 
@@ -106,10 +110,11 @@ export class GrantMilestoneService {
       );
     }
 
-    // Constructor param indices (GrantCovenant):
-    // [0]=vaultId [1]=authorityHash [2]=milestonesTotal [3]=amountPerMilestone [4]=totalAmount
-    const milestonesTotal = this.toBigIntParam(constructorParams[2], 'milestonesTotal');
-    const amountPerMilestone = this.toBigIntParam(constructorParams[3], 'amountPerMilestone');
+    // Constructor param indices (GrantCovenant, audit C-06 layout):
+    // [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
+    // [3]=milestonesTotal [4]=amountPerMilestone [5]=totalAmount
+    const milestonesTotal = this.toBigIntParam(constructorParams[3], 'milestonesTotal');
+    const amountPerMilestone = this.toBigIntParam(constructorParams[4], 'amountPerMilestone');
 
     const milestonesCompleted = BigInt(commitment[2] ?? 0);
     if (milestonesCompleted >= milestonesTotal) {
@@ -136,7 +141,7 @@ export class GrantMilestoneService {
     newCommitment.set(recipientHash, 16);
     newCommitment.fill(0, 36);
 
-    const fee = 1500n;
+    const fee = 2500n;
     const feePayerAddress = signer || recipientAddress;
     const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : amountPerMilestone;

@@ -70,14 +70,18 @@ export class BountyClaimService {
     if (typeof authPubKey === 'string') {
       throw new Error(`Invalid authority private key: ${authPubKey}`);
     }
-    const expectedAuthorityHash = this.readBytes20(constructorParams[1], 'authorityHash');
-    const derivedAuthorityHash = hash160(authPubKey);
-    if (typeof derivedAuthorityHash === 'string') {
-      throw new Error(`Failed to derive authority hash: ${derivedAuthorityHash}`);
+    // Audit C-06: BountyCovenant constructor now has TWO authority slots.
+    //   [1] authorityHash      = creator wallet hash (admin paths)
+    //   [2] claimAuthorityHash = backend co-signer hash (claim path only)
+    // The claim service signs with the backend key, which must match slot [2].
+    const expectedClaimAuthorityHash = this.readBytes20(constructorParams[2], 'claimAuthorityHash');
+    const derivedClaimAuthorityHash = hash160(authPubKey);
+    if (typeof derivedClaimAuthorityHash === 'string') {
+      throw new Error(`Failed to derive claim authority hash: ${derivedClaimAuthorityHash}`);
     }
-    if (binToHex(derivedAuthorityHash) !== binToHex(expectedAuthorityHash)) {
+    if (binToHex(derivedClaimAuthorityHash) !== binToHex(expectedClaimAuthorityHash)) {
       throw new Error(
-        'Authority key mismatch: bounty constructor authorityHash does not match stored authority private key',
+        'Claim authority key mismatch: bounty constructor claimAuthorityHash does not match stored claim authority private key',
       );
     }
 
@@ -137,8 +141,11 @@ export class BountyClaimService {
 
     // Constructor param indices (BountyCovenant):
     // [0]=vaultId [1]=authorityHash [2]=rewardPerWinner [3]=maxWinners [4]=startTimestamp [5]=endTimestamp
-    const rewardPerWinner = this.toBigIntParam(constructorParams[2], 'rewardPerWinner');
-    const maxWinners = this.toBigIntParam(constructorParams[3], 'maxWinners');
+    // Constructor param indices (BountyCovenant, audit C-06 layout):
+    // [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
+    // [3]=rewardPerWinner [4]=maxWinners [5]=startTimestamp [6]=endTimestamp
+    const rewardPerWinner = this.toBigIntParam(constructorParams[3], 'rewardPerWinner');
+    const maxWinners = this.toBigIntParam(constructorParams[4], 'maxWinners');
 
     const winnersCount = this.readUint32LE(commitment, 10);
     if (winnersCount >= maxWinners) {
@@ -183,7 +190,7 @@ export class BountyClaimService {
     }
     const winnerHash = b.slice(3, 23);
 
-    const fee = 1500n;
+    const fee = 2500n;
     const feePayerAddress = signer || winnerAddress;
     const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const winnerOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : rewardPerWinner;
@@ -295,8 +302,9 @@ export class BountyClaimService {
   }
 
   private resolveClaimLocktime(constructorParams: any[], now: bigint): bigint {
-    const startTimestamp = this.toBigIntParam(constructorParams?.[4] ?? 0, 'startTimestamp');
-    const endTimestamp = this.toBigIntParam(constructorParams?.[5] ?? 0, 'endTimestamp');
+    // Indices match the C-06 constructor layout (claimAuthorityHash at [2]).
+    const startTimestamp = this.toBigIntParam(constructorParams?.[5] ?? 0, 'startTimestamp');
+    const endTimestamp = this.toBigIntParam(constructorParams?.[6] ?? 0, 'endTimestamp');
 
     if (startTimestamp > 0n && endTimestamp > 0n && startTimestamp > endTimestamp) {
       throw new Error('Bounty has invalid claim schedule');

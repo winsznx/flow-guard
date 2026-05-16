@@ -142,15 +142,20 @@ export class GrantDeploymentService {
   private buildContract(
     vaultId: Uint8Array,
     authorityHash: Uint8Array,
+    claimAuthorityHash: Uint8Array,
     milestonesTotal: bigint,
     amountPerMilestoneSat: bigint,
     totalAmountSat: bigint,
   ) {
     const artifact = ContractFactory.getArtifact('GrantCovenant');
 
+    // Audit C-06: GrantCovenant now has two authority slots.
+    //   [1] authorityHash      = creator wallet (admin: pause/resume/cancel/transfer)
+    //   [2] claimAuthorityHash = backend co-signer (releaseMilestone only)
     const constructorArgs = [
       vaultId,
       authorityHash,
+      claimAuthorityHash,
       milestonesTotal,
       amountPerMilestoneSat,
       totalAmountSat,
@@ -161,6 +166,7 @@ export class GrantDeploymentService {
     const constructorParams: ConstructorParam[] = [
       { type: 'bytes', value: binToHex(vaultId) },
       { type: 'bytes', value: binToHex(authorityHash) },
+      { type: 'bytes', value: binToHex(claimAuthorityHash) },
       { type: 'bigint', value: milestonesTotal.toString() },
       { type: 'bigint', value: amountPerMilestoneSat.toString() },
       { type: 'bigint', value: totalAmountSat.toString() },
@@ -180,7 +186,7 @@ export class GrantDeploymentService {
     const vaultId = hexToBin(params.vaultId);
     const authorityHash = this.addressToHash160(params.authorityAddress);
     const recipientHash = this.addressToHash160(params.recipientAddress);
-    const { privKey: authPrivKey } = this.generateAuthorityKeypair();
+    const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
     const amountPerMilestoneSat = BigInt(this.toOnChainAmount(params.amountPerMilestone, params.tokenType));
@@ -188,7 +194,7 @@ export class GrantDeploymentService {
     const milestonesTotal = BigInt(params.milestonesTotal);
 
     const { contract, constructorParams } = this.buildContract(
-      vaultId, authorityHash,
+      vaultId, authorityHash, claimAuthorityHash,
       milestonesTotal, amountPerMilestoneSat, totalAmountSat,
     );
 
@@ -212,7 +218,7 @@ export class GrantDeploymentService {
       campaignId: binToHex(campaignId),
       constructorParams,
       initialCommitment: binToHex(initialCommitment),
-      authorityPrivKey: binToHex(authPrivKey),
+      authorityPrivKey: binToHex(claimAuthPrivKey),
       fundingTxRequired: fundingTx,
     };
   }
@@ -228,7 +234,7 @@ export class GrantDeploymentService {
     const vaultId = hexToBin(params.vaultId);
     const authorityHash = hexToBin(params.authorityHash);
     const recipientHash = hexToBin(params.recipientHash);
-    const { privKey: authPrivKey } = this.generateAuthorityKeypair();
+    const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
 
     const timestampBuf = new Uint8Array(8);
     new DataView(timestampBuf.buffer).setBigUint64(0, BigInt(Date.now()), true);
@@ -245,7 +251,7 @@ export class GrantDeploymentService {
     const milestonesTotal = BigInt(params.milestonesTotal);
 
     const { contract, constructorParams } = this.buildContract(
-      vaultId, authorityHash,
+      vaultId, authorityHash, claimAuthorityHash,
       milestonesTotal, amountPerMilestoneSat, totalAmountSat,
     );
 
@@ -269,7 +275,7 @@ export class GrantDeploymentService {
       campaignId: binToHex(campaignId),
       constructorParams,
       initialCommitment: binToHex(initialCommitment),
-      authorityPrivKey: binToHex(authPrivKey),
+      authorityPrivKey: binToHex(claimAuthPrivKey),
       fundingTxRequired: fundingTx,
     };
   }

@@ -62,7 +62,7 @@ export class AirdropControlService {
     newCommitment.set(commitment.slice(1, 23), 1);
     newCommitment.fill(0, 23);
 
-    const feeReserve = 1200n;
+    const feeReserve = 2000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     // pause() does not depend on locktime; keep final tx behavior across wallets
@@ -157,7 +157,7 @@ export class AirdropControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 1500n;
+    const feeReserve = 2500n;
     const feePayer = params.feePayerAddress
       ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
       : null;
