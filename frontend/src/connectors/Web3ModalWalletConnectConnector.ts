@@ -266,6 +266,11 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
           this.session = candidate;
           try {
             console.log('[Web3ModalWC] Reusing active WalletConnect session');
+            // Clean up stale sessions/pairings so the relay isn't subscribed to
+            // dead topics. Without this, the relay floods the client with old
+            // messages from prior sessions and onRelayMessage() spams decryption failures.
+            void this._cleanupStaleTopics(candidate.topic);
+
             const info = await this._getSessionInfo();
 
             // Probe session health in the background without blocking restore.
@@ -283,6 +288,8 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
         }
 
         console.warn('[Web3ModalWC] Existing WalletConnect sessions are stale; creating a new session');
+        // Disconnect everything before requesting a fresh session
+        void this._cleanupStaleTopics(null);
         this.session = null;
       }
 
@@ -320,6 +327,55 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       }
 
       throw new Error(`WalletConnect connection failed: ${message}`);
+    }
+  }
+
+  /**
+   * Disconnect all sessions + pairings except the one keep-topic refers to.
+   * Without this, prior sessions stored in IndexedDB stay subscribed on the
+   * relay, and the client gets flooded with old encrypted messages it can't
+   * decrypt ("onRelayMessage() -> failed to process an inbound message").
+   *
+   * Pass `null` to wipe everything.
+   */
+  private async _cleanupStaleTopics(keepTopic: string | null): Promise<void> {
+    if (!this.client) return;
+
+    try {
+      const sessions = this.client.session.getAll();
+      const staleSessions = sessions.filter((s) => s.topic !== keepTopic);
+
+      if (staleSessions.length === 0 && keepTopic !== null) {
+        return;
+      }
+
+      console.log(`[Web3ModalWC] Cleaning up ${staleSessions.length} stale session(s)`);
+
+      const disconnectReason = { code: 6000, message: 'Stale session cleanup' };
+      await Promise.allSettled(
+        staleSessions.map((s) =>
+          this.client!.disconnect({ topic: s.topic, reason: disconnectReason })
+        )
+      );
+
+      // Pairings outlive sessions; disconnect any pairing not tied to the
+      // session we're keeping.
+      const pairings = this.client.core.pairing.getPairings();
+      const sessionPairingTopic = keepTopic
+        ? sessions.find((s) => s.topic === keepTopic)?.pairingTopic
+        : null;
+      const stalePairings = pairings.filter((p) => p.topic !== sessionPairingTopic);
+
+      if (stalePairings.length > 0) {
+        console.log(`[Web3ModalWC] Cleaning up ${stalePairings.length} stale pairing(s)`);
+        await Promise.allSettled(
+          stalePairings.map((p) =>
+            this.client!.core.pairing.disconnect({ topic: p.topic })
+          )
+        );
+      }
+    } catch (error) {
+      console.warn('[Web3ModalWC] Stale topic cleanup failed (non-fatal):', error);
     }
   }
 
