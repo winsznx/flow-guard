@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { callerAddress } from '../middleware/auth.js';
 import db from '../database/schema.js';
 import { getCycleUnlockScheduler } from '../services/cycle-unlock-scheduler.js';
 import { StateService } from '../services/state-service.js';
@@ -91,7 +92,7 @@ router.post('/vaults/:vaultId/unlock', async (req, res) => {
   try {
     const { cycleNumber } = req.body;
     const vaultId = req.params.vaultId;
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
 
     if (cycleNumber === undefined) {
       return res.status(400).json({ error: 'cycleNumber is required' });
@@ -117,7 +118,7 @@ router.post('/vaults/:vaultId/unlock-onchain', async (req, res) => {
   try {
     const { cycleNumber } = req.body;
     const vaultId = req.params.vaultId;
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
 
     if (cycleNumber === undefined) {
       return res.status(400).json({ error: 'cycleNumber is required' });
@@ -153,7 +154,7 @@ router.post('/vaults/:vaultId/confirm-unlock-onchain', async (req, res) => {
   try {
     const vaultId = req.params.vaultId;
     const { cycleNumber, txHash } = req.body;
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
 
     if (cycleNumber === undefined) {
       return res.status(400).json({ error: 'cycleNumber is required' });

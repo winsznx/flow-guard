@@ -5,6 +5,7 @@ import {
   hexToBin,
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
+import { callerAddress } from '../middleware/auth.js';
 import db from '../database/schema.js';
 import { BudgetDeploymentService } from '../services/BudgetDeploymentService.js';
 import { BudgetReleaseService } from '../services/BudgetReleaseService.js';
@@ -27,7 +28,7 @@ const router = Router();
 router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
   try {
     const { vaultId } = req.params;
-    const creator = req.headers['x-user-address'] as string;
+    const creator = callerAddress(req);
 
     if (!creator) {
       return res.status(401).json({ error: 'User address required' });
@@ -181,7 +182,7 @@ router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
 router.get('/budget-plans/:id/funding-info', async (req, res) => {
   try {
     const { id } = req.params;
-    const senderAddress = req.headers['x-user-address'] as string;
+    const senderAddress = callerAddress(req);
 
     if (!senderAddress) {
       return res.status(401).json({ error: 'User address required' });
@@ -553,7 +554,7 @@ router.get('/budget-plans/:id', async (req, res) => {
 router.post('/budget-plans/:id/pause', async (req, res) => {
   try {
     const { id } = req.params;
-    const signerAddress = String(req.headers['x-user-address'] || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -608,7 +609,7 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = String(req.headers['x-user-address'] || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -678,7 +679,7 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
 router.post('/budget-plans/:id/cancel', async (req, res) => {
   try {
     const { id } = req.params;
-    const signerAddress = String(req.headers['x-user-address'] || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     const allowUnsafeRecovery = req.body?.allowUnsafeRecovery === true;
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
@@ -757,7 +758,7 @@ router.post('/budget-plans/:id/confirm-cancel', async (req, res) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = String(req.headers['x-user-address'] || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }

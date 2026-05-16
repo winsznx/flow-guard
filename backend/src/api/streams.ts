@@ -20,7 +20,11 @@ import {
 } from '../services/streamShapeCatalog.js';
 import { ContractService } from '../services/contract-service.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import {
+  transactionExists,
+  transactionHasExpectedOutput,
+  transactionHasInputFromAddress,
+} from '../utils/txVerification.js';
 import {
   bchToSatoshis,
   displayAmountToOnChain,
@@ -33,8 +37,11 @@ import {
   recordActivityEvent,
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
 
 const router = Router();
+router.param('id', uuidParam);
 const DAY_SECONDS = 24 * 60 * 60;
 
 interface StreamLaunchContext {
@@ -484,9 +491,7 @@ router.get('/streams/:id', async (req: Request, res: Response) => {
       tx_hash: c.tx_hash || undefined,
     }));
     const storedEvents = await listActivityEvents('stream', id, 200);
-    const events = storedEvents.length > 0
-      ? storedEvents
-      : buildFallbackStreamEvents(row, claimRows);
+    const events = storedEvents;
 
     res.json({
       success: true,
@@ -504,10 +509,12 @@ router.get('/streams/:id', async (req: Request, res: Response) => {
  * POST /api/streams/create
  * Create a single stream
  */
-router.post('/streams/create', async (req: Request, res: Response) => {
+router.post('/streams/create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
+    // Sender is bound to the verified wallet proof; body value is ignored so
+    // an attacker cannot create streams "from" a victim address (audit C-01).
+    const sender = req.verifiedUser!.address;
     const {
-      sender,
       recipient,
       tokenType,
       tokenCategory,
@@ -528,8 +535,8 @@ router.post('/streams/create', async (req: Request, res: Response) => {
       launchContext,
     } = req.body;
 
-    if (!sender || !recipient) {
-      return res.status(400).json({ error: 'Sender and recipient are required' });
+    if (!recipient) {
+      return res.status(400).json({ error: 'Recipient is required' });
     }
     if (!totalAmount || totalAmount <= 0) {
       return res.status(400).json({ error: 'Total amount must be greater than 0' });
@@ -911,10 +918,11 @@ router.get('/streams/:id/funding-info', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-funding
  * Mark stream as funded after successful funding transaction
  */
-router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-funding', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash required' });
@@ -937,6 +945,18 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
 
     if (row.status !== 'PENDING') {
       return res.status(400).json({ error: 'Stream is not pending' });
+    }
+
+    // Audit H-07: a third party with knowledge of any matching tx hash could
+    // previously flip a PENDING stream to ACTIVE. Require the tx to consume
+    // a UTXO locked to the authenticated caller's wallet.
+    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
+      return res.status(403).json({
+        error: 'Funding transaction does not include an input from your wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
+      });
     }
 
     const isTokenStream = row.token_type === 'CASHTOKENS';
@@ -1028,7 +1048,7 @@ router.post('/streams/:id/confirm-funding', async (req: Request, res: Response) 
  * POST /api/streams/:id/claim
  * Build claim transaction for vested amount
  */
-router.post('/streams/:id/claim', async (req: Request, res: Response) => {
+router.post('/streams/:id/claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { recipientAddress, signerAddress } = req.body;
@@ -1197,7 +1217,7 @@ router.post('/streams/:id/claim', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-claim
  * Update stream state after successful claim
  */
-router.post('/streams/:id/confirm-claim', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { claimedAmount, txHash } = req.body;
@@ -1463,10 +1483,10 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
  * POST /api/streams/:id/pause
  * Pause an active stream (sender only)
  */
-router.post('/streams/:id/pause', async (req: Request, res: Response) => {
+router.post('/streams/:id/pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1519,11 +1539,11 @@ router.post('/streams/:id/pause', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-pause
  * Confirm stream pause after on-chain tx broadcast
  */
-router.post('/streams/:id/confirm-pause', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1616,10 +1636,10 @@ router.post('/streams/:id/confirm-pause', async (req: Request, res: Response) =>
  * POST /api/streams/:id/resume
  * Resume a paused stream (sender only)
  */
-router.post('/streams/:id/resume', async (req: Request, res: Response) => {
+router.post('/streams/:id/resume', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1669,11 +1689,11 @@ router.post('/streams/:id/resume', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-resume
  * Confirm stream resume after on-chain tx broadcast
  */
-router.post('/streams/:id/confirm-resume', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-resume', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1766,11 +1786,11 @@ router.post('/streams/:id/confirm-resume', async (req: Request, res: Response) =
  * POST /api/streams/:id/refill
  * Refill an open-ended recurring stream runway (sender only)
  */
-router.post('/streams/:id/refill', async (req: Request, res: Response) => {
+router.post('/streams/:id/refill', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { refillAmount } = req.body;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1842,11 +1862,11 @@ router.post('/streams/:id/refill', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-refill
  * Confirm recurring stream refill after on-chain tx broadcast
  */
-router.post('/streams/:id/confirm-refill', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-refill', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash, refillAmount } = req.body;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1955,11 +1975,11 @@ router.post('/streams/:id/confirm-refill', async (req: Request, res: Response) =
  * POST /api/streams/:id/transfer
  * Transfer a transferable vesting stream to a new recipient
  */
-router.post('/streams/:id/transfer', async (req: Request, res: Response) => {
+router.post('/streams/:id/transfer', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { newRecipientAddress } = req.body;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -2029,11 +2049,11 @@ router.post('/streams/:id/transfer', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-transfer
  * Confirm vesting stream transfer after on-chain tx broadcast
  */
-router.post('/streams/:id/confirm-transfer', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-transfer', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash, newRecipientAddress } = req.body;
-    const signerAddress = ((req.headers['x-user-address'] as string) || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -2136,14 +2156,11 @@ router.post('/streams/:id/confirm-transfer', async (req: Request, res: Response)
  * POST /api/streams/:id/cancel
  * Cancel a stream (sender only)
  */
-router.post('/streams/:id/cancel', async (req: Request, res: Response) => {
+router.post('/streams/:id/cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.sender || '').trim();
+    const signerAddress = req.verifiedUser!.address;
     const allowUnsafeRecovery = req.body?.allowUnsafeRecovery === true;
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
 
     const row = await db!.prepare('SELECT * FROM streams WHERE id = ?').get(id) as any;
     if (!row) {
@@ -2242,17 +2259,14 @@ router.post('/streams/:id/cancel', async (req: Request, res: Response) => {
  * POST /api/streams/:id/confirm-cancel
  * Confirm stream cancellation after on-chain tx broadcast
  */
-router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) => {
+router.post('/streams/:id/confirm-cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
     const vestedAmount = parseOptionalDisplayAmount(req.body?.vestedAmount);
     const unvestedAmount = parseOptionalDisplayAmount(req.body?.unvestedAmount);
     const cancelReturnAddress = parseOptionalAddress(req.body?.cancelReturnAddress);
-    const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.sender || '').trim();
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
+    const signerAddress = req.verifiedUser!.address;
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
@@ -2345,7 +2359,7 @@ router.post('/streams/:id/confirm-cancel', async (req: Request, res: Response) =
  * POST /api/treasuries/:vaultId/batch-create
  * Batch create multiple streams from a treasury and return one funding tx.
  */
-router.post('/treasuries/:vaultId/batch-create', async (req: Request, res: Response) => {
+router.post('/treasuries/:vaultId/batch-create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { vaultId } = req.params;
     const {
@@ -2562,7 +2576,7 @@ router.post('/treasuries/:vaultId/batch-create', async (req: Request, res: Respo
   }
 });
 
-router.post('/treasuries/:vaultId/batch-create/confirm', async (req: Request, res: Response) => {
+router.post('/treasuries/:vaultId/batch-create/confirm', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { vaultId } = req.params;
     const { txHash, streamIds, batchId } = req.body;
@@ -3294,107 +3308,6 @@ async function preparePendingStreamRecord(params: {
       trancheSchedule: streamType === 'TRANCHE' ? normalizedTrancheSchedule : undefined,
     },
   };
-}
-
-function buildFallbackStreamEvents(row: any, claimRows: any[]): Array<{
-  id: string;
-  entity_type: 'stream';
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  details: null;
-  created_at: number;
-}> {
-  const events: Array<{
-    id: string;
-    entity_type: 'stream';
-    entity_id: string;
-    event_type: string;
-    actor: string | null;
-    amount: number | null;
-    status: string | null;
-    tx_hash: string | null;
-    details: null;
-    created_at: number;
-  }> = [];
-
-  events.push({
-    id: `fallback-stream-created-${row.id}`,
-    entity_type: 'stream',
-    entity_id: row.id,
-    event_type: 'created',
-    actor: row.sender || null,
-    amount: typeof row.total_amount === 'number' ? row.total_amount : null,
-    status: row.status || null,
-    tx_hash: null,
-    details: null,
-    created_at: Number(row.created_at || Math.floor(Date.now() / 1000)),
-  });
-
-  if (row.tx_hash) {
-    events.push({
-      id: `fallback-stream-funded-${row.id}`,
-      entity_type: 'stream',
-      entity_id: row.id,
-      event_type: 'funded',
-      actor: row.sender || null,
-      amount: typeof row.total_amount === 'number' ? row.total_amount : null,
-      status: row.status || null,
-      tx_hash: row.tx_hash,
-      details: null,
-      created_at: Number(row.updated_at || row.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (row.status === 'CANCELLED') {
-    events.push({
-      id: `fallback-stream-cancelled-${row.id}`,
-      entity_type: 'stream',
-      entity_id: row.id,
-      event_type: 'cancelled',
-      actor: row.sender || null,
-      amount: null,
-      status: 'CANCELLED',
-      tx_hash: row.tx_hash || null,
-      details: null,
-      created_at: Number(row.updated_at || row.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (row.status === 'PAUSED') {
-    events.push({
-      id: `fallback-stream-paused-${row.id}`,
-      entity_type: 'stream',
-      entity_id: row.id,
-      event_type: 'paused',
-      actor: row.sender || null,
-      amount: null,
-      status: 'PAUSED',
-      tx_hash: row.tx_hash || null,
-      details: null,
-      created_at: Number(row.updated_at || row.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  claimRows.forEach((claim: any) => {
-    events.push({
-      id: `fallback-stream-claim-${claim.id}`,
-      entity_type: 'stream',
-      entity_id: row.id,
-      event_type: 'claim',
-      actor: claim.recipient || null,
-      amount: typeof claim.amount === 'number' ? claim.amount : null,
-      status: row.status || null,
-      tx_hash: claim.tx_hash || null,
-      details: null,
-      created_at: Number(claim.claimed_at || row.updated_at || row.created_at || Math.floor(Date.now() / 1000)),
-    });
-  });
-
-  return events.sort((a, b) => b.created_at - a.created_at);
 }
 
 function parseVestingCommitmentState(commitmentHex: string | null | undefined): {

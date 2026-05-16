@@ -12,7 +12,7 @@ import { PaymentFundingService } from '../services/PaymentFundingService.js';
 import { PaymentClaimService } from '../services/PaymentClaimService.js';
 import { PaymentControlService } from '../services/PaymentControlService.js';
 import { ContractService } from '../services/contract-service.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput, transactionHasInputFromAddress } from '../utils/txVerification.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import {
@@ -26,8 +26,12 @@ import {
   recordActivityEvent,
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { requireWalletAuth, callerAddress } from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
+
 
 const router = Router();
+router.param('id', uuidParam);
 
 const INTERVAL_SECONDS: Record<string, number> = {
   DAILY: 86400,
@@ -95,9 +99,7 @@ router.get('/payments/:id', async (req: Request, res: Response) => {
 
     const history = await db!.prepare('SELECT * FROM payment_executions WHERE payment_id = ? ORDER BY paid_at DESC').all(id);
     const storedEvents = await listActivityEvents('payment', id, 200);
-    const events = storedEvents.length > 0
-      ? storedEvents
-      : buildFallbackPaymentEvents(payment, history);
+    const events = storedEvents;
 
     res.json({
       success: true,
@@ -115,10 +117,11 @@ router.get('/payments/:id', async (req: Request, res: Response) => {
  * POST /api/payments/create
  * Create a new recurring payment
  */
-router.post('/payments/create', async (req: Request, res: Response) => {
+router.post('/payments/create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
+    // Sender is bound to the authenticated wallet — body value ignored (audit C-01/C-02).
+    const sender = req.verifiedUser!.address;
     const {
-      sender,
       recipient,
       recipientName,
       tokenType,
@@ -135,8 +138,8 @@ router.post('/payments/create', async (req: Request, res: Response) => {
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
 
-    if (!sender || !recipient) {
-      return res.status(400).json({ error: 'Sender and recipient are required' });
+    if (!recipient) {
+      return res.status(400).json({ error: 'Recipient is required' });
     }
     if (!amountPerPeriod || amountPerPeriod <= 0) {
       return res.status(400).json({ error: 'Amount must be greater than 0' });
@@ -250,11 +253,10 @@ router.post('/payments/create', async (req: Request, res: Response) => {
  * POST /api/payments/:id/pause
  * Build on-chain pause transaction for recurring payment
  */
-router.post('/payments/:id/pause', async (req: Request, res: Response) => {
+router.post('/payments/:id/pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -310,11 +312,10 @@ router.post('/payments/:id/pause', async (req: Request, res: Response) => {
  * POST /api/payments/:id/resume
  * Build on-chain resume transaction for recurring payment
  */
-router.post('/payments/:id/resume', async (req: Request, res: Response) => {
+router.post('/payments/:id/resume', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -363,11 +364,10 @@ router.post('/payments/:id/resume', async (req: Request, res: Response) => {
  * POST /api/payments/:id/cancel
  * Build on-chain cancel transaction for recurring payment
  */
-router.post('/payments/:id/cancel', async (req: Request, res: Response) => {
+router.post('/payments/:id/cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -418,7 +418,7 @@ router.post('/payments/:id/cancel', async (req: Request, res: Response) => {
  * POST /api/payments/:id/confirm-pause
  * Confirm on-chain pause transaction and update DB state
  */
-router.post('/payments/:id/confirm-pause', async (req: Request, res: Response) => {
+router.post('/payments/:id/confirm-pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
@@ -487,7 +487,7 @@ router.post('/payments/:id/confirm-pause', async (req: Request, res: Response) =
  * POST /api/payments/:id/confirm-resume
  * Confirm on-chain resume transaction and update DB state
  */
-router.post('/payments/:id/confirm-resume', async (req: Request, res: Response) => {
+router.post('/payments/:id/confirm-resume', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
@@ -557,7 +557,7 @@ router.post('/payments/:id/confirm-resume', async (req: Request, res: Response) 
  * POST /api/payments/:id/confirm-cancel
  * Confirm on-chain cancel transaction and update DB state
  */
-router.post('/payments/:id/confirm-cancel', async (req: Request, res: Response) => {
+router.post('/payments/:id/confirm-cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
@@ -712,10 +712,11 @@ router.get('/payments/:id/funding-info', async (req: Request, res: Response) => 
  * POST /api/payments/:id/confirm-funding
  * Confirm payment contract funding
  */
-router.post('/payments/:id/confirm-funding', async (req: Request, res: Response) => {
+router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
@@ -728,6 +729,17 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
         state: 'pending',
         retryable: true,
         errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    // Audit H-07: require the funding tx to consume a UTXO from the caller's
+    // wallet so a third party can't flip status with someone else's tx hash.
+    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
+      return res.status(403).json({
+        error: 'Funding transaction does not include an input from your wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
       });
     }
 
@@ -829,7 +841,7 @@ router.post('/payments/:id/confirm-funding', async (req: Request, res: Response)
  * POST /api/payments/:id/claim
  * Build claim transaction for payment
  */
-router.post('/payments/:id/claim', async (req: Request, res: Response) => {
+router.post('/payments/:id/claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { recipientAddress, signerAddress } = req.body;
@@ -957,7 +969,7 @@ router.post('/payments/:id/claim', async (req: Request, res: Response) => {
  * POST /api/payments/:id/confirm-claim
  * Confirm payment claim
  */
-router.post('/payments/:id/confirm-claim', async (req: Request, res: Response) => {
+router.post('/payments/:id/confirm-claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { claimedAmount, txHash, intervalsClaimed } = req.body;
@@ -981,8 +993,8 @@ router.post('/payments/:id/confirm-claim', async (req: Request, res: Response) =
       return res.status(404).json({ error: 'Payment not found' });
     }
 
-    const callerAddress = (req.headers['x-user-address'] as string || '').toLowerCase();
-    if (callerAddress && payment.recipient && callerAddress !== payment.recipient.toLowerCase()) {
+    const claimerAddress = callerAddress(req).toLowerCase();
+    if (claimerAddress && payment.recipient && claimerAddress !== payment.recipient.toLowerCase()) {
       return res.status(403).json({ error: 'Only the payment recipient can confirm claims' });
     }
 
@@ -1078,107 +1090,6 @@ function normalizePaymentTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN'
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
     : 'BCH';
-}
-
-function buildFallbackPaymentEvents(payment: any, history: any[]): Array<{
-  id: string;
-  entity_type: 'payment';
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  details: null;
-  created_at: number;
-}> {
-  const events: Array<{
-    id: string;
-    entity_type: 'payment';
-    entity_id: string;
-    event_type: string;
-    actor: string | null;
-    amount: number | null;
-    status: string | null;
-    tx_hash: string | null;
-    details: null;
-    created_at: number;
-  }> = [];
-
-  events.push({
-    id: `fallback-payment-created-${payment.id}`,
-    entity_type: 'payment',
-    entity_id: payment.id,
-    event_type: 'created',
-    actor: payment.sender || null,
-    amount: typeof payment.amount_per_period === 'number' ? payment.amount_per_period : null,
-    status: payment.status || null,
-    tx_hash: null,
-    details: null,
-    created_at: Number(payment.created_at || Math.floor(Date.now() / 1000)),
-  });
-
-  if (payment.tx_hash) {
-    events.push({
-      id: `fallback-payment-funded-${payment.id}`,
-      entity_type: 'payment',
-      entity_id: payment.id,
-      event_type: 'funded',
-      actor: payment.sender || null,
-      amount: null,
-      status: payment.status || null,
-      tx_hash: payment.tx_hash,
-      details: null,
-      created_at: Number(payment.updated_at || payment.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (payment.status === 'PAUSED') {
-    events.push({
-      id: `fallback-payment-paused-${payment.id}`,
-      entity_type: 'payment',
-      entity_id: payment.id,
-      event_type: 'paused',
-      actor: payment.sender || null,
-      amount: null,
-      status: 'PAUSED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(payment.updated_at || payment.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (payment.status === 'CANCELLED') {
-    events.push({
-      id: `fallback-payment-cancelled-${payment.id}`,
-      entity_type: 'payment',
-      entity_id: payment.id,
-      event_type: 'cancelled',
-      actor: payment.sender || null,
-      amount: null,
-      status: 'CANCELLED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(payment.updated_at || payment.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  history.forEach((entry: any) => {
-    events.push({
-      id: `fallback-payment-claim-${entry.id}`,
-      entity_type: 'payment',
-      entity_id: payment.id,
-      event_type: 'claim',
-      actor: payment.recipient || null,
-      amount: typeof entry.amount === 'number' ? entry.amount : null,
-      status: payment.status || null,
-      tx_hash: entry.tx_hash || null,
-      details: null,
-      created_at: Number(entry.paid_at || payment.updated_at || payment.created_at || Math.floor(Date.now() / 1000)),
-    });
-  });
-
-  return events.sort((a, b) => b.created_at - a.created_at);
 }
 
 function parsePaymentCommitmentState(commitmentHex: string | null | undefined): {
