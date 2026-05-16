@@ -3,6 +3,7 @@ import {
   cashAddressToLockingBytecode,
   decodeTransaction,
   hexToBin,
+  binToHex,
 } from '@bitauth/libauth';
 
 const providers: Partial<Record<string, ElectrumNetworkProvider>> = {};
@@ -136,6 +137,68 @@ export async function transactionHasExpectedOutput(
       }
 
       return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Audit H-07. Verify that the transaction's inputs spend at least one UTXO
+ * that locks to the declared funder's P2PKH address. Without this check,
+ * `confirm-funding` would accept any tx whose *output* matches the contract,
+ * letting a third party "confirm" funding for a campaign they didn't fund.
+ *
+ * Implementation note: the funder address could in principle spend non-P2PKH
+ * inputs (e.g., from a SmartBCH-style contract), but the platform only
+ * supports P2PKH wallets today, so we don't need to reach beyond that.
+ *
+ * Returns false on any decode/network error so callers fail closed.
+ */
+export async function transactionHasInputFromAddress(
+  txHash: string,
+  funderAddress: string,
+  network: 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet' = 'chipnet',
+): Promise<boolean> {
+  try {
+    const provider = getProvider(network);
+    const rawTx = await provider.getRawTransaction(txHash);
+    const txHex = asTransactionHex(rawTx);
+    if (!txHex) return false;
+
+    const decoded = decodeTransaction(hexToBin(txHex)) as any;
+    const inputs = Array.isArray(decoded?.inputs) ? decoded.inputs : [];
+    if (!inputs.length) return false;
+
+    const expectedLockingResult = cashAddressToLockingBytecode(funderAddress);
+    if (typeof expectedLockingResult === 'string') return false;
+    const expectedLocking = expectedLockingResult.bytecode;
+    const expectedHex = binToHex(expectedLocking);
+
+    // Each input is identified by (outpointTransactionHash, outpointIndex).
+    // Resolve each input's prevout to inspect its locking bytecode.
+    for (const input of inputs) {
+      const prevTxHash: Uint8Array | undefined = input.outpointTransactionHash;
+      const prevTxIndex: number | undefined = input.outpointIndex;
+      if (!prevTxHash || prevTxIndex === undefined) continue;
+
+      // libauth stores outpointTransactionHash in big-endian wire order;
+      // reverse for the human/RPC txid representation.
+      const txidLittleEndian = binToHex(prevTxHash.slice().reverse());
+      try {
+        const prevRaw = await provider.getRawTransaction(txidLittleEndian);
+        const prevHex = asTransactionHex(prevRaw);
+        if (!prevHex) continue;
+        const prevDecoded = decodeTransaction(hexToBin(prevHex)) as any;
+        const prevOutput = Array.isArray(prevDecoded?.outputs) ? prevDecoded.outputs[prevTxIndex] : undefined;
+        if (!prevOutput) continue;
+        const prevHexLocking = binToHex(prevOutput.lockingBytecode);
+        if (prevHexLocking === expectedHex) return true;
+      } catch {
+        continue;
+      }
     }
 
     return false;
