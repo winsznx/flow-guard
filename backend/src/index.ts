@@ -19,29 +19,78 @@ import governanceRouter from './api/governance.js';
 import explorerRouter from './api/explorer.js';
 import explorerAdvancedRouter from './api/explorer-advanced.js';
 import adminRouter from './api/admin.js';
+import authRouter from './api/auth.js';
 import { initializeSchema } from './database/init.js';
 import { startBlockchainMonitor, stopBlockchainMonitor } from './services/blockchain-monitor.js';
 import { startCycleUnlockScheduler, stopCycleUnlockScheduler } from './services/cycle-unlock-scheduler.js';
 import { startTransactionMonitor, stopTransactionMonitor } from './services/TransactionMonitor.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { generalLimiter, strictLimiter, queryLimiter } from './middleware/rateLimiter.js';
+import { requestLogger } from './middleware/requestLogger.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
-// CORS configuration - Allow all Vercel deployments
+// Trust first proxy (Vercel / Railway / nginx) so rate-limit + req.ip see real client addresses.
+// Must be set BEFORE route/middleware registration.
+app.set('trust proxy', 1);
+
+// CORS allowlist — explicit. Wildcard reflection + credentials is a cross-site takeover vector.
+// Configure via CORS_ALLOWED_ORIGINS (comma-separated). Supports exact match and *.host wildcard patterns.
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://flowguard.cash',
+  'https://www.flowguard.cash',
+  'https://docs.flowguard.cash',
+  'https://*.vercel.app',
+];
+const allowedOriginsConfig = (process.env.CORS_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(','))
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const allowLocalhostInDev = process.env.NODE_ENV !== 'production';
+
+function originAllowed(origin: string): boolean {
+  if (allowLocalhostInDev && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return true;
+  }
+  return allowedOriginsConfig.some((pattern) => {
+    if (pattern === origin) return true;
+    if (pattern.startsWith('https://*.')) {
+      const suffix = pattern.slice('https://*.'.length);
+      return origin.startsWith('https://') && origin.endsWith(`.${suffix}`);
+    }
+    return false;
+  });
+}
+
 app.use(cors({
-  origin: true, // Allow all origins for now (can restrict later)
+  origin: (origin, callback) => {
+    // Same-origin / curl / server-side: no Origin header — allow; nothing to leak cross-site.
+    if (!origin) return callback(null, true);
+    if (originAllowed(origin)) return callback(null, true);
+    return callback(new Error(`Origin not allowed: ${origin}`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-address', 'x-signer-public-key'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-user-address',
+    'x-signer-public-key',
+    'x-signed-nonce',
+    'x-nonce-id',
+  ],
   exposedHeaders: ['Content-Length', 'Content-Type'],
-  maxAge: 86400, // 24 hours
-  optionsSuccessStatus: 200
+  maxAge: 86400,
+  optionsSuccessStatus: 200,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+// Structured access logs + per-request correlation ID (also surfaced as
+// `x-request-id` response header so customers can quote it in support tickets).
+app.use(requestLogger);
 
 // Apply rate limiting globally
 app.use('/api', generalLimiter);
@@ -67,6 +116,7 @@ app.get('/api/admin/export', strictLimiter);
 // Apply query rate limiting to read-only endpoints
 app.use('/api/explorer', queryLimiter);
 
+app.use('/api', authRouter); // Nonce issuance — no auth required
 app.use('/api/vaults', vaultsRouter);
 app.use('/api', budgetPlansRouter); // Register BEFORE proposals to avoid route conflicts
 app.use('/api', cyclesRouter);
