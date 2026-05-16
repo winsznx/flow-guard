@@ -121,6 +121,16 @@ export function blockchainError(message: string, details?: any): AppError {
 }
 
 /**
+ * When true, non-AppError messages are passed through to the client.
+ * Gated to explicit non-production environments so a misconfigured `NODE_ENV`
+ * (empty string, "Production", whitespace) defaults to the safer behaviour.
+ */
+function isVerboseErrorMode(): boolean {
+  const env = (process.env.NODE_ENV || '').trim().toLowerCase();
+  return env === 'development' || env === 'test' || env === 'dev';
+}
+
+/**
  * Global error handler middleware
  * Must be registered AFTER all routes
  */
@@ -130,7 +140,7 @@ export function errorHandler(
   res: Response,
   next: NextFunction
 ) {
-  // Log error
+  // Log error server-side with full detail; response to client is redacted in prod.
   console.error('[ERROR]', {
     path: req.path,
     method: req.method,
@@ -139,7 +149,9 @@ export function errorHandler(
     timestamp: new Date().toISOString(),
   });
 
-  // Handle AppError
+  const verbose = isVerboseErrorMode();
+
+  // Handle AppError — explicitly constructed, message is already safe to show.
   if (err instanceof AppError) {
     const response: ErrorResponse = {
       error: err.code,
@@ -152,36 +164,38 @@ export function errorHandler(
     return res.status(err.statusCode).json(response);
   }
 
-  // Handle known error types
-  if (err.message.includes('not found')) {
+  // Unknown errors leak raw driver messages, file paths, and schema detail.
+  // In prod we return only a generic error; in dev we include the message.
+  const rawMessage = err.message || '';
+
+  if (rawMessage.includes('not found')) {
     return res.status(404).json({
       error: ErrorCode.NOT_FOUND,
-      message: err.message,
+      message: verbose ? rawMessage : 'Resource not found',
       timestamp: Date.now(),
     });
   }
 
-  if (err.message.includes('insufficient') || err.message.includes('balance')) {
+  if (rawMessage.includes('insufficient') || rawMessage.includes('balance')) {
     return res.status(500).json({
       error: ErrorCode.INSUFFICIENT_FUNDS,
-      message: err.message,
+      message: verbose ? rawMessage : 'Insufficient funds or balance',
       timestamp: Date.now(),
     });
   }
 
-  if (err.message.includes('UTXO') || err.message.includes('utxo')) {
+  if (rawMessage.includes('UTXO') || rawMessage.includes('utxo')) {
     return res.status(500).json({
       error: ErrorCode.UTXO_NOT_FOUND,
-      message: err.message,
+      message: verbose ? rawMessage : 'UTXO unavailable',
       timestamp: Date.now(),
     });
   }
 
-  // Generic internal server error
   return res.status(500).json({
     error: ErrorCode.INTERNAL_ERROR,
     message: 'An unexpected error occurred',
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    details: verbose ? rawMessage : undefined,
     timestamp: Date.now(),
   });
 }
@@ -249,4 +263,33 @@ export function validateUUID(id: string): void {
   if (!uuidRegex.test(id)) {
     throw validationError('Invalid ID format', { id });
   }
+}
+
+/**
+ * Express `router.param` handler — rejects requests with malformed UUIDs
+ * before they touch the database. Use as `router.param('id', uuidParam)`
+ * (or any other declared param name) to short-circuit dead lookups.
+ *
+ * Audit L-02: previously every handler that consumed `req.params.id` would
+ * pass the raw value to a Postgres `WHERE id = $1` query. Postgres rejects
+ * malformed UUIDs with a driver error that bubbled back as a 500. This guard
+ * gives clients a deterministic 400 instead.
+ */
+export function uuidParam(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  value: string,
+): void {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(value)) {
+    res.status(400).json({
+      error: ErrorCode.INVALID_INPUT,
+      message: 'Path parameter must be a UUID',
+      details: { value },
+      timestamp: Date.now(),
+    });
+    return;
+  }
+  next();
 }
