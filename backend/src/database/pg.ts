@@ -10,11 +10,43 @@
  * Placeholders: use `$1`, `$2`, ... (Postgres native), not `?`.
  */
 
+import { readFileSync } from 'node:fs';
 import { Pool, types, type PoolClient, type QueryResult } from 'pg';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error('DATABASE_URL env var is required');
+}
+
+/**
+ * TLS config for the Postgres pool.
+ *
+ * Pre-audit behaviour: `ssl: { rejectUnauthorized: false }` silently accepted
+ * any cert, allowing on-path attackers (or cloud-platform operators) to MITM
+ * the DB connection without triggering any error (audit M-04).
+ *
+ * New default: require cert validation. Operators may pin a CA via
+ * `PG_SSL_CA_PATH` (file) or `PG_SSL_CA_PEM` (inline). Certificate validation
+ * can only be disabled by setting `PG_SSL_INSECURE=true` — explicitly, loudly,
+ * and intentionally.
+ */
+function buildSslConfig(): false | { rejectUnauthorized: boolean; ca?: string } {
+  if ((process.env.PG_SSL_DISABLED || '').toLowerCase() === 'true') {
+    return false;
+  }
+
+  const caPath = process.env.PG_SSL_CA_PATH?.trim();
+  const caInline = process.env.PG_SSL_CA_PEM?.trim();
+  const insecure = (process.env.PG_SSL_INSECURE || '').toLowerCase() === 'true';
+
+  let ca: string | undefined;
+  if (caPath) {
+    ca = readFileSync(caPath, 'utf8');
+  } else if (caInline) {
+    ca = caInline;
+  }
+
+  return { rejectUnauthorized: !insecure, ...(ca ? { ca } : {}) };
 }
 
 // Parse BIGINT (OID 20) as Number. Safe for COUNT(*) results and our
@@ -27,7 +59,7 @@ types.setTypeParser(1700, (value) => (value === null ? null : parseFloat(value))
 
 export const pool = new Pool({
   connectionString,
-  ssl: { rejectUnauthorized: false },
+  ssl: buildSslConfig(),
   max: Number(process.env.PG_POOL_SIZE ?? 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
