@@ -4,7 +4,7 @@
  * Uses Zustand for global state management
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import {
   WalletType,
@@ -20,6 +20,11 @@ import { createWalletConnector, MainnetConnector } from '../connectors';
 let activeEventConnector: IWalletConnector | null = null;
 let activeAddressChangedHandler: ((data?: any) => void) | null = null;
 let activeDisconnectHandler: ((data?: any) => void) | null = null;
+
+// Module-level lock — guarantees init runs at most once per page load,
+// even if the hook re-mounts, state cascades, or dependency references shift.
+// Survives all React re-renders because it lives outside the component tree.
+let initFiredOnce = false;
 
 // Global state store using Zustand
 interface WalletStore extends WalletState {
@@ -315,45 +320,52 @@ export function useWallet() {
     setInitAttempted,
   } = useWalletStore();
 
+  // Stable refs to Zustand actions so the init effect's deps stay empty.
+  // (Zustand actions are referentially stable, but we ref them anyway to make
+  // the contract explicit and prevent future regressions.)
+  const connectRef = useRef(connect);
+  const setInitAttemptedRef = useRef(setInitAttempted);
+  connectRef.current = connect;
+  setInitAttemptedRef.current = setInitAttempted;
+
   /**
-   * Initialize wallet from localStorage on mount (only once globally)
+   * Initialize wallet from localStorage exactly once per page load.
+   *
+   * Guarded by a module-level boolean so React re-mounts / state cascades
+   * cannot retrigger the reconnect flow. Without this guard, every state
+   * change (isConnected → true, etc.) would re-run the effect and call
+   * connect() again, causing the WalletConnect Core re-init loop.
    */
   useEffect(() => {
-    // CRITICAL: Use global flag from Zustand store, not local ref
-    if (initAttempted) {
-      console.log('[useWallet] Init already attempted, skipping...');
+    if (initFiredOnce) {
       return;
     }
+    initFiredOnce = true;
 
     const savedWalletType = localStorage.getItem('wallet_type') as WalletType | null;
     const savedAddress = localStorage.getItem('wallet_address');
     const connectedAt = Number(localStorage.getItem('wallet_connected_at') || '0');
     const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    const sessionExpired = connectedAt > 0 && Date.now() - connectedAt > SESSION_MAX_AGE_MS;
 
-    if (!savedWalletType || !savedAddress || (connectedAt > 0 && Date.now() - connectedAt > SESSION_MAX_AGE_MS)) {
-      if (connectedAt > 0 && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
+    if (!savedWalletType || !savedAddress || sessionExpired) {
+      if (sessionExpired) {
         localStorage.removeItem('wallet_type');
         localStorage.removeItem('wallet_address');
         localStorage.removeItem('wallet_publickey');
         localStorage.removeItem('wallet_connected_at');
       }
       console.log('[useWallet] No saved wallet found or session expired');
-      setInitAttempted(true);
-      return;
-    }
-
-    if (isConnectingRef) {
-      console.log('[useWallet] Connection already in progress, skipping init...');
+      setInitAttemptedRef.current(true);
       return;
     }
 
     let cancelled = false;
 
     const initWallet = async () => {
-      if (cancelled) return;
       console.log('[useWallet] Reconnecting saved wallet...', savedWalletType);
       try {
-        await connect(savedWalletType);
+        await connectRef.current(savedWalletType);
       } catch (error) {
         if (cancelled) return;
         console.error('[useWallet] Failed to reconnect wallet:', error);
@@ -364,20 +376,23 @@ export function useWallet() {
 
         if (isTransientWalletConnectError) {
           console.warn('[useWallet] WalletConnect reconnect failed transiently; preserving saved session metadata');
+          // Reset the lock so a manual reconnect attempt can fire
+          initFiredOnce = false;
           return;
         }
 
         localStorage.removeItem('wallet_type');
         localStorage.removeItem('wallet_address');
       } finally {
-        if (!cancelled) setInitAttempted(true);
+        if (!cancelled) setInitAttemptedRef.current(true);
       }
     };
 
     initWallet();
 
     return () => { cancelled = true; };
-  }, [initAttempted, isConnectingRef, connect, setInitAttempted]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Listen for wallet events (address changes, disconnection)

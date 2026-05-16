@@ -222,8 +222,6 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    */
   async connect(): Promise<WalletInfo> {
     try {
-      console.log('[Web3ModalWC] Initializing WalletConnect...');
-
       // Validate project ID
       if (!WALLETCONNECT_PROJECT_ID || WALLETCONNECT_PROJECT_ID === 'demo-project-id') {
         throw new Error(
@@ -234,18 +232,24 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
         );
       }
 
-      // Initialize SignClient
-      this.client = await SignClient.init({
-        projectId: WALLETCONNECT_PROJECT_ID,
-        metadata: {
-          name: 'FlowGuard',
-          description: 'BCH-native treasuries, streams, payments, and governance',
-          url: window.location.origin,
-          icons: [`${window.location.origin}/favicon.svg`],
-        },
-      });
-
-      console.log('[Web3ModalWC] SignClient initialized');
+      // Reuse existing SignClient if already initialized. Re-initializing
+      // creates a new WalletConnect Core, leaks event listeners, and
+      // accumulates relayer subscriptions every call.
+      if (this.client) {
+        console.log('[Web3ModalWC] Reusing existing SignClient');
+      } else {
+        console.log('[Web3ModalWC] Initializing WalletConnect...');
+        this.client = await SignClient.init({
+          projectId: WALLETCONNECT_PROJECT_ID,
+          metadata: {
+            name: 'FlowGuard',
+            description: 'BCH-native treasuries, streams, payments, and governance',
+            url: window.location.origin,
+            icons: [`${window.location.origin}/favicon.svg`],
+          },
+        });
+        console.log('[Web3ModalWC] SignClient initialized');
+      }
 
       // Check for existing sessions
       const existingSessions = this.client.session.getAll();
@@ -624,31 +628,56 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
     );
   }
 
+  // In-memory balance cache. Prevents back-to-back fetches from spamming
+  // the rate-limited backend when reconnect/init effects race.
+  private balanceCache: { address: string; value: WalletBalance; expiresAt: number } | null = null;
+  private balanceInFlight: Promise<WalletBalance> | null = null;
+
   /**
-   * Get wallet balance via backend API
+   * Get wallet balance via backend API. Cached for 10s per address;
+   * concurrent callers share the same in-flight promise.
    */
   async getBalance(): Promise<WalletBalance> {
     if (!this.currentAddress) {
       return { bch: 0, sat: 0 };
     }
 
-    try {
-      const response = await fetch(
-        `/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`
-      );
-      if (!response.ok) {
-        console.warn('[Web3ModalWC] Balance API returned error:', response.status);
-        return { bch: 0, sat: 0 };
-      }
-      const data = await response.json();
-      return {
-        sat: data.sat || 0,
-        bch: data.bch || 0,
-      };
-    } catch (error) {
-      console.error('[Web3ModalWC] Failed to fetch balance:', error);
-      return { bch: 0, sat: 0 };
+    const address = this.currentAddress;
+    const now = Date.now();
+    if (
+      this.balanceCache
+      && this.balanceCache.address === address
+      && this.balanceCache.expiresAt > now
+    ) {
+      return this.balanceCache.value;
     }
+
+    if (this.balanceInFlight) {
+      return this.balanceInFlight;
+    }
+
+    this.balanceInFlight = (async () => {
+      try {
+        const response = await fetch(
+          `/api/wallet/balance/${encodeURIComponent(address)}`
+        );
+        if (!response.ok) {
+          console.warn('[Web3ModalWC] Balance API returned error:', response.status);
+          return { bch: 0, sat: 0 };
+        }
+        const data = await response.json();
+        const value: WalletBalance = { sat: data.sat || 0, bch: data.bch || 0 };
+        this.balanceCache = { address, value, expiresAt: Date.now() + 10_000 };
+        return value;
+      } catch (error) {
+        console.error('[Web3ModalWC] Failed to fetch balance:', error);
+        return { bch: 0, sat: 0 };
+      } finally {
+        this.balanceInFlight = null;
+      }
+    })();
+
+    return this.balanceInFlight;
   }
 
   /**
