@@ -77,9 +77,10 @@ temp/
 render.yaml
 fly.toml
 
-# Migration-specific artifacts (sensitive — contain connection strings / keys / user data)
-docs/AUDIT_FINDINGS.md
-docs/guides/data-export.md
+# Sensitive / internal-only docs (audit notes, remediation logs, runbooks, drafts)
+docs/internal/
+
+# Migration-specific scripts (sensitive — contain connection strings / keys / user data)
 backend/scripts/test-supabase.mjs
 backend/scripts/apply-schema.mjs
 backend/scripts/import-sqlite-to-pg.mjs
