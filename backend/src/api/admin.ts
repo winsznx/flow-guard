@@ -4,9 +4,72 @@
  */
 
 import os from 'node:os';
+import { timingSafeEqual } from 'node:crypto';
 import { Router, Request, Response } from 'express';
 import { ElectrumNetworkProvider } from 'cashscript';
 import db from '../database/schema.js';
+
+/**
+ * Tables allowed in /admin/export and /admin/export/summary.
+ * Allowlist is the SOLE authority on what the dump contains — even if
+ * information_schema returns anything else, we refuse to include it.
+ * Column-level redaction (e.g., *_privkey) is applied below.
+ */
+const EXPORT_TABLE_ALLOWLIST: ReadonlySet<string> = new Set([
+  'activity_events',
+  'airdrops',
+  'airdrop_claims',
+  'bounties',
+  'bounty_claims',
+  'budget_plans',
+  'cycles',
+  'governance_proposals',
+  'governance_votes',
+  'grants',
+  'grant_claims',
+  'payments',
+  'payment_claims',
+  'proposals',
+  'proposal_execution_sessions',
+  'rewards',
+  'reward_claims',
+  'streams',
+  'stream_batches',
+  'stream_claims',
+  'transactions',
+  'vaults',
+  'vote_locks',
+]);
+
+/**
+ * Column names we NEVER emit in plaintext. Matches any column that contains a
+ * substring; redacted to the literal string "[REDACTED]".
+ */
+const REDACTED_COLUMN_SUBSTRINGS: readonly string[] = [
+  'privkey',
+  'private_key',
+  'secret',
+  'encryption_key',
+];
+
+function isRedactedColumn(columnName: string): boolean {
+  const lower = columnName.toLowerCase();
+  return REDACTED_COLUMN_SUBSTRINGS.some((needle) => lower.includes(needle));
+}
+
+/**
+ * Constant-time comparison over equal-length byte buffers. Short-circuit on
+ * length mismatch since timingSafeEqual throws on differing lengths.
+ */
+function safeTokenEqual(provided: string, expected: string): boolean {
+  if (typeof provided !== 'string' || typeof expected !== 'string') return false;
+  if (provided.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(expected, 'utf8'));
+  } catch {
+    return false;
+  }
+}
 
 const router = Router();
 
@@ -285,7 +348,7 @@ router.get('/admin/export', async (req: Request, res: Response) => {
   }
 
   const providedToken = req.headers['x-admin-token'];
-  if (providedToken !== expectedToken) {
+  if (typeof providedToken !== 'string' || !safeTokenEqual(providedToken, expectedToken)) {
     return res.status(401).json({
       success: false,
       error: 'Unauthorized',
@@ -298,13 +361,19 @@ router.get('/admin/export', async (req: Request, res: Response) => {
       .prepare(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`)
       .all() as Array<{ table_name: string }>;
 
+    const eligibleTables = tableRowsResult.filter(({ table_name }) => EXPORT_TABLE_ALLOWLIST.has(table_name));
     const tables: Record<string, { rowCount: number; rows: any[] }> = {};
 
-    for (const { table_name } of tableRowsResult) {
+    for (const { table_name } of eligibleTables) {
+      // table_name is allowlist-checked; safe to embed as a double-quoted identifier.
       const rows = await db!.prepare(`SELECT * FROM "${table_name}"`).all() as any[];
       const serialized = rows.map((row) => {
         const out: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(row)) {
+          if (isRedactedColumn(key)) {
+            out[key] = '[REDACTED]';
+            continue;
+          }
           if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
             out[key] = { __type: 'bytes', hex: Buffer.from(value).toString('hex') };
           } else if (typeof value === 'bigint') {
@@ -323,15 +392,21 @@ router.get('/admin/export', async (req: Request, res: Response) => {
       };
     }
 
+    const skippedTables = tableRowsResult
+      .filter(({ table_name }) => !EXPORT_TABLE_ALLOWLIST.has(table_name))
+      .map(({ table_name }) => table_name);
+
     const totalRows = Object.values(tables).reduce((sum, t) => sum + t.rowCount, 0);
 
     res.setHeader('Content-Disposition', `attachment; filename="flowguard-export-${Date.now()}.json"`);
     res.json({
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
       engine: 'postgres',
-      totalTables: tableRowsResult.length,
+      totalTables: eligibleTables.length,
       totalRows,
+      skippedTables,
+      redactedColumns: REDACTED_COLUMN_SUBSTRINGS,
       tables,
     });
   } catch (error: any) {
@@ -339,7 +414,6 @@ router.get('/admin/export', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Export failed',
-      message: error.message,
     });
   }
 });
@@ -360,7 +434,7 @@ router.get('/admin/export/summary', async (req: Request, res: Response) => {
   }
 
   const providedToken = req.headers['x-admin-token'];
-  if (providedToken !== expectedToken) {
+  if (typeof providedToken !== 'string' || !safeTokenEqual(providedToken, expectedToken)) {
     return res.status(401).json({
       success: false,
       error: 'Unauthorized',
@@ -372,7 +446,10 @@ router.get('/admin/export/summary', async (req: Request, res: Response) => {
       .prepare(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`)
       .all() as Array<{ name: string }>;
 
-    const summary = await Promise.all(tableRows.map(async ({ name }) => {
+    const eligibleTables = tableRows.filter(({ name }) => EXPORT_TABLE_ALLOWLIST.has(name));
+
+    const summary = await Promise.all(eligibleTables.map(async ({ name }) => {
+      // name is allowlist-checked; safe to embed as a double-quoted identifier.
       const row = await db!.prepare(`SELECT COUNT(*) as count FROM "${name}"`).get() as { count?: number };
       return { table: name, rowCount: Number(row?.count ?? 0) };
     }));
@@ -385,13 +462,15 @@ router.get('/admin/export/summary', async (req: Request, res: Response) => {
       totalTables: summary.length,
       totalRows,
       tables: summary,
+      skippedTables: tableRows
+        .filter(({ name }) => !EXPORT_TABLE_ALLOWLIST.has(name))
+        .map(({ name }) => name),
     });
   } catch (error: any) {
     console.error('[admin/export/summary] Failed:', error);
     res.status(500).json({
       success: false,
       error: 'Summary failed',
-      message: error.message,
     });
   }
 });
