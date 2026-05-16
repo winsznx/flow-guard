@@ -153,11 +153,31 @@ export class VaultService {
   }
 
   static async getUserVaults(userAddress: string): Promise<Vault[]> {
-    const stmt = db!.prepare(`
-      SELECT * FROM vaults
-      WHERE creator = ? OR signers LIKE ?
-    `);
-    const rows = await stmt.all(userAddress, `%${userAddress}%`) as any[];
+    // Audit M-10: pre-fix used `signers LIKE '%userAddress%'` which matched any
+    // vault whose signer list contained `userAddress` as a substring. A caller
+    // querying with a suffix of another user's BCH address would surface vaults
+    // they should not see. We now fetch by creator only at the DB layer and
+    // filter exact signer membership in JS using the JSON-encoded signer list.
+    const asCreator = await db!
+      .prepare('SELECT * FROM vaults WHERE creator = ?')
+      .all(userAddress) as any[];
+    const candidateSigners = await db!
+      .prepare("SELECT * FROM vaults WHERE signers LIKE ?")
+      .all(`%${JSON.stringify(userAddress).slice(1, -1)}%`) as any[];
+
+    const exactSignerMatches = candidateSigners.filter((row) => {
+      try {
+        const parsed = JSON.parse(row.signers);
+        if (!Array.isArray(parsed)) return false;
+        return parsed.some((s) => typeof s === 'string' && s.toLowerCase() === userAddress.toLowerCase());
+      } catch {
+        return false;
+      }
+    });
+
+    const merged = new Map<string, any>();
+    for (const row of [...asCreator, ...exactSignerMatches]) merged.set(row.id, row);
+    const rows = Array.from(merged.values());
 
     return rows.map(row => ({
       id: row.id,
