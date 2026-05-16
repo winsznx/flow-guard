@@ -7,6 +7,7 @@ import { VoteLockService } from '../services/VoteLockService.js';
 import { VoteUnlockService } from '../services/VoteUnlockService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
 
 const router = Router();
 
@@ -51,7 +52,7 @@ router.get('/vaults/:vaultId/governance', async (req, res) => {
 // Create a governance proposal
 router.post('/vaults/:vaultId/governance', async (req, res) => {
   try {
-    const userAddress = req.headers['x-user-address'] as string;
+    const userAddress = callerAddress(req);
     if (!userAddress) return res.status(401).json({ error: 'Authentication required' });
 
     const vault = await VaultService.getVaultByVaultId(req.params.vaultId);
@@ -89,41 +90,26 @@ router.get('/governance/:proposalId', async (req, res) => {
   }
 });
 
-// Cast a vote
-router.post('/governance/:proposalId/vote', async (req, res) => {
-  try {
-    const userAddress = req.headers['x-user-address'] as string;
-    if (!userAddress) return res.status(401).json({ error: 'Authentication required' });
-
-    const proposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
-    if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
-    if (proposal.status !== 'ACTIVE') return res.status(400).json({ error: 'Proposal is not active' });
-
-    const { vote, weight } = req.body;
-    if (!['FOR', 'AGAINST', 'ABSTAIN'].includes(vote)) {
-      return res.status(400).json({ error: 'vote must be FOR, AGAINST, or ABSTAIN' });
-    }
-
-    const voteWeight = Number(weight) || 1;
-    const voteId = randomUUID();
-
-    await db!.prepare(`
-      INSERT INTO governance_votes (id, proposal_id, voter, vote, weight)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(voteId, req.params.proposalId, userAddress, vote, voteWeight);
-
-    // Update tally
-    const tallyCol = vote === 'FOR' ? 'votes_for' : vote === 'AGAINST' ? 'votes_against' : 'votes_abstain';
-    await db!.prepare(`UPDATE governance_proposals SET ${tallyCol} = ${tallyCol} + ?, updated_at = NOW()::TEXT WHERE id = ?`).run(voteWeight, req.params.proposalId);
-
-    const updatedProposal = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
-    res.json(rowToProposal(updatedProposal));
-  } catch (error: any) {
-    if (error.message?.includes('UNIQUE constraint')) {
-      return res.status(409).json({ error: 'Already voted on this proposal' });
-    }
-    res.status(500).json({ error: error.message });
-  }
+// Off-chain vote endpoint was removed (audit C-04 / H-01).
+//
+// The old POST /governance/:proposalId/vote accepted an arbitrary caller-
+// supplied `weight` and incremented tally columns directly from the request
+// body. That gave any unauthenticated caller full control over every
+// governance outcome. Legitimate voting now goes through:
+//   1. POST /governance/:proposalId/lock         — deploys the on-chain lock
+//   2. POST /governance/:proposalId/confirm-lock — verifies the on-chain UTXO
+//      and tallies weight server-side based on the *observed* locked amount.
+//
+// We return 410 Gone so clients surface a clear deprecation signal rather
+// than silently failing.
+router.post('/governance/:proposalId/vote', (_req, res) => {
+  res.status(410).json({
+    error: 'Endpoint removed',
+    message:
+      'Off-chain voting was removed because vote weight was attacker-controlled. '
+      + 'Use POST /governance/:proposalId/lock followed by /confirm-lock for weighted voting.',
+    code: 'ENDPOINT_REMOVED',
+  });
 });
 
 /**
@@ -200,24 +186,46 @@ router.post('/governance/:proposalId/lock', async (req, res) => {
 /**
  * POST /api/governance/:proposalId/confirm-lock
  * Confirm vote lock transaction
+ *
+ * Hardened: identity comes from the verified wallet auth; the caller no longer
+ * supplies the contract address or constructor params — those are recomputed
+ * from the stored vote-lock deployment so a poisoned client request cannot
+ * steer unlock flows against an attacker-chosen contract (audit M-03).
  */
-router.post('/governance/:proposalId/confirm-lock', async (req, res) => {
+router.post('/governance/:proposalId/confirm-lock', requireWalletAuth, async (req, res) => {
   try {
-    const { voterAddress, voteChoice, weight, txHash, contractAddress, voteId: deployedVoteId, constructorParams, nftCommitment } = req.body;
+    const voterAddress = req.verifiedUser!.address;
+    const { voteChoice, weight, txHash } = req.body;
     const voteWeight = Math.max(1, Math.trunc(Number(weight || 1)));
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!voterAddress) {
-      return res.status(400).json({ error: 'Voter address is required' });
-    }
-    if (!contractAddress) {
-      return res.status(400).json({ error: 'Vote lock contract address is required' });
-    }
     if (!['ABSTAIN', 'FOR', 'AGAINST'].includes(String(voteChoice))) {
       return res.status(400).json({ error: 'Vote choice must be ABSTAIN, FOR, or AGAINST' });
     }
+
+    // Contract data MUST come from server-side state, not client input.
+    // We re-run the deployment to recover contract address + constructor params
+    // deterministically from (proposalId, voter, voteChoice, weight, votingPeriodEnd).
+    const proposalForDeploy = await db!.prepare('SELECT * FROM governance_proposals WHERE id = ?').get(req.params.proposalId) as any;
+    if (!proposalForDeploy) {
+      return res.status(404).json({ error: 'Proposal not found' });
+    }
+    const votingPeriodEndForDeploy = Math.floor(new Date(proposalForDeploy.voting_ends_at).getTime() / 1000);
+    const deploymentService = new VoteDeploymentService('chipnet');
+    const deployment = await deploymentService.deployVoteLock({
+      proposalId: req.params.proposalId,
+      voter: voterAddress,
+      voteChoice: voteChoice as 'ABSTAIN' | 'FOR' | 'AGAINST',
+      stakeAmount: voteWeight,
+      votingPeriodEnd: votingPeriodEndForDeploy,
+      tokenCategory: req.body.tokenCategory,
+    });
+    const contractAddress = deployment.contractAddress;
+    const deployedVoteId = deployment.voteId;
+    const constructorParams = deployment.constructorParams;
+    const nftCommitment = deployment.initialCommitment;
 
     if (!(await transactionExists(txHash, 'chipnet'))) {
       return res.status(409).json({

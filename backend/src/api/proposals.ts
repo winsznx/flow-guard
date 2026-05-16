@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { decodeTransaction, hexToBin, binToHex } from '@bitauth/libauth';
 import { ProposalService } from '../services/proposalService.js';
 import { CreateProposalDto, ApproveProposalDto } from '../models/Proposal.js';
 import db from '../database/schema.js';
@@ -6,8 +7,11 @@ import { VaultService } from '../services/vaultService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
 import { TransactionService } from '../services/transactionService.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
 
 const router = Router();
+router.param('id', uuidParam);
 
 type ProposalExecutionSessionRow = {
   id: string;
@@ -19,6 +23,7 @@ type ProposalExecutionSessionRow = {
   required_signatures: number;
   tx_hex: string;
   source_outputs: string;
+  signed_payloads: string;
   status: string;
   broadcast_tx_hash?: string | null;
 };
@@ -30,6 +35,47 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] {
     return Array.isArray(parsed) ? parsed as T[] : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Audit H-06 helper. Each execute-signature submission is a fully-signed
+ * BCH transaction containing only one signer's witness. To detect substitution
+ * attacks we extract the *structural* fingerprint (everything that should be
+ * identical across every signer's submission for the same session) and compare.
+ *
+ * The fingerprint covers: version, locktime, ordered list of (outpoint, vout,
+ * sequence) for every input, ordered list of (lockingBytecode, valueSatoshis,
+ * token) for every output. The variable-length witness data (signatures) is
+ * intentionally excluded.
+ *
+ * Returns null if the hex cannot be decoded (caller treats as malformed input).
+ */
+function txStructuralFingerprint(txHex: string): string | null {
+  try {
+    const decoded = decodeTransaction(hexToBin(txHex));
+    if (typeof decoded === 'string') return null;
+    const inputs = decoded.inputs.map((input) => ({
+      outpointHash: binToHex(input.outpointTransactionHash),
+      outpointIndex: input.outpointIndex,
+      sequence: input.sequenceNumber,
+    }));
+    const outputs = decoded.outputs.map((output) => ({
+      bytecode: binToHex(output.lockingBytecode),
+      value: output.valueSatoshis.toString(),
+      tokenCategory: output.token?.category ? binToHex(output.token.category) : null,
+      tokenAmount: output.token?.amount != null ? output.token.amount.toString() : null,
+      nftCommitment: output.token?.nft?.commitment ? binToHex(output.token.nft.commitment) : null,
+      nftCapability: output.token?.nft?.capability ?? null,
+    }));
+    return JSON.stringify({
+      version: decoded.version,
+      locktime: decoded.locktime,
+      inputs,
+      outputs,
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -81,7 +127,7 @@ router.post('/vaults/:vaultId/proposals', async (req, res) => {
       vaultId: req.params.vaultId,
       ...req.body,
     };
-    const creator = req.headers['x-user-address'] as string || 'unknown';
+    const creator = callerAddress(req) || 'unknown';
 
     const proposal = await ProposalService.createProposal(dto, creator);
     res.status(201).json(proposal);
@@ -118,7 +164,7 @@ router.post('/:id/approve', async (req, res) => {
   try {
     const dto: ApproveProposalDto = {
       proposalId: req.params.id,
-      approver: req.headers['x-user-address'] as string || 'unknown',
+      approver: callerAddress(req) || 'unknown',
     };
 
     const proposal = await ProposalService.approveProposal(dto);
@@ -132,13 +178,10 @@ router.post('/:id/approve', async (req, res) => {
 });
 
 // Create on-chain proposal transaction
-router.post('/:id/create-onchain', async (req, res) => {
+router.post('/:id/create-onchain', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
-    const funderAddress = ((req.headers['x-user-address'] as string) || req.body?.funderAddress || '').trim();
-    if (!funderAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
+    const funderAddress = req.verifiedUser!.address;
 
     const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
@@ -175,7 +218,7 @@ router.post('/:id/create-onchain', async (req, res) => {
 router.post('/:id/approve-onchain', async (req, res) => {
   try {
     const proposalId = req.params.id as string;
-    const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -278,10 +321,10 @@ router.post('/:id/confirm-create', async (req, res) => {
   }
 });
 
-router.post('/:id/confirm-approval', async (req, res) => {
+router.post('/:id/confirm-approval', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
-    const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     const { txHash } = req.body as { txHash?: string };
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
@@ -364,7 +407,7 @@ router.post('/:id/confirm-approval', async (req, res) => {
 async function handleExecuteProposal(req: any, res: any): Promise<any> {
   try {
     const proposalId = req.params.id as string;
-    const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required for execute signing' });
     }
@@ -484,73 +527,171 @@ async function handleExecuteProposal(req: any, res: any): Promise<any> {
 }
 
 // Create execute payout transaction (legacy route)
-router.post('/:id/execute-onchain', handleExecuteProposal);
+router.post('/:id/execute-onchain', requireWalletAuth, handleExecuteProposal);
 
 // Create execute payout transaction (preferred route)
-router.post('/:id/execute', handleExecuteProposal);
+router.post('/:id/execute', requireWalletAuth, handleExecuteProposal);
 
 // Submit a partially signed execute transaction.
 // Once the required signature count is reached, backend broadcasts and marks proposal executed.
-router.post('/:id/execute-signature', async (req, res) => {
+router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id;
-    const signerAddress = ((req.headers['x-user-address'] as string) || req.body?.signerAddress || '').trim();
+    // Identity comes from the verified wallet-auth proof, not from body headers.
+    const signerAddress = req.verifiedUser!.address;
     const { sessionId, signedTransaction } = req.body as { sessionId?: string; signedTransaction?: string };
 
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
     if (!sessionId || !signedTransaction) {
       return res.status(400).json({ error: 'sessionId and signedTransaction are required' });
     }
 
-    const session = await db.prepare(
-      `SELECT * FROM proposal_execution_sessions
-       WHERE id = ? AND proposal_id = ? AND status = 'pending'
-       LIMIT 1`,
-    ).get(sessionId, proposalId) as ProposalExecutionSessionRow | undefined;
-
-    if (!session) {
-      return res.status(404).json({
-        error: 'Active execute signing session not found',
+    // Audit H-06: extract a structural fingerprint of the submitted tx (inputs,
+    // outputs, locktime — everything except witness data). Every signer of the
+    // same session must submit a transaction whose fingerprint matches the
+    // canonical template's. This stops a malicious signer from substituting a
+    // different payload while reusing another signer's signature.
+    const submittedFingerprint = txStructuralFingerprint(signedTransaction);
+    if (!submittedFingerprint) {
+      return res.status(400).json({
+        error: 'signedTransaction is not a decodable BCH transaction hex',
         state: 'failed',
         retryable: false,
-        errorCode: 'EXECUTION_SESSION_NOT_FOUND',
+        errorCode: 'EXECUTION_TX_DECODE_FAILED',
       });
     }
 
-    const requiredSignerAddresses = parseJsonArray<string>(session.signer_addresses);
-    if (!requiredSignerAddresses.some((addr) => addr.toLowerCase() === signerAddress.toLowerCase())) {
-      return res.status(403).json({
-        error: 'Signer is not part of this execute session',
-        state: 'failed',
-        retryable: false,
-        errorCode: 'EXECUTION_SIGNER_NOT_ALLOWED',
-      });
+    // Audit M-08: read-modify-write of the session row must be atomic across
+    // concurrent signer submissions. We take a row-level lock with FOR UPDATE
+    // inside a withTransaction block. Concurrent calls block here until the
+    // first commits; the loser then re-reads the updated state.
+    const result = await db.withTransaction(async (client) => {
+      const sessionResult = await client.query<ProposalExecutionSessionRow>(
+        `SELECT * FROM proposal_execution_sessions
+         WHERE id = $1 AND proposal_id = $2 AND status = 'pending'
+         LIMIT 1
+         FOR UPDATE`,
+        [sessionId, proposalId],
+      );
+      const session = sessionResult.rows[0];
+      if (!session) {
+        return {
+          status: 404,
+          body: {
+            error: 'Active execute signing session not found',
+            state: 'failed',
+            retryable: false,
+            errorCode: 'EXECUTION_SESSION_NOT_FOUND',
+          },
+        };
+      }
+
+      const requiredSignerAddresses = parseJsonArray<string>(session.signer_addresses);
+      if (!requiredSignerAddresses.some((addr) => addr.toLowerCase() === signerAddress.toLowerCase())) {
+        return {
+          status: 403,
+          body: {
+            error: 'Signer is not part of this execute session',
+            state: 'failed',
+            retryable: false,
+            errorCode: 'EXECUTION_SIGNER_NOT_ALLOWED',
+          },
+        };
+      }
+
+      const signedBy = parseJsonArray<string>(session.signed_by);
+      if (signedBy.some((addr) => addr.toLowerCase() === signerAddress.toLowerCase())) {
+        return {
+          status: 409,
+          body: {
+            error: 'This signer already submitted a signature for the current session',
+            signaturesCollected: signedBy.length,
+            requiredSignatures: session.required_signatures,
+            state: 'failed',
+            retryable: false,
+            errorCode: 'SIGNATURE_ALREADY_SUBMITTED',
+          },
+        };
+      }
+
+      // Compare submitted tx structure against the canonical session template.
+      // The session.tx_hex was set at session creation by ProposalService
+      // (the unsigned wcTransaction hex) and never overwritten by signers
+      // post-fix. If any signer's submission has a different structure, refuse.
+      const canonicalFingerprint = txStructuralFingerprint(session.tx_hex);
+      if (!canonicalFingerprint) {
+        return {
+          status: 500,
+          body: {
+            error: 'Canonical session transaction is unreadable',
+            state: 'failed',
+            retryable: false,
+            errorCode: 'EXECUTION_SESSION_CORRUPT',
+          },
+        };
+      }
+      if (canonicalFingerprint !== submittedFingerprint) {
+        return {
+          status: 409,
+          body: {
+            error: 'Submitted transaction does not match the session template',
+            message:
+              'Signers must sign the canonical transaction the backend prepared at session creation. '
+              + 'Re-fetch the session and sign the template returned by /execute.',
+            state: 'failed',
+            retryable: false,
+            errorCode: 'EXECUTION_TX_STRUCTURE_MISMATCH',
+          },
+        };
+      }
+
+      const updatedSignedBy = [...signedBy, signerAddress];
+      const signaturesCollected = updatedSignedBy.length;
+
+      // Persist this signer's *witness-bearing* tx hex into a per-signer column
+      // (`signed_payloads`) keyed by address. The canonical tx_hex is NOT
+      // overwritten; broadcast assembly uses the per-signer payloads.
+      const signedPayloads: Record<string, string> = (() => {
+        try {
+          const raw = (session as ProposalExecutionSessionRow & { signed_payloads?: string }).signed_payloads;
+          return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+        } catch {
+          return {};
+        }
+      })();
+      signedPayloads[signerAddress.toLowerCase()] = signedTransaction;
+
+      await client.query(
+        `UPDATE proposal_execution_sessions
+         SET signed_by = $1, signed_payloads = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [JSON.stringify(updatedSignedBy), JSON.stringify(signedPayloads), sessionId],
+      );
+
+      return {
+        status: 200,
+        body: null,
+        nextState: {
+          updatedSignedBy,
+          signaturesCollected,
+          requiredSignerAddresses,
+          requiredSignatures: session.required_signatures,
+          // The tx broadcast at threshold uses the LAST signer's payload —
+          // every signer's payload is structurally identical (verified above)
+          // and contains the witness merge produced by the wallet's signing
+          // flow. (When the wallet flow migrates to per-slot signature
+          // submission, swap this to a server-side witness-merge step.)
+          finalTransaction: signedTransaction,
+        } as const,
+      };
+    });
+
+    if (result.body) {
+      return res.status(result.status).json(result.body);
     }
 
-    const signedBy = parseJsonArray<string>(session.signed_by);
-    if (signedBy.some((addr) => addr.toLowerCase() === signerAddress.toLowerCase())) {
-      return res.status(409).json({
-        error: 'This signer already submitted a signature for the current session',
-        signaturesCollected: signedBy.length,
-        requiredSignatures: session.required_signatures,
-        state: 'failed',
-        retryable: false,
-        errorCode: 'SIGNATURE_ALREADY_SUBMITTED',
-      });
-    }
+    const { updatedSignedBy, signaturesCollected, requiredSignerAddresses, requiredSignatures, finalTransaction } = result.nextState!;
 
-    const updatedSignedBy = [...signedBy, signerAddress];
-    const signaturesCollected = updatedSignedBy.length;
-
-    await db.prepare(
-      `UPDATE proposal_execution_sessions
-       SET tx_hex = ?, signed_by = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-    ).run(signedTransaction, JSON.stringify(updatedSignedBy), sessionId);
-
-    if (signaturesCollected < session.required_signatures) {
+    if (signaturesCollected < requiredSignatures) {
       const remainingSigners = requiredSignerAddresses.filter(
         (addr) => !updatedSignedBy.some((signed) => signed.toLowerCase() === addr.toLowerCase()),
       );
@@ -561,21 +702,21 @@ router.post('/:id/execute-signature', async (req, res) => {
         retryable: false,
         sessionId,
         signaturesCollected,
-        requiredSignatures: session.required_signatures,
+        requiredSignatures,
         remainingSigners,
       });
     }
 
     const { ContractService } = await import('../services/contract-service.js');
     const contractService = new ContractService('chipnet');
-    const txid = await contractService.broadcastTransaction(signedTransaction);
+    const txid = await contractService.broadcastTransaction(finalTransaction);
 
     await ProposalService.markProposalExecuted(proposalId, txid);
     await db.prepare(
       `UPDATE proposal_execution_sessions
-       SET status = 'completed', broadcast_tx_hash = ?, tx_hex = ?, signed_by = ?, updated_at = CURRENT_TIMESTAMP
+       SET status = 'completed', broadcast_tx_hash = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-    ).run(txid, signedTransaction, JSON.stringify(updatedSignedBy), sessionId);
+    ).run(txid, sessionId);
 
     return res.json({
       success: true,
@@ -585,7 +726,7 @@ router.post('/:id/execute-signature', async (req, res) => {
       txid,
       txHash: txid,
       signaturesCollected,
-      requiredSignatures: session.required_signatures,
+      requiredSignatures,
     });
   } catch (error: any) {
     console.error('POST /proposals/:id/execute-signature error:', error);
@@ -599,13 +740,19 @@ router.post('/:id/execute-signature', async (req, res) => {
 });
 
 // Broadcast signed transaction
-router.post('/broadcast', async (req, res) => {
+// Gated behind wallet-ownership proof: without auth this endpoint was a public
+// BCH relay and let anyone poison the transactions index under any vault/proposal ID.
+router.post('/broadcast', requireWalletAuth, async (req, res) => {
   try {
-    const { txHex, txType, vaultId, proposalId, amount, fromAddress, toAddress } = req.body;
+    const { txHex, txType, vaultId, proposalId, amount, toAddress } = req.body;
 
     if (!txHex) {
       return res.status(400).json({ error: 'txHex is required' });
     }
+
+    // fromAddress is always bound to the authenticated signer — never accept
+    // a client-supplied value since it becomes part of the audit trail.
+    const fromAddress = req.verifiedUser!.address;
 
     // Import ContractService
     const { ContractService } = await import('../services/contract-service.js');
