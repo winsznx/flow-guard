@@ -56,13 +56,22 @@ CREATE TABLE IF NOT EXISTS proposal_execution_sessions (
     signer_pubkeys TEXT NOT NULL,
     signed_by TEXT NOT NULL DEFAULT '[]',
     required_signatures INTEGER NOT NULL DEFAULT 2,
+    -- Canonical unsigned transaction template, set at session creation
+    -- and never overwritten by signer submissions (audit H-06).
     tx_hex TEXT NOT NULL,
     source_outputs TEXT NOT NULL,
+    -- Per-signer fully-signed payloads keyed by lowercased signer address.
+    -- Each payload's structural fingerprint must match tx_hex's; verified
+    -- in /execute-signature handler before storing.
+    signed_payloads TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'pending',
     broadcast_tx_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- Idempotent column add for existing deployments. Safe to re-run.
+ALTER TABLE proposal_execution_sessions
+    ADD COLUMN IF NOT EXISTS signed_payloads TEXT NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_proposal_exec_sessions_proposal ON proposal_execution_sessions(proposal_id);
 CREATE INDEX IF NOT EXISTS idx_proposal_exec_sessions_status ON proposal_execution_sessions(status);
 
