@@ -5,14 +5,19 @@ WORKDIR /app
 COPY backend/package.json backend/pnpm-lock.yaml ./
 
 RUN npm install -g pnpm
-RUN pnpm install --prod --frozen-lockfile
+
+# --ignore-scripts: pnpm 10 errors hard on unapproved native module build
+# scripts (better-sqlite3 is a devDep only used by one-time migration scripts).
+# The runtime uses pg, not better-sqlite3 — we don't need its native binding
+# built in this image.
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
 COPY backend/src ./src
 COPY backend/tsconfig.json ./tsconfig.json
 COPY contracts/artifacts ./contracts/artifacts
 
-# Install dev deps separately just for the TS build step, then drop them
-RUN pnpm install --frozen-lockfile
+# Dev deps for TS build only; same ignore-scripts treatment then prune.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 RUN pnpm build
 RUN pnpm prune --prod
 
