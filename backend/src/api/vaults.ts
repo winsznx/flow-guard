@@ -1,13 +1,20 @@
 import { Router } from 'express';
 import { VaultService } from '../services/vaultService.js';
 import { CreateVaultDto } from '../models/Vault.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import {
+  transactionExists,
+  transactionHasExpectedOutput,
+  transactionHasInputFromAddress,
+} from '../utils/txVerification.js';
 import { VaultFundingService } from '../services/VaultFundingService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import db from '../database/schema.js';
 import { displayAmountToOnChain } from '../utils/amounts.js';
+import { requireWalletAuth, callerAddress } from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
 
 const router = Router();
+router.param('id', uuidParam);
 
 async function confirmVaultFunding(args: {
   vaultDbId: string;
@@ -70,6 +77,26 @@ async function confirmVaultFunding(args: {
         state: 'pending',
         retryable: true,
         errorCode: 'TX_NOT_FOUND',
+      },
+    };
+  }
+
+  // Audit H-07: confirm-funding accepted any tx that produced the expected
+  // contract output. Verify the tx ALSO consumes a UTXO locked to the
+  // authenticated funder, so a third party cannot flip another user's vault
+  // to FUNDED state by replaying a public funding tx hash.
+  if (!(await transactionHasInputFromAddress(args.txid, args.userAddress, network))) {
+    return {
+      status: 403,
+      body: {
+        error: 'Funding transaction does not include an input from your wallet',
+        message:
+          'Confirm-funding requires the caller to have actually funded the vault. '
+          + 'Sign the funding transaction from the same wallet that opened this confirmation, '
+          + 'or wait for the original funder to confirm.',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
       },
     };
   }
@@ -148,10 +175,11 @@ async function confirmVaultFunding(args: {
 }
 
 // Create vault (now async - deploys contract to blockchain)
-router.post('/', async (req, res) => {
+router.post('/', requireWalletAuth, async (req, res) => {
   try {
     const dto: CreateVaultDto = req.body;
-    const creator = req.headers['x-user-address'] as string || 'unknown';
+    // Creator identity comes from the verified wallet proof — header alone was spoofable.
+    const creator = req.verifiedUser!.address;
 
     // Validate input
     if (!dto.signers || dto.signers.length !== 3) {
@@ -161,9 +189,17 @@ router.post('/', async (req, res) => {
     if (!dto.signerPubkeys || dto.signerPubkeys.length !== 3) {
       return res.status(400).json({ error: 'Exactly 3 signer public keys are required for blockchain deployment' });
     }
-    if (!Number.isInteger(dto.approvalThreshold) || dto.approvalThreshold < 1 || dto.approvalThreshold > 2) {
+    // Audit H-03: the on-chain VaultCovenant.spend() hard-codes two required
+    // signatures regardless of the `requiredApprovals` constructor value. Any
+    // value other than 2 produces a misleading UI ("configured 1-of-3" or
+    // "configured 3-of-3") whose on-chain behaviour is 2-of-3. Reject those at
+    // the API boundary and document the invariant.
+    if (dto.approvalThreshold !== 2) {
       return res.status(400).json({
-        error: 'approvalThreshold must be 1 or 2 (current on-chain vault spend path is 2-of-3 maximum)',
+        error:
+          'approvalThreshold must be exactly 2. The current on-chain vault spend path '
+          + 'enforces 2-of-3 and does not branch on this parameter; other values would '
+          + 'misrepresent the contract\'s true behaviour.',
       });
     }
 
@@ -178,7 +214,7 @@ router.post('/', async (req, res) => {
 // List user's vaults with role information (must come before /:id route)
 router.get('/', async (req, res) => {
   try {
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
 
     // Get vaults where user is creator or signer
     const userVaults = await VaultService.getUserVaults(userAddress);
@@ -224,7 +260,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Vault not found' });
     }
     
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
     
     // Check if user can view this vault
     if (!VaultService.canViewVault(vault, userAddress)) {
@@ -256,7 +292,7 @@ router.get('/:id/state', async (req, res) => {
       return res.status(404).json({ error: 'Vault not found' });
     }
     
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
     if (!VaultService.canViewVault(vault, userAddress)) {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -268,11 +304,13 @@ router.get('/:id/state', async (req, res) => {
 });
 
 // Add signer to vault (creator-only)
-router.post('/:id/signers', async (req, res) => {
+router.post('/:id/signers', requireWalletAuth, async (req, res) => {
   try {
     const dbId = req.params.id;
     const { signerAddress } = req.body;
-    const requesterAddress = req.headers['x-user-address'] as string || 'unknown';
+    // Requester identity is derived from the verified wallet proof so an
+    // unauthenticated caller cannot spoof the creator via headers (see audit M-01).
+    const requesterAddress = req.verifiedUser!.address;
 
     if (!signerAddress) {
       return res.status(400).json({ error: 'Signer address is required' });
@@ -309,7 +347,7 @@ router.get('/:id/deposit', async (req, res) => {
       return res.status(404).json({ error: 'Vault not found' });
     }
 
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = callerAddress(req) || 'unknown';
     
     // Only creator can deposit initially
     if (!VaultService.isCreator(vault, userAddress)) {
@@ -372,10 +410,10 @@ router.get('/:id/deposit', async (req, res) => {
 });
 
 // Update vault balance after deposit
-router.post('/:id/update-balance', async (req, res) => {
+router.post('/:id/update-balance', requireWalletAuth, async (req, res) => {
   try {
     const { txid, amount } = req.body;
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = req.verifiedUser!.address;
     const result = await confirmVaultFunding({
       vaultDbId: req.params.id,
       txid,
@@ -392,10 +430,12 @@ router.post('/:id/update-balance', async (req, res) => {
 });
 
 // Confirm vault funding (lifecycle-compatible alias for update-balance)
-router.post('/:id/confirm-funding', async (req, res) => {
+// Gated so a random caller cannot flip another user's vault into "funded" state
+// by replaying any matching tx hash (see audit H-07).
+router.post('/:id/confirm-funding', requireWalletAuth, async (req, res) => {
   try {
     const { txHash, txid, amount } = req.body;
-    const userAddress = req.headers['x-user-address'] as string || 'unknown';
+    const userAddress = req.verifiedUser!.address;
     const result = await confirmVaultFunding({
       vaultDbId: req.params.id,
       txid: String(txHash || txid || ''),
