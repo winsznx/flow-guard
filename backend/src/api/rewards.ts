@@ -12,7 +12,7 @@ import { RewardFundingService } from '../services/RewardFundingService.js';
 import { RewardDistributionService } from '../services/RewardDistributionService.js';
 import { RewardControlService } from '../services/RewardControlService.js';
 import { ContractService } from '../services/contract-service.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput, transactionHasInputFromAddress } from '../utils/txVerification.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import {
   displayAmountToOnChain,
@@ -26,8 +26,12 @@ import {
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
+
 
 const router = Router();
+router.param('id', uuidParam);
 
 const VALID_REWARD_CATEGORIES: RewardCategory[] = ['ACHIEVEMENT', 'REFERRAL', 'LOYALTY', 'CUSTOM'];
 
@@ -43,7 +47,10 @@ router.get('/rewards', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Creator address is required' });
     }
 
-    const rows = await db!.prepare('SELECT * FROM rewards WHERE creator = ? ORDER BY created_at DESC').all(creator);
+    const showDeprecated = String(req.query.showDeprecated ?? '').toLowerCase() === 'true';
+    const rows = showDeprecated
+      ? await db!.prepare('SELECT * FROM rewards WHERE creator = ? ORDER BY created_at DESC').all(creator)
+      : await db!.prepare('SELECT * FROM rewards WHERE creator = ? AND is_deprecated = false ORDER BY created_at DESC').all(creator);
     const campaigns = await attachLatestRewardEvents(rows);
 
     res.json({
@@ -72,9 +79,7 @@ router.get('/rewards/:id', async (req: Request, res: Response) => {
 
     const distributions = await db!.prepare('SELECT * FROM reward_distributions WHERE reward_id = ? ORDER BY distributed_at DESC').all(id);
     const storedEvents = await listActivityEvents('reward' as any, id, 200);
-    const events = storedEvents.length > 0
-      ? storedEvents
-      : buildFallbackRewardEvents(campaign, distributions);
+    const events = storedEvents;
 
     res.json({
       success: true,
@@ -92,10 +97,13 @@ router.get('/rewards/:id', async (req: Request, res: Response) => {
  * POST /api/rewards/create
  * Create a new reward campaign
  */
-router.post('/rewards/create', async (req: Request, res: Response) => {
+router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Response) => {
+  // C-06 redesign landed: RewardCovenant now has two authority slots.
+  //   authorityHash      = creator wallet (admin paths; cancel-refund target)
+  //   claimAuthorityHash = backend co-signer (reward issuance only)
   try {
+    const creator = req.verifiedUser!.address;
     const {
-      creator,
       title,
       description,
       rewardCategory,
@@ -113,10 +121,6 @@ router.post('/rewards/create', async (req: Request, res: Response) => {
     const normalizedCategory: RewardCategory = VALID_REWARD_CATEGORIES.includes(rewardCategory)
       ? rewardCategory
       : 'CUSTOM';
-
-    if (!creator) {
-      return res.status(400).json({ error: 'Creator address is required' });
-    }
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
     }
@@ -300,10 +304,11 @@ router.get('/rewards/:id/funding-info', async (req: Request, res: Response) => {
  * POST /api/rewards/:id/confirm-funding
  * Confirm reward contract funding
  */
-router.post('/rewards/:id/confirm-funding', async (req: Request, res: Response) => {
+router.post('/rewards/:id/confirm-funding', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
@@ -318,6 +323,18 @@ router.post('/rewards/:id/confirm-funding', async (req: Request, res: Response) 
         errorCode: 'TX_NOT_FOUND',
       });
     }
+
+    // Audit H-07: require the funding tx to consume a UTXO from the caller's
+    // wallet so a third party can't flip status with someone else's tx hash.
+    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
+      return res.status(403).json({
+        error: 'Funding transaction does not include an input from your wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
+      });
+    }
+
 
     const campaign = await db!.prepare('SELECT * FROM rewards WHERE id = ?').get(id) as any;
     if (!campaign) {
@@ -403,14 +420,14 @@ router.post('/rewards/:id/confirm-funding', async (req: Request, res: Response) 
  * POST /api/rewards/:id/distribute
  * Build reward distribution transaction (variable amount per recipient)
  */
-router.post('/rewards/:id/distribute', async (req: Request, res: Response) => {
+router.post('/rewards/:id/distribute', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const recipientAddress = String(req.body?.recipientAddress || req.body?.recipient || '').trim();
     const rewardAmount = Number(req.body?.amount || req.body?.rewardAmount || 0);
     const signerAddress = String(
       req.body?.signerAddress
-      || req.headers['x-user-address']
+      || callerAddress(req)
       || '',
     ).trim();
 
@@ -441,7 +458,9 @@ router.post('/rewards/:id/distribute', async (req: Request, res: Response) => {
     }
 
     const constructorParams = deserializeConstructorParams(campaign.constructor_params || '[]');
-    const maxRewardAmountOnChain = readBigIntParam(constructorParams[2], 'maxRewardAmount');
+    // Constructor (audit C-06): [3]=maxRewardAmount, [4]=totalPool after the
+    // claimAuthorityHash slot at [2].
+    const maxRewardAmountOnChain = readBigIntParam(constructorParams[3], 'maxRewardAmount');
     const rewardAmountOnChain = BigInt(displayAmountToOnChain(rewardAmount, campaign.token_type));
 
     if (rewardAmountOnChain > maxRewardAmountOnChain) {
@@ -451,7 +470,7 @@ router.post('/rewards/:id/distribute', async (req: Request, res: Response) => {
       });
     }
 
-    const totalPool = readBigIntParam(constructorParams[3], 'totalPool');
+    const totalPool = readBigIntParam(constructorParams[4], 'totalPool');
     const distributedOnChain = BigInt(displayAmountToOnChain(campaign.distributed_total || 0, campaign.token_type));
     if (distributedOnChain + rewardAmountOnChain > totalPool) {
       return res.status(400).json({ error: 'Distribution would exceed remaining campaign pool' });
@@ -497,7 +516,7 @@ router.post('/rewards/:id/distribute', async (req: Request, res: Response) => {
  * POST /api/rewards/:id/confirm-distribute
  * Confirm reward distribution
  */
-router.post('/rewards/:id/confirm-distribute', async (req: Request, res: Response) => {
+router.post('/rewards/:id/confirm-distribute', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { recipientAddress, amount, txHash } = req.body;
@@ -598,11 +617,10 @@ router.post('/rewards/:id/confirm-distribute', async (req: Request, res: Respons
  * POST /api/rewards/:id/pause
  * Build on-chain pause transaction for a reward campaign
  */
-router.post('/rewards/:id/pause', async (req: Request, res: Response) => {
+router.post('/rewards/:id/pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -651,12 +669,11 @@ router.post('/rewards/:id/pause', async (req: Request, res: Response) => {
  * POST /api/rewards/:id/confirm-pause
  * Confirm on-chain pause transaction and update DB state
  */
-router.post('/rewards/:id/confirm-pause', async (req: Request, res: Response) => {
+router.post('/rewards/:id/confirm-pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -728,11 +745,10 @@ router.post('/rewards/:id/confirm-pause', async (req: Request, res: Response) =>
  * POST /api/rewards/:id/cancel
  * Build on-chain cancel transaction for a reward campaign
  */
-router.post('/rewards/:id/cancel', async (req: Request, res: Response) => {
+router.post('/rewards/:id/cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -797,12 +813,11 @@ router.post('/rewards/:id/cancel', async (req: Request, res: Response) => {
  * POST /api/rewards/:id/confirm-cancel
  * Confirm on-chain cancel transaction and update DB state
  */
-router.post('/rewards/:id/confirm-cancel', async (req: Request, res: Response) => {
+router.post('/rewards/:id/confirm-cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -886,107 +901,6 @@ function normalizeRewardTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN' 
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
     : 'BCH';
-}
-
-function buildFallbackRewardEvents(campaign: any, distributions: any[]): Array<{
-  id: string;
-  entity_type: string;
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  details: null;
-  created_at: number;
-}> {
-  const events: Array<{
-    id: string;
-    entity_type: string;
-    entity_id: string;
-    event_type: string;
-    actor: string | null;
-    amount: number | null;
-    status: string | null;
-    tx_hash: string | null;
-    details: null;
-    created_at: number;
-  }> = [];
-
-  events.push({
-    id: `fallback-reward-created-${campaign.id}`,
-    entity_type: 'reward',
-    entity_id: campaign.id,
-    event_type: 'created',
-    actor: campaign.creator || null,
-    amount: typeof campaign.total_pool === 'number' ? campaign.total_pool : null,
-    status: campaign.status || null,
-    tx_hash: null,
-    details: null,
-    created_at: Number(campaign.created_at || Math.floor(Date.now() / 1000)),
-  });
-
-  if (campaign.tx_hash) {
-    events.push({
-      id: `fallback-reward-funded-${campaign.id}`,
-      entity_type: 'reward',
-      entity_id: campaign.id,
-      event_type: 'funded',
-      actor: campaign.creator || null,
-      amount: typeof campaign.total_pool === 'number' ? campaign.total_pool : null,
-      status: 'ACTIVE',
-      tx_hash: campaign.tx_hash,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (campaign.status === 'PAUSED') {
-    events.push({
-      id: `fallback-reward-paused-${campaign.id}`,
-      entity_type: 'reward',
-      entity_id: campaign.id,
-      event_type: 'paused',
-      actor: campaign.creator || null,
-      amount: null,
-      status: 'PAUSED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (campaign.status === 'CANCELLED') {
-    events.push({
-      id: `fallback-reward-cancelled-${campaign.id}`,
-      entity_type: 'reward',
-      entity_id: campaign.id,
-      event_type: 'cancelled',
-      actor: campaign.creator || null,
-      amount: null,
-      status: 'CANCELLED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  distributions.forEach((dist: any) => {
-    events.push({
-      id: `fallback-reward-distribution-${dist.id}`,
-      entity_type: 'reward',
-      entity_id: campaign.id,
-      event_type: 'distribution',
-      actor: dist.recipient || null,
-      amount: typeof dist.amount === 'number' ? dist.amount : null,
-      status: campaign.status || null,
-      tx_hash: dist.tx_hash || null,
-      details: null,
-      created_at: Number(dist.distributed_at || campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  });
-
-  return events.sort((a, b) => b.created_at - a.created_at);
 }
 
 function deserializeConstructorParams(raw: string): any[] {

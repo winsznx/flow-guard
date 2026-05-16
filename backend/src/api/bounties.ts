@@ -12,7 +12,7 @@ import { BountyFundingService } from '../services/BountyFundingService.js';
 import { BountyClaimService } from '../services/BountyClaimService.js';
 import { BountyControlService } from '../services/BountyControlService.js';
 import { ContractService } from '../services/contract-service.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput, transactionHasInputFromAddress } from '../utils/txVerification.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import {
   displayAmountToOnChain,
@@ -26,8 +26,12 @@ import {
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
+
 
 const router = Router();
+router.param('id', uuidParam);
 
 /**
  * GET /api/bounties
@@ -41,7 +45,12 @@ router.get('/bounties', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Creator address is required' });
     }
 
-    const rows = await db!.prepare('SELECT * FROM bounties WHERE creator = ? ORDER BY created_at DESC').all(creator);
+    // Hide pre-C-06 dead rows from creator listings; explicit `?showDeprecated=true`
+    // surfaces them for forensic review.
+    const showDeprecated = String(req.query.showDeprecated ?? '').toLowerCase() === 'true';
+    const rows = showDeprecated
+      ? await db!.prepare('SELECT * FROM bounties WHERE creator = ? ORDER BY created_at DESC').all(creator)
+      : await db!.prepare('SELECT * FROM bounties WHERE creator = ? AND is_deprecated = false ORDER BY created_at DESC').all(creator);
     const campaigns = await attachLatestBountyEvents(rows);
 
     res.json({
@@ -70,9 +79,7 @@ router.get('/bounties/:id', async (req: Request, res: Response) => {
 
     const claims = await db!.prepare('SELECT * FROM bounty_claims WHERE bounty_id = ? ORDER BY claimed_at DESC').all(id);
     const storedEvents = await listActivityEvents('bounty' as any, id, 200);
-    const events = storedEvents.length > 0
-      ? storedEvents
-      : buildFallbackBountyEvents(campaign, claims);
+    const events = storedEvents;
 
     res.json({
       success: true,
@@ -90,10 +97,15 @@ router.get('/bounties/:id', async (req: Request, res: Response) => {
  * POST /api/bounties/create
  * Create a new bounty campaign
  */
-router.post('/bounties/create', async (req: Request, res: Response) => {
+router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Response) => {
+  // C-06 redesign landed: BountyCovenant now has two authority slots.
+  //   authorityHash      = creator wallet (admin: pause/resume/cancel; cancel-refund target)
+  //   claimAuthorityHash = backend co-signer (claim path only)
+  // The backend cannot drain the pool because cancel-refund pays to the
+  // creator's wallet, and the creator must wallet-sign pause/cancel.
   try {
+    const creator = req.verifiedUser!.address;
     const {
-      creator,
       title,
       description,
       tokenType,
@@ -107,10 +119,6 @@ router.post('/bounties/create', async (req: Request, res: Response) => {
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
-
-    if (!creator) {
-      return res.status(400).json({ error: 'Creator address is required' });
-    }
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
     }
@@ -290,10 +298,11 @@ router.get('/bounties/:id/funding-info', async (req: Request, res: Response) => 
  * POST /api/bounties/:id/confirm-funding
  * Confirm bounty contract funding
  */
-router.post('/bounties/:id/confirm-funding', async (req: Request, res: Response) => {
+router.post('/bounties/:id/confirm-funding', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
@@ -308,6 +317,18 @@ router.post('/bounties/:id/confirm-funding', async (req: Request, res: Response)
         errorCode: 'TX_NOT_FOUND',
       });
     }
+
+    // Audit H-07: require the funding tx to consume a UTXO from the caller's
+    // wallet so a third party can't flip status with someone else's tx hash.
+    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
+      return res.status(403).json({
+        error: 'Funding transaction does not include an input from your wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
+      });
+    }
+
 
     const campaign = await db!.prepare('SELECT * FROM bounties WHERE id = ?').get(id) as any;
     if (!campaign) {
@@ -394,14 +415,14 @@ router.post('/bounties/:id/confirm-funding', async (req: Request, res: Response)
  * POST /api/bounties/:id/claim
  * Build bounty claim transaction (fixed prize amount per winner)
  */
-router.post('/bounties/:id/claim', async (req: Request, res: Response) => {
+router.post('/bounties/:id/claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const winnerAddress = String(req.body?.winnerAddress || req.body?.winner || '').trim();
     const proofHash = String(req.body?.proofHash || '').trim();
     const signerAddress = String(
       req.body?.signerAddress
-      || req.headers['x-user-address']
+      || callerAddress(req)
       || '',
     ).trim();
 
@@ -432,7 +453,8 @@ router.post('/bounties/:id/claim', async (req: Request, res: Response) => {
     }
 
     const constructorParams = deserializeConstructorParams(campaign.constructor_params || '[]');
-    const maxWinners = readBigIntParam(constructorParams[3], 'maxWinners');
+    // Constructor (audit C-06): [4]=maxWinners after the claimAuthorityHash slot at [2].
+    const maxWinners = readBigIntParam(constructorParams[4], 'maxWinners');
 
     if (BigInt(campaign.winners_count || 0) >= maxWinners) {
       return res.status(400).json({ error: 'Bounty has reached maximum number of winners' });
@@ -477,7 +499,7 @@ router.post('/bounties/:id/claim', async (req: Request, res: Response) => {
  * POST /api/bounties/:id/confirm-claim
  * Confirm bounty claim
  */
-router.post('/bounties/:id/confirm-claim', async (req: Request, res: Response) => {
+router.post('/bounties/:id/confirm-claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { winnerAddress, amount, proofHash, txHash } = req.body;
@@ -585,11 +607,10 @@ router.post('/bounties/:id/confirm-claim', async (req: Request, res: Response) =
  * POST /api/bounties/:id/pause
  * Build on-chain pause transaction for a bounty campaign
  */
-router.post('/bounties/:id/pause', async (req: Request, res: Response) => {
+router.post('/bounties/:id/pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -638,12 +659,11 @@ router.post('/bounties/:id/pause', async (req: Request, res: Response) => {
  * POST /api/bounties/:id/confirm-pause
  * Confirm on-chain pause transaction and update DB state
  */
-router.post('/bounties/:id/confirm-pause', async (req: Request, res: Response) => {
+router.post('/bounties/:id/confirm-pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -715,11 +735,10 @@ router.post('/bounties/:id/confirm-pause', async (req: Request, res: Response) =
  * POST /api/bounties/:id/cancel
  * Build on-chain cancel transaction for a bounty campaign
  */
-router.post('/bounties/:id/cancel', async (req: Request, res: Response) => {
+router.post('/bounties/:id/cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -784,12 +803,11 @@ router.post('/bounties/:id/cancel', async (req: Request, res: Response) => {
  * POST /api/bounties/:id/confirm-cancel
  * Confirm on-chain cancel transaction and update DB state
  */
-router.post('/bounties/:id/confirm-cancel', async (req: Request, res: Response) => {
+router.post('/bounties/:id/confirm-cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -873,111 +891,6 @@ function normalizeBountyTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN' 
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
     : 'BCH';
-}
-
-function buildFallbackBountyEvents(campaign: any, claims: any[]): Array<{
-  id: string;
-  entity_type: string;
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  details: null;
-  created_at: number;
-}> {
-  const events: Array<{
-    id: string;
-    entity_type: string;
-    entity_id: string;
-    event_type: string;
-    actor: string | null;
-    amount: number | null;
-    status: string | null;
-    tx_hash: string | null;
-    details: null;
-    created_at: number;
-  }> = [];
-
-  events.push({
-    id: `fallback-bounty-created-${campaign.id}`,
-    entity_type: 'bounty',
-    entity_id: campaign.id,
-    event_type: 'created',
-    actor: campaign.creator || null,
-    amount: typeof campaign.reward_per_winner === 'number' && typeof campaign.max_winners === 'number'
-      ? campaign.reward_per_winner * campaign.max_winners
-      : null,
-    status: campaign.status || null,
-    tx_hash: null,
-    details: null,
-    created_at: Number(campaign.created_at || Math.floor(Date.now() / 1000)),
-  });
-
-  if (campaign.tx_hash) {
-    events.push({
-      id: `fallback-bounty-funded-${campaign.id}`,
-      entity_type: 'bounty',
-      entity_id: campaign.id,
-      event_type: 'funded',
-      actor: campaign.creator || null,
-      amount: typeof campaign.reward_per_winner === 'number' && typeof campaign.max_winners === 'number'
-        ? campaign.reward_per_winner * campaign.max_winners
-        : null,
-      status: 'ACTIVE',
-      tx_hash: campaign.tx_hash,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (campaign.status === 'PAUSED') {
-    events.push({
-      id: `fallback-bounty-paused-${campaign.id}`,
-      entity_type: 'bounty',
-      entity_id: campaign.id,
-      event_type: 'paused',
-      actor: campaign.creator || null,
-      amount: null,
-      status: 'PAUSED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (campaign.status === 'CANCELLED') {
-    events.push({
-      id: `fallback-bounty-cancelled-${campaign.id}`,
-      entity_type: 'bounty',
-      entity_id: campaign.id,
-      event_type: 'cancelled',
-      actor: campaign.creator || null,
-      amount: null,
-      status: 'CANCELLED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  claims.forEach((claim: any) => {
-    events.push({
-      id: `fallback-bounty-claim-${claim.id}`,
-      entity_type: 'bounty',
-      entity_id: campaign.id,
-      event_type: 'claim',
-      actor: claim.winner || null,
-      amount: typeof claim.amount === 'number' ? claim.amount : null,
-      status: campaign.status || null,
-      tx_hash: claim.tx_hash || null,
-      details: null,
-      created_at: Number(claim.claimed_at || campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  });
-
-  return events.sort((a, b) => b.created_at - a.created_at);
 }
 
 function deserializeConstructorParams(raw: string): any[] {

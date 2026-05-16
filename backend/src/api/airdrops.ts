@@ -13,7 +13,7 @@ import { AirdropFundingService } from '../services/AirdropFundingService.js';
 import { AirdropClaimService } from '../services/AirdropClaimService.js';
 import { AirdropControlService } from '../services/AirdropControlService.js';
 import { ContractService } from '../services/contract-service.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput, transactionHasInputFromAddress } from '../utils/txVerification.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import {
   displayAmountToOnChain,
@@ -27,8 +27,12 @@ import {
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
+
 
 const router = Router();
+router.param('id', uuidParam);
 
 /**
  * GET /api/airdrops
@@ -140,9 +144,7 @@ router.get('/airdrops/:id', async (req: Request, res: Response) => {
 
     const claims = await db!.prepare('SELECT * FROM airdrop_claims WHERE campaign_id = ? ORDER BY claimed_at DESC').all(id);
     const storedEvents = await listActivityEvents('airdrop', id, 200);
-    const events = storedEvents.length > 0
-      ? storedEvents
-      : buildFallbackAirdropEvents(campaign, claims);
+    const events = storedEvents;
 
     res.json({
       success: true,
@@ -160,10 +162,12 @@ router.get('/airdrops/:id', async (req: Request, res: Response) => {
  * POST /api/airdrops/create
  * Create a new airdrop campaign
  */
-router.post('/airdrops/create', async (req: Request, res: Response) => {
+router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
+    // Creator is bound to the authenticated wallet. Previously taken from body;
+    // that allowed impersonation of arbitrary BCH addresses (audit C-02).
+    const creator = req.verifiedUser!.address;
     const {
-      creator,
       title,
       description,
       campaignType,
@@ -182,9 +186,6 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
 
-    if (!creator) {
-      return res.status(400).json({ error: 'Creator address is required' });
-    }
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
     }
@@ -313,7 +314,7 @@ router.post('/airdrops/create', async (req: Request, res: Response) => {
  * POST /api/airdrops/:id/generate-merkle
  * Generate merkle tree from recipients list
  */
-router.post('/airdrops/:id/generate-merkle', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/generate-merkle', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { recipients } = req.body;
@@ -450,10 +451,11 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
  * POST /api/airdrops/:id/confirm-funding
  * Confirm airdrop contract funding
  */
-router.post('/airdrops/:id/confirm-funding', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/confirm-funding', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
@@ -466,6 +468,18 @@ router.post('/airdrops/:id/confirm-funding', async (req: Request, res: Response)
         state: 'pending',
         retryable: true,
         errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    // Audit H-07: require the funding tx to consume a UTXO from the caller's
+    // wallet so a third party can't flip a campaign's status with someone
+    // else's tx hash.
+    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
+      return res.status(403).json({
+        error: 'Funding transaction does not include an input from your wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
       });
     }
 
@@ -606,13 +620,13 @@ router.get('/airdrops/:id/proof/:address', async (req: Request, res: Response) =
  * POST /api/airdrops/:id/claim
  * Build claim transaction with merkle proof
  */
-router.post('/airdrops/:id/claim', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const claimerAddress = String(req.body?.claimerAddress || req.body?.claimer || '').trim();
     const signerAddress = String(
       req.body?.signerAddress
-      || req.headers['x-user-address']
+      || callerAddress(req)
       || claimerAddress,
     ).trim();
 
@@ -729,7 +743,7 @@ router.post('/airdrops/:id/claim', async (req: Request, res: Response) => {
  * POST /api/airdrops/:id/confirm-claim
  * Confirm airdrop claim
  */
-router.post('/airdrops/:id/confirm-claim', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/confirm-claim', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { claimerAddress, claimedAmount, txHash } = req.body;
@@ -830,11 +844,10 @@ router.post('/airdrops/:id/confirm-claim', async (req: Request, res: Response) =
  * POST /api/airdrops/:id/pause
  * Build on-chain pause transaction for a campaign
  */
-router.post('/airdrops/:id/pause', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -883,12 +896,11 @@ router.post('/airdrops/:id/pause', async (req: Request, res: Response) => {
  * POST /api/airdrops/:id/confirm-pause
  * Confirm on-chain pause transaction and update DB state
  */
-router.post('/airdrops/:id/confirm-pause', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/confirm-pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -960,11 +972,10 @@ router.post('/airdrops/:id/confirm-pause', async (req: Request, res: Response) =
  * POST /api/airdrops/:id/cancel
  * Build on-chain cancel transaction for a campaign
  */
-router.post('/airdrops/:id/cancel', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1029,12 +1040,11 @@ router.post('/airdrops/:id/cancel', async (req: Request, res: Response) => {
  * POST /api/airdrops/:id/confirm-cancel
  * Confirm on-chain cancel transaction and update DB state
  */
-router.post('/airdrops/:id/confirm-cancel', async (req: Request, res: Response) => {
+router.post('/airdrops/:id/confirm-cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1120,107 +1130,6 @@ function normalizeAirdropTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN'
     : 'BCH';
 }
 
-function buildFallbackAirdropEvents(campaign: any, claims: any[]): Array<{
-  id: string;
-  entity_type: 'airdrop';
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  details: null;
-  created_at: number;
-}> {
-  const events: Array<{
-    id: string;
-    entity_type: 'airdrop';
-    entity_id: string;
-    event_type: string;
-    actor: string | null;
-    amount: number | null;
-    status: string | null;
-    tx_hash: string | null;
-    details: null;
-    created_at: number;
-  }> = [];
-
-  events.push({
-    id: `fallback-airdrop-created-${campaign.id}`,
-    entity_type: 'airdrop',
-    entity_id: campaign.id,
-    event_type: 'created',
-    actor: campaign.creator || null,
-    amount: typeof campaign.total_amount === 'number' ? campaign.total_amount : null,
-    status: campaign.status || null,
-    tx_hash: null,
-    details: null,
-    created_at: Number(campaign.created_at || Math.floor(Date.now() / 1000)),
-  });
-
-  if (campaign.tx_hash) {
-    events.push({
-      id: `fallback-airdrop-funded-${campaign.id}`,
-      entity_type: 'airdrop',
-      entity_id: campaign.id,
-      event_type: 'funded',
-      actor: campaign.creator || null,
-      amount: typeof campaign.total_amount === 'number' ? campaign.total_amount : null,
-      status: 'ACTIVE',
-      tx_hash: campaign.tx_hash,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (campaign.status === 'PAUSED') {
-    events.push({
-      id: `fallback-airdrop-paused-${campaign.id}`,
-      entity_type: 'airdrop',
-      entity_id: campaign.id,
-      event_type: 'paused',
-      actor: campaign.creator || null,
-      amount: null,
-      status: 'PAUSED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (campaign.status === 'CANCELLED') {
-    events.push({
-      id: `fallback-airdrop-cancelled-${campaign.id}`,
-      entity_type: 'airdrop',
-      entity_id: campaign.id,
-      event_type: 'cancelled',
-      actor: campaign.creator || null,
-      amount: null,
-      status: 'CANCELLED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  claims.forEach((claim: any) => {
-    events.push({
-      id: `fallback-airdrop-claim-${claim.id}`,
-      entity_type: 'airdrop',
-      entity_id: campaign.id,
-      event_type: 'claim',
-      actor: claim.claimer || null,
-      amount: typeof claim.amount === 'number' ? claim.amount : null,
-      status: campaign.status || null,
-      tx_hash: claim.tx_hash || null,
-      details: null,
-      created_at: Number(claim.claimed_at || campaign.updated_at || campaign.created_at || Math.floor(Date.now() / 1000)),
-    });
-  });
-
-  return events.sort((a, b) => b.created_at - a.created_at);
-}
-
 function deserializeConstructorParams(raw: string): any[] {
   const parsed = JSON.parse(raw || '[]');
   return parsed.map((param: any) => {
@@ -1288,7 +1197,17 @@ function deriveStandaloneVaultId(seed: string): string {
   return createHash('sha256').update(seed).digest('hex');
 }
 
-function resolvePublicAppBaseUrl(req: Request): string {
+/**
+ * Resolve the canonical public app URL used when rendering claim links.
+ *
+ * Hardened (audit H-08): in production we refuse to trust `Origin`,
+ * `X-Forwarded-Host`, or `Host` — those are attacker-controllable on any
+ * incoming request and were being echoed into DB-persisted `claim_link`
+ * fields, making them a phishing delivery channel. Only the server-configured
+ * env vars are allowed. If the env is misconfigured in production the app
+ * fails closed with an error rather than embedding a spoofable URL.
+ */
+function resolvePublicAppBaseUrl(_req: Request): string {
   const configured = (process.env.APP_URL || process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '').trim();
   if (configured) {
     return configured
@@ -1297,23 +1216,11 @@ function resolvePublicAppBaseUrl(req: Request): string {
       .replace(/\/+$/, '');
   }
 
-  const origin = (req.get('origin') || '').trim();
-  if (origin) {
-    return origin.replace('://api.', '://').replace(/\/+$/, '');
-  }
-
-  const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0]?.trim();
-  const forwardedHost = (req.get('x-forwarded-host') || '').split(',')[0]?.trim();
-  if (forwardedProto && forwardedHost) {
-    const normalizedForwardedHost = forwardedHost.replace(/^api\./i, '');
-    return `${forwardedProto}://${normalizedForwardedHost}`.replace(/\/+$/, '');
-  }
-
-  const host = (req.get('host') || '').trim();
-  if (host) {
-    const protocol = forwardedProto || req.protocol || 'https';
-    const normalizedHost = host.replace(/^api\./i, '');
-    return `${protocol}://${normalizedHost}`.replace(/\/+$/, '');
+  const env = (process.env.NODE_ENV || '').trim().toLowerCase();
+  if (env === 'production') {
+    throw new Error(
+      'APP_URL / FRONTEND_URL / PUBLIC_APP_URL must be set in production — refusing to build claim link from untrusted request headers',
+    );
   }
 
   return 'http://localhost:5173';

@@ -12,7 +12,7 @@ import { GrantFundingService } from '../services/GrantFundingService.js';
 import { GrantMilestoneService } from '../services/GrantMilestoneService.js';
 import { GrantControlService } from '../services/GrantControlService.js';
 import { ContractService } from '../services/contract-service.js';
-import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput, transactionHasInputFromAddress } from '../utils/txVerification.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import {
   displayAmountToOnChain,
@@ -26,8 +26,12 @@ import {
 } from '../utils/activityEvents.js';
 import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
+import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
+import { uuidParam } from '../middleware/errorHandler.js';
+
 
 const router = Router();
+router.param('id', uuidParam);
 
 /**
  * GET /api/grants
@@ -41,7 +45,10 @@ router.get('/grants', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Creator address is required' });
     }
 
-    const rows = await db!.prepare('SELECT * FROM grants WHERE creator = ? ORDER BY created_at DESC').all(creator);
+    const showDeprecated = String(req.query.showDeprecated ?? '').toLowerCase() === 'true';
+    const rows = showDeprecated
+      ? await db!.prepare('SELECT * FROM grants WHERE creator = ? ORDER BY created_at DESC').all(creator)
+      : await db!.prepare('SELECT * FROM grants WHERE creator = ? AND is_deprecated = false ORDER BY created_at DESC').all(creator);
     const grants = await attachLatestGrantEvents(rows);
 
     res.json({
@@ -70,9 +77,7 @@ router.get('/grants/:id', async (req: Request, res: Response) => {
 
     const milestones = await db!.prepare('SELECT * FROM grant_milestones WHERE grant_id = ? ORDER BY milestone_index ASC').all(id);
     const storedEvents = await listActivityEvents('grant' as any, id, 200);
-    const events = storedEvents.length > 0
-      ? storedEvents
-      : buildFallbackGrantEvents(grant, milestones);
+    const events = storedEvents;
 
     res.json({
       success: true,
@@ -90,13 +95,16 @@ router.get('/grants/:id', async (req: Request, res: Response) => {
  * POST /api/grants/create
  * Create a new grant program with milestones
  */
-router.post('/grants/create', async (req: Request, res: Response) => {
+router.post('/grants/create', requireWalletAuth, async (req: Request, res: Response) => {
+  // C-06 redesign landed: GrantCovenant now has two authority slots.
+  //   authorityHash      = creator wallet (admin paths; cancel-refund target)
+  //   claimAuthorityHash = backend co-signer (releaseMilestone only)
   try {
+    const creator = req.verifiedUser!.address;
     const {
       title,
       description,
       vaultId,
-      creator,
       recipient,
       milestonesTotal,
       amountPerMilestone,
@@ -110,10 +118,6 @@ router.post('/grants/create', async (req: Request, res: Response) => {
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
-
-    if (!creator) {
-      return res.status(400).json({ error: 'Creator address is required' });
-    }
     if (!recipient) {
       return res.status(400).json({ error: 'Recipient address is required' });
     }
@@ -318,10 +322,11 @@ router.get('/grants/:id/funding-info', async (req: Request, res: Response) => {
  * POST /api/grants/:id/confirm-funding
  * Confirm grant contract funding
  */
-router.post('/grants/:id/confirm-funding', async (req: Request, res: Response) => {
+router.post('/grants/:id/confirm-funding', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
+    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
@@ -336,6 +341,18 @@ router.post('/grants/:id/confirm-funding', async (req: Request, res: Response) =
         errorCode: 'TX_NOT_FOUND',
       });
     }
+
+    // Audit H-07: require the funding tx to consume a UTXO from the caller's
+    // wallet so a third party can't flip status with someone else's tx hash.
+    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
+      return res.status(403).json({
+        error: 'Funding transaction does not include an input from your wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
+      });
+    }
+
 
     const grant = await db!.prepare('SELECT * FROM grants WHERE id = ?').get(id) as any;
     if (!grant) {
@@ -421,11 +438,10 @@ router.post('/grants/:id/confirm-funding', async (req: Request, res: Response) =
  * POST /api/grants/:id/release
  * Build milestone release transaction (authority releases payment to recipient)
  */
-router.post('/grants/:id/release', async (req: Request, res: Response) => {
+router.post('/grants/:id/release', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
 
     const grant = await db!.prepare('SELECT * FROM grants WHERE id = ?').get(id) as any;
     if (!grant) {
@@ -447,7 +463,8 @@ router.post('/grants/:id/release', async (req: Request, res: Response) => {
     }
 
     const constructorParams = deserializeConstructorParams(grant.constructor_params || '[]');
-    const milestonesTotal = readBigIntParam(constructorParams[2], 'milestonesTotal');
+    // Constructor (audit C-06): [3]=milestonesTotal after the claimAuthorityHash slot at [2].
+    const milestonesTotal = readBigIntParam(constructorParams[3], 'milestonesTotal');
 
     if (BigInt(grant.milestones_completed || 0) >= milestonesTotal) {
       return res.status(400).json({ error: 'All milestones have already been released' });
@@ -492,7 +509,7 @@ router.post('/grants/:id/release', async (req: Request, res: Response) => {
  * POST /api/grants/:id/confirm-release
  * Confirm milestone release and update grant + milestone status
  */
-router.post('/grants/:id/confirm-release', async (req: Request, res: Response) => {
+router.post('/grants/:id/confirm-release', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { amount, milestoneNumber, txHash } = req.body;
@@ -608,11 +625,10 @@ router.post('/grants/:id/confirm-release', async (req: Request, res: Response) =
  * POST /api/grants/:id/pause
  * Build on-chain pause transaction for a grant
  */
-router.post('/grants/:id/pause', async (req: Request, res: Response) => {
+router.post('/grants/:id/pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -661,12 +677,11 @@ router.post('/grants/:id/pause', async (req: Request, res: Response) => {
  * POST /api/grants/:id/confirm-pause
  * Confirm on-chain pause transaction and update DB state
  */
-router.post('/grants/:id/confirm-pause', async (req: Request, res: Response) => {
+router.post('/grants/:id/confirm-pause', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -738,11 +753,10 @@ router.post('/grants/:id/confirm-pause', async (req: Request, res: Response) => 
  * POST /api/grants/:id/cancel
  * Build on-chain cancel transaction for a grant
  */
-router.post('/grants/:id/cancel', async (req: Request, res: Response) => {
+router.post('/grants/:id/cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -807,12 +821,11 @@ router.post('/grants/:id/cancel', async (req: Request, res: Response) => {
  * POST /api/grants/:id/confirm-cancel
  * Confirm on-chain cancel transaction and update DB state
  */
-router.post('/grants/:id/confirm-cancel', async (req: Request, res: Response) => {
+router.post('/grants/:id/confirm-cancel', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -894,12 +907,11 @@ router.post('/grants/:id/confirm-cancel', async (req: Request, res: Response) =>
  * POST /api/grants/:id/transfer
  * Build transfer transaction (recipient transfers grant to new recipient)
  */
-router.post('/grants/:id/transfer', async (req: Request, res: Response) => {
+router.post('/grants/:id/transfer', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { newRecipientAddress } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -956,12 +968,11 @@ router.post('/grants/:id/transfer', async (req: Request, res: Response) => {
  * POST /api/grants/:id/confirm-transfer
  * Confirm on-chain transfer and update recipient in DB
  */
-router.post('/grants/:id/confirm-transfer', async (req: Request, res: Response) => {
+router.post('/grants/:id/confirm-transfer', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { txHash, newRecipientAddress } = req.body;
-    const signerAddress = (req.headers['x-user-address'] as string | undefined)?.trim()
-      || String(req.body?.signerAddress || '').trim();
+    const signerAddress = callerAddress(req);
     if (!signerAddress) {
       return res.status(400).json({ error: 'x-user-address header is required' });
     }
@@ -1050,109 +1061,6 @@ function normalizeGrantTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN' {
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
     : 'BCH';
-}
-
-function buildFallbackGrantEvents(grant: any, milestones: any[]): Array<{
-  id: string;
-  entity_type: string;
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  details: null;
-  created_at: number;
-}> {
-  const events: Array<{
-    id: string;
-    entity_type: string;
-    entity_id: string;
-    event_type: string;
-    actor: string | null;
-    amount: number | null;
-    status: string | null;
-    tx_hash: string | null;
-    details: null;
-    created_at: number;
-  }> = [];
-
-  events.push({
-    id: `fallback-grant-created-${grant.id}`,
-    entity_type: 'grant',
-    entity_id: grant.id,
-    event_type: 'created',
-    actor: grant.creator || null,
-    amount: typeof grant.total_amount === 'number' ? grant.total_amount : null,
-    status: grant.status || null,
-    tx_hash: null,
-    details: null,
-    created_at: Number(grant.created_at || Math.floor(Date.now() / 1000)),
-  });
-
-  if (grant.tx_hash) {
-    events.push({
-      id: `fallback-grant-funded-${grant.id}`,
-      entity_type: 'grant',
-      entity_id: grant.id,
-      event_type: 'funded',
-      actor: grant.creator || null,
-      amount: typeof grant.total_amount === 'number' ? grant.total_amount : null,
-      status: 'ACTIVE',
-      tx_hash: grant.tx_hash,
-      details: null,
-      created_at: Number(grant.updated_at || grant.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (grant.status === 'PAUSED') {
-    events.push({
-      id: `fallback-grant-paused-${grant.id}`,
-      entity_type: 'grant',
-      entity_id: grant.id,
-      event_type: 'paused',
-      actor: grant.creator || null,
-      amount: null,
-      status: 'PAUSED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(grant.updated_at || grant.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  if (grant.status === 'CANCELLED') {
-    events.push({
-      id: `fallback-grant-cancelled-${grant.id}`,
-      entity_type: 'grant',
-      entity_id: grant.id,
-      event_type: 'cancelled',
-      actor: grant.creator || null,
-      amount: null,
-      status: 'CANCELLED',
-      tx_hash: null,
-      details: null,
-      created_at: Number(grant.updated_at || grant.created_at || Math.floor(Date.now() / 1000)),
-    });
-  }
-
-  milestones
-    .filter((ms: any) => ms.status === 'RELEASED')
-    .forEach((ms: any) => {
-      events.push({
-        id: `fallback-grant-release-${ms.id}`,
-        entity_type: 'grant',
-        entity_id: grant.id,
-        event_type: 'milestone_released',
-        actor: grant.creator || null,
-        amount: typeof grant.amount_per_milestone === 'number' ? grant.amount_per_milestone : null,
-        status: grant.status || null,
-        tx_hash: ms.tx_hash || null,
-        details: null,
-        created_at: Number(ms.released_at || grant.updated_at || Math.floor(Date.now() / 1000)),
-      });
-    });
-
-  return events.sort((a, b) => b.created_at - a.created_at);
 }
 
 function deserializeConstructorParams(raw: string): any[] {
