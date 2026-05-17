@@ -1,3 +1,7 @@
+// MUST be first: materialises `globalThis.Buffer` and a minimal `process`
+// shim before any other module runs. Replaces vite-plugin-node-polyfills.
+import './polyfills';
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';

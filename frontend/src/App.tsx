@@ -1,59 +1,76 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { WalletModal } from './components/ui/WalletModal';
 import { TransactionNoticeToast } from './components/ui/TransactionNoticeToast';
 import { useWallet } from './hooks/useWallet';
 import { useWalletModal } from './hooks/useWalletModal';
+// Home stays eager-loaded so first paint on the marketing site is fast.
 import Home from './pages/Home';
-import VaultsPage from './pages/VaultsPage';
-import CreateVaultPage from './pages/CreateVaultPage';
-import VaultDetailPage from './pages/VaultDetailPage';
-import CreateProposalPage from './pages/CreateProposalPage';
-import ProposalsPage from './pages/ProposalsPage';
-import RequestDetailPage from './pages/RequestDetailPage';
-import BudgetPlansPage from './pages/BudgetPlansPage';
-import CreateBudgetPlanPage from './pages/CreateBudgetPlanPage';
-import GovernancePage from './pages/GovernancePage';
-
-import StreamsPage from './pages/StreamsPage';
-import StreamDetailPage from './pages/StreamDetailPage';
-import CreateStreamPage from './pages/CreateStreamPage';
-import BatchCreateStreamsPage from './pages/BatchCreateStreamsPage';
-import StreamBatchHistoryPage from './pages/StreamBatchHistoryPage';
-import StreamShapeGalleryPage from './pages/StreamShapeGalleryPage';
-import StreamActivityPage from './pages/StreamActivityPage';
-import PaymentsPage from './pages/PaymentsPage';
-import CreatePaymentPage from './pages/CreatePaymentPage';
-import PaymentDetailPage from './pages/PaymentDetailPage';
-import AirdropsPage from './pages/AirdropsPage';
-import CreateAirdropPage from './pages/CreateAirdropPage';
-import AirdropDetailPage from './pages/AirdropDetailPage';
-import ClaimLinkPage from './pages/ClaimLinkPage';
-import ExplorerPage from './pages/ExplorerPage';
-import IndexerStatusPage from './pages/IndexerStatusPage';
-import VestingPage from './pages/solutions/VestingPage';
-import PayrollPage from './pages/solutions/PayrollPage';
-import BudgetingPage from './pages/solutions/BudgetingPage';
-import GrantsPage from './pages/solutions/GrantsPage';
-import GovernanceInfoPage from './pages/solutions/GovernanceInfoPage';
-
-import UpdatesPage from './pages/UpdatesPage';
-import UpdateDetailPage from './pages/UpdateDetailPage';
-import ChangelogPage from './pages/ChangelogPage';
-import RoadmapPage from './pages/RoadmapPage';
-import TermsPage from './pages/TermsPage';
-import PrivacyPage from './pages/PrivacyPage';
-import DisclaimerPage from './pages/DisclaimerPage';
-import { AppShellPage } from './pages/AppShellPage';
-import { DaoOverviewPage } from './pages/dao/DaoOverviewPage';
-import { DaoTeamPage } from './pages/dao/DaoTeamPage';
-import { DaoRolesPage } from './pages/dao/DaoRolesPage';
-import { DaoTreasuryPolicyPage } from './pages/dao/DaoTreasuryPolicyPage';
-import { DaoStreamsPage } from './pages/dao/DaoStreamsPage';
-import { SplitLoginScreen } from './pages/SplitLoginScreen';
 import { isAppHost, isExplorerHost } from './utils/publicUrls';
+
+// All non-critical routes are lazy-loaded so they don't enter the initial
+// JS bundle. Each `lazy()` call below corresponds to a separate chunk that
+// downloads only when the route is visited. This cuts roughly half the
+// landing-page payload (the solution pages, marketing pages, /updates blog,
+// and DAO surfaces are large and rarely needed on first paint).
+const VaultsPage = lazy(() => import('./pages/VaultsPage'));
+const CreateVaultPage = lazy(() => import('./pages/CreateVaultPage'));
+const VaultDetailPage = lazy(() => import('./pages/VaultDetailPage'));
+const CreateProposalPage = lazy(() => import('./pages/CreateProposalPage'));
+const ProposalsPage = lazy(() => import('./pages/ProposalsPage'));
+const RequestDetailPage = lazy(() => import('./pages/RequestDetailPage'));
+const BudgetPlansPage = lazy(() => import('./pages/BudgetPlansPage'));
+const CreateBudgetPlanPage = lazy(() => import('./pages/CreateBudgetPlanPage'));
+const GovernancePage = lazy(() => import('./pages/GovernancePage'));
+
+const StreamsPage = lazy(() => import('./pages/StreamsPage'));
+const StreamDetailPage = lazy(() => import('./pages/StreamDetailPage'));
+const CreateStreamPage = lazy(() => import('./pages/CreateStreamPage'));
+const BatchCreateStreamsPage = lazy(() => import('./pages/BatchCreateStreamsPage'));
+const StreamBatchHistoryPage = lazy(() => import('./pages/StreamBatchHistoryPage'));
+const StreamShapeGalleryPage = lazy(() => import('./pages/StreamShapeGalleryPage'));
+const StreamActivityPage = lazy(() => import('./pages/StreamActivityPage'));
+const PaymentsPage = lazy(() => import('./pages/PaymentsPage'));
+const CreatePaymentPage = lazy(() => import('./pages/CreatePaymentPage'));
+const PaymentDetailPage = lazy(() => import('./pages/PaymentDetailPage'));
+const AirdropsPage = lazy(() => import('./pages/AirdropsPage'));
+const CreateAirdropPage = lazy(() => import('./pages/CreateAirdropPage'));
+const AirdropDetailPage = lazy(() => import('./pages/AirdropDetailPage'));
+const ClaimLinkPage = lazy(() => import('./pages/ClaimLinkPage'));
+const ExplorerPage = lazy(() => import('./pages/ExplorerPage'));
+const IndexerStatusPage = lazy(() => import('./pages/IndexerStatusPage'));
+
+const VestingPage = lazy(() => import('./pages/solutions/VestingPage'));
+const PayrollPage = lazy(() => import('./pages/solutions/PayrollPage'));
+const BudgetingPage = lazy(() => import('./pages/solutions/BudgetingPage'));
+const GrantsPage = lazy(() => import('./pages/solutions/GrantsPage'));
+const GovernanceInfoPage = lazy(() => import('./pages/solutions/GovernanceInfoPage'));
+
+const UpdatesPage = lazy(() => import('./pages/UpdatesPage'));
+const UpdateDetailPage = lazy(() => import('./pages/UpdateDetailPage'));
+const ChangelogPage = lazy(() => import('./pages/ChangelogPage'));
+const RoadmapPage = lazy(() => import('./pages/RoadmapPage'));
+const TermsPage = lazy(() => import('./pages/TermsPage'));
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
+const DisclaimerPage = lazy(() => import('./pages/DisclaimerPage'));
+
+const AppShellPage = lazy(() => import('./pages/AppShellPage').then((m) => ({ default: m.AppShellPage })));
+const DaoOverviewPage = lazy(() => import('./pages/dao/DaoOverviewPage').then((m) => ({ default: m.DaoOverviewPage })));
+const DaoTeamPage = lazy(() => import('./pages/dao/DaoTeamPage').then((m) => ({ default: m.DaoTeamPage })));
+const DaoRolesPage = lazy(() => import('./pages/dao/DaoRolesPage').then((m) => ({ default: m.DaoRolesPage })));
+const DaoTreasuryPolicyPage = lazy(() => import('./pages/dao/DaoTreasuryPolicyPage').then((m) => ({ default: m.DaoTreasuryPolicyPage })));
+const DaoStreamsPage = lazy(() => import('./pages/dao/DaoStreamsPage').then((m) => ({ default: m.DaoStreamsPage })));
+const SplitLoginScreen = lazy(() => import('./pages/SplitLoginScreen').then((m) => ({ default: m.SplitLoginScreen })));
+
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-[40vh] text-textMuted text-sm">
+      Loading…
+    </div>
+  );
+}
 
 function App() {
   const wallet = useWallet();
@@ -73,6 +90,7 @@ function App() {
     <div className="bg-background min-h-screen flex flex-col">
       {/* Header removed from App.tsx - Dashboard has internal Nav, Landing has its own Header */}
       <main className="flex-grow">
+        <Suspense fallback={<RouteFallback />}>
         <Routes>
           {/* Public routes */}
           <Route
@@ -485,6 +503,7 @@ function App() {
             }
           />
         </Routes>
+        </Suspense>
       </main>
 
       {/* Global Wallet Modal - rendered at App level, not in Header */}

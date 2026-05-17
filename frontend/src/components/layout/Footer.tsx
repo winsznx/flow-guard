@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Twitter, Send, Youtube } from 'lucide-react';
-import { APP_SITE_URL, DOCS_SITE_URL, EXPLORER_SITE_URL, MAIN_SITE_URL } from '../../utils/publicUrls';
+import { APP_SITE_URL, BLOG_URL, DOCS_SITE_URL, EXPLORER_SITE_URL, MAIN_SITE_URL } from '../../utils/publicUrls';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
@@ -97,6 +97,11 @@ export function Footer() {
                   <Link to="/updates" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
                     Updates
                   </Link>
+                </li>
+                <li>
+                  <a href={BLOG_URL} target="_blank" rel="noopener noreferrer" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Blog
+                  </a>
                 </li>
                 <li>
                   <a href={`${DOCS_SITE_URL}/api/indexer`} target="_blank" rel="noopener noreferrer" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">

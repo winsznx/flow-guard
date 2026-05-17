@@ -123,7 +123,7 @@ const BLOG_POSTS: BlogPost[] = [
     title: 'How FlowGuard Vaults Enforce Spending Rules On-Chain',
     date: '2026-02-20',
     summary:
-      'FlowGuard vaults extend multisig with policy enforcement — directly on Bitcoin Cash. Learn how approval thresholds, cycle-based unlocking, and spending caps work on-chain.',
+      'FlowGuard vaults extend multisig with policy enforcement ,  directly on Bitcoin Cash. Learn how approval thresholds, cycle-based unlocking, and spending caps work on-chain.',
     tags: ['Education', 'Vaults', 'Architecture', 'BCH'],
     readingTime: 6,
     featured: true,

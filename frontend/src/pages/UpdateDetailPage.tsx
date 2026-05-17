@@ -803,7 +803,7 @@ It's harder to prove that the system actually works on-chain.
 
 FlowGuard has been tested end-to-end on the Bitcoin Cash Chipnet test network.
 
-This post explains what that means — and what was actually executed.
+This post explains what that means ,  and what was actually executed.
 
 ## What "End-to-End" Means
 
@@ -1178,7 +1178,7 @@ Votes are validated.
 Tally determines execution.
 Contracts enforce the outcome.
 
-In the next post, we'll move from mechanics to proof — how FlowGuard is tested end-to-end on Chipnet and verifiable on-chain.
+In the next post, we'll move from mechanics to proof ,  how FlowGuard is tested end-to-end on Chipnet and verifiable on-chain.
 `,
   },
   'how-flowguard-enforces-milestone-based-funding-on-chain': {
@@ -1369,7 +1369,7 @@ The contract verifies conditions.
 
 The blockchain enforces release.
 
-Next, we'll break down how governance works — and how token-weighted voting integrates with treasury logic.
+Next, we'll break down how governance works ,  and how token-weighted voting integrates with treasury logic.
 `,
   },
   'how-flowguard-airdrops-use-merkle-proofs-on-chain': {
@@ -1395,7 +1395,7 @@ But most of them are handled manually:
 - A spreadsheet tracking who claimed
 - A backend preventing duplicates
 
-This works — but it relies on trust.
+This works ,  but it relies on trust.
 
 FlowGuard handles airdrops differently.
 
@@ -1803,7 +1803,7 @@ Next, we'll break down how FlowGuard handles airdrops using Merkle roots and on-
     title: 'How FlowGuard Vaults Enforce Spending Rules On-Chain',
     date: '2026-02-20',
     summary:
-      'FlowGuard vaults extend multisig with policy enforcement — directly on Bitcoin Cash. Learn how approval thresholds, cycle-based unlocking, and spending caps work on-chain.',
+      'FlowGuard vaults extend multisig with policy enforcement ,  directly on Bitcoin Cash. Learn how approval thresholds, cycle-based unlocking, and spending caps work on-chain.',
     tags: ['Education', 'Vaults', 'Architecture', 'BCH'],
     readingTime: 6,
     author: 'FlowGuard Team',
@@ -1830,7 +1830,7 @@ It does not answer:
 - Can funds be sent to any address?
 - What happens if spending exceeds a planned budget?
 
-FlowGuard vaults extend multisig with policy enforcement — directly on Bitcoin Cash.
+FlowGuard vaults extend multisig with policy enforcement ,  directly on Bitcoin Cash.
 
 ## What a Vault Actually Stores
 
@@ -2089,9 +2089,9 @@ Signs transactions and authorizes fund movement.
 ### Blockchain
 Enforces covenant rules.
 
-The backend never has signing authority.
+For treasury vaults, streams, and proposal execution, the backend holds no key that can move user funds. The wallet that signs is the wallet that controls the path.
 
-Even if the backend were compromised, it could not spend treasury funds without valid signatures and valid contract conditions.
+Even if the backend were compromised, treasury funds cannot move without valid signatures and valid contract conditions.
 
 ## Streams and State Enforcement
 
@@ -2125,7 +2125,7 @@ Non-custodial design prevents:
 - Hidden rule changes
 - Off-chain governance shortcuts
 
-If treasury policy changes, it must change through contract logic — not through server updates.
+If treasury policy changes, it must change through contract logic ,  not through server updates.
 
 ## Why This Matters for BCH
 
@@ -2243,7 +2243,7 @@ They enforce:
 - Time-based unlock windows
 - Optional recipient restrictions
 
-Signers must approve transactions — but approval alone is not enough.
+Signers must approve transactions ,  but approval alone is not enough.
 
 The contract still verifies:
 
@@ -2370,7 +2370,7 @@ FlowGuard extends BCH into:
 - Structured treasury control
 - On-chain organizational coordination
 
-It allows BCH to support not just transactions — but governance and capital management.
+It allows BCH to support not just transactions ,  but governance and capital management.
 
 That is a meaningful expansion of capability.
 
@@ -2396,7 +2396,7 @@ FlowGuard is not trying to replace wallets.
 
 It’s trying to move treasury logic from conversations to code.
 
-In the next post, we’ll break down how FlowGuard remains non-custodial — and why that matters for real BCH teams managing real capital.
+In the next post, we’ll break down how FlowGuard remains non-custodial ,  and why that matters for real BCH teams managing real capital.
 
 If you’re building on Bitcoin Cash and managing treasury, this is infrastructure worth understanding.
 `,
@@ -2420,7 +2420,7 @@ Most teams in the Bitcoin Cash ecosystem manage treasury the same way:
 - A few trusted signers
 - Verbal rules about how money should be spent
 
-It works — until it doesn't.
+It works ,  until it doesn't.
 
 As treasury size grows, the risks grow with it.
 
@@ -2536,7 +2536,7 @@ It does not answer:
 
 FlowGuard vaults extend multisig with policy enforcement.
 
-Approval is necessary — but not sufficient.
+Approval is necessary ,  but not sufficient.
 
 The contract still checks:
 
@@ -2657,7 +2657,7 @@ Manual treasury and payout operations are error-prone, time-consuming, and hard 
 
 ## The Problem with Manual Processes
 
-Traditional multisig wallets require manual coordination for every payment. Budgets are tracked in spreadsheets. Spending caps aren't enforced—they're just guidelines.
+Traditional multisig wallets require manual coordination for every payment. Budgets are tracked in spreadsheets. Spending caps aren't enforced, they're just guidelines.
 
 ### Key Issues:
 - Manual coordination for every payment

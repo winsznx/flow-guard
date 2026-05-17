@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { APP_SITE_URL } from '../../utils/publicUrls';
+import { APP_SITE_URL, BLOG_URL, DOCS_SITE_URL } from '../../utils/publicUrls';
 import { Link } from 'react-router-dom';
-import { X, ChevronDown, ChevronRight, Coins, Users, PieChart, Gift, Vote, BookOpen, HelpCircle } from 'lucide-react';
+import { X, ChevronDown, ChevronRight, Coins, Users, PieChart, Gift, Vote, BookOpen, HelpCircle, FileText, PenLine } from 'lucide-react';
 
 interface MobileMenuProps {
     isOpen: boolean;
@@ -73,7 +73,21 @@ const resources = [
         name: 'Updates',
         href: '/updates',
         icon: BookOpen,
-        description: 'Latest updates and guides'
+        description: 'Release notes and product news'
+    },
+    {
+        name: 'Blog',
+        href: BLOG_URL,
+        icon: PenLine,
+        isExternal: true,
+        description: 'Long-form posts on FlowGuard internals'
+    },
+    {
+        name: 'Docs',
+        href: DOCS_SITE_URL,
+        icon: FileText,
+        isExternal: true,
+        description: 'Concepts, guides, API reference'
     },
 ];
 
@@ -201,14 +215,21 @@ export function MobileMenu({ isOpen, onClose }: MobileMenuProps) {
                                                 <div className="space-y-2 pl-4 pt-2 border-l-2 border-border/50 ml-1">
                                                     {resources.map((item) => {
                                                         const Icon = item.icon;
-                                                        // Helper to render correctly based on link type
+                                                        // Cross-origin entries (Blog, Docs) open in a new tab to
+                                                        // preserve the marketing-site context. In-page anchors
+                                                        // (e.g. "#faq") stay in the current tab.
                                                         if (item.isExternal) {
+                                                            const isCrossOrigin = /^https?:\/\//i.test(item.href);
+                                                            const externalProps = isCrossOrigin
+                                                                ? { target: '_blank' as const, rel: 'noopener noreferrer' }
+                                                                : {};
                                                             return (
                                                                 <a
                                                                     key={item.name}
                                                                     href={item.href}
                                                                     onClick={onClose}
                                                                     className="flex items-start gap-3 py-3 px-3 rounded-xl hover:bg-surfaceAlt transition-colors group"
+                                                                    {...externalProps}
                                                                 >
                                                                     <Icon className="w-5 h-5 mt-0.5 text-primary group-hover:text-primaryHover" />
                                                                     <div>

@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, BookOpen, HelpCircle } from 'lucide-react';
+import { ChevronDown, BookOpen, HelpCircle, FileText, PenLine } from 'lucide-react';
+import { BLOG_URL, DOCS_SITE_URL } from '../../utils/publicUrls';
 
 interface Resource {
     name: string;
@@ -10,6 +11,9 @@ interface Resource {
     isExternal?: boolean;
 }
 
+// Resources order is intentional. "Updates" stays on apex (release notes /
+// product news, chronological). "Blog" points at the docs subdomain where
+// long-form technical posts live in MDX. Two surfaces, two roles, no overlap.
 const resources: Resource[] = [
     {
         name: 'FAQ',
@@ -21,8 +25,22 @@ const resources: Resource[] = [
     {
         name: 'Updates',
         href: '/updates',
-        description: 'Latest updates and guides',
+        description: 'Release notes and product news',
         icon: BookOpen,
+    },
+    {
+        name: 'Blog',
+        href: BLOG_URL,
+        description: 'Long-form posts on FlowGuard internals',
+        icon: PenLine,
+        isExternal: true,
+    },
+    {
+        name: 'Docs',
+        href: DOCS_SITE_URL,
+        description: 'Concepts, guides, API reference',
+        icon: FileText,
+        isExternal: true,
     },
 ];
 
@@ -60,12 +78,20 @@ export function ResourcesDropdown() {
                         const Icon = resource.icon;
 
                         if (resource.isExternal) {
+                            // Cross-origin links open in a new tab so the user
+                            // doesn't lose the marketing-site context. In-page
+                            // anchors (e.g. "#faq") stay in the current tab.
+                            const isCrossOrigin = /^https?:\/\//i.test(resource.href);
+                            const externalProps = isCrossOrigin
+                                ? { target: '_blank' as const, rel: 'noopener noreferrer' }
+                                : {};
                             return (
                                 <a
                                     key={resource.name}
                                     href={resource.href}
                                     onClick={() => setIsOpen(false)}
                                     className="flex items-start gap-3 px-4 py-3 hover:bg-surfaceAlt transition-colors group"
+                                    {...externalProps}
                                 >
                                     <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center group-hover:bg-accent/20 transition-colors">
                                         <Icon className="w-5 h-5 text-accent" />
