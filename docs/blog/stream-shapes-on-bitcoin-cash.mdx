@@ -1,0 +1,85 @@
+---
+title: 'Stream shapes on Bitcoin Cash'
+description: 'A look at the seven schedule shapes FlowGuard ships and how each one maps to a real treasury workflow.'
+icon: 'water'
+---
+
+Most streaming protocols start with one schedule: linear vesting. Pick a start, an end, set a cliff, let the math handle the rest. Linear is fine. It is also the wrong shape for half the things teams actually do with streamed payments.
+
+FlowGuard ships seven distinct schedule shapes today. Each one corresponds to a real treasury or compensation workflow we kept seeing teams rebuild by hand on top of generic vesting tools. This post walks through what is on the menu, how each shape is enforced on chain, and where to reach for which.
+
+## Why "linear plus cliff" is not enough
+
+A founder grant, a payroll run, a milestone-based grant program, and a pre-paid retainer are all streamed payments. They share almost no schedule shape:
+
+- Founder grants have a cliff and a long linear tail.
+- Payroll runs on fixed monthly cadence with no early access.
+- Milestone grants release in discrete tranches when a deliverable lands.
+- Retainers stream a flat amount every period and refill on demand.
+
+Forcing all four into the same linear curve means the contract enforces less than the agreement. The escrow becomes ceremonial. We wanted the on-chain rules to actually say something about each schedule, so we ended up with shape families instead of a single curve.
+
+## The seven shapes
+
+### 1. Linear vesting
+
+Continuous unlock between `startTime` and `endTime`. The recipient can claim any vested portion at any time. Useful for investor schedules and standard contributor vesting once past the cliff.
+
+### 2. Linear vesting with a cliff
+
+Same shape as linear, with a `cliffTimestamp` before which no claims are valid. The standard founder-grant pattern.
+
+### 3. Hybrid
+
+Splits into two phases. An upfront unlock at `hybridUnlockTimestamp` releases a configured percentage. The remainder vests linearly through `endTime`. Right shape for "half on signing, half over the year" arrangements that keep showing up in compensation negotiations.
+
+### 4. Recurring (fixed cadence)
+
+A set amount unlocks every interval. No interpolation between intervals. Either a payment is due or it is not. Maps cleanly to payroll, subscriptions, and retainers.
+
+### 5. Recurring (refillable)
+
+Open-ended recurring streams without a hard `endTime`. The sender can `refill` at any time to extend runway. Useful for ongoing engagements where the end is "until further notice."
+
+### 6. Milestone (step)
+
+Discrete steps at fixed intervals. The recipient gets a step's worth at a time, never a partial step. Used for staged grants and quarterly compensation reviews.
+
+### 7. Bounded tranches
+
+Up to eight named unlock points with explicit `(timestamp, cumulativeAmount)` pairs. Lets you describe schedules that do not fit any clean curve, without going off-chain to express them.
+
+## How shape selection actually works
+
+The FlowGuard frontend asks two questions before it asks you to pick a shape:
+
+1. Is this a one-time grant or an ongoing payment?
+2. Does the recipient need partial access between unlock dates, or is it strictly step-by-step?
+
+The answer routes you to a small subset of shapes, with previews. The shape gallery exists because shapes are a product surface, not a configuration knob. Picking the wrong shape changes how the on-chain contract behaves, not just how the UI renders.
+
+## On-chain enforcement
+
+Every shape compiles to a CashScript covenant with the same skeleton:
+
+- Immutable parameters baked into the contract bytecode at deployment.
+- Mutable state in a CashToken NFT commitment that the contract advances on each valid action.
+- A single rule per action: claim, pause, resume, cancel, transfer, refill, complete.
+
+The rules are written so an invalid claim simply fails to mint. There is no off-chain ledger reconciling balances. The covenant is the ledger.
+
+## What we did not ship (yet)
+
+Three shapes we considered and shelved for now:
+
+- **Curved vesting** with non-linear easing. Useful for retention-tilted equity but overkill for the treasury work most teams are actually doing.
+- **Conditional vesting** gated on oracle data. We do not want to import oracle complexity until the demand is unambiguous.
+- **Reverse-vesting** clawbacks. Solvable with our cancel path. The dedicated shape was not pulling its weight.
+
+We will add shapes when the workflow they enable is one we have seen teams build by hand more than twice. Speculative shapes accumulate maintenance debt.
+
+## Where to start
+
+The fastest way to understand the shapes is to open the app and step through the previews in the shape gallery. The [vesting concept doc](/concepts/vesting) goes deeper on the math. The [stream lifecycle reference](/concepts/stream-lifecycle) covers what each action does to on-chain state.
+
+If you have a workflow that does not fit any of the seven shapes above, that is signal worth sharing. Open an issue on [GitHub](https://github.com/winsznx/flow-guard) with the schedule you are trying to express. Concrete examples are how the shape set keeps growing in directions that justify the complexity.
