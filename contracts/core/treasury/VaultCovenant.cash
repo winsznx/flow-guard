@@ -134,6 +134,11 @@ contract VaultCovenant(
 
         require(newPeriodId == currentPeriodId || newPeriodId == currentPeriodId + 1);
 
+        // Audit M-09: a zero-value payout was previously permitted, which let two
+        // colluding signers roll the spending window forward while recording no
+        // meaningful on-chain activity. Require a positive payout on every spend.
+        require(payoutAmount > 0);
+
         if (newPeriodId == currentPeriodId + 1) {
             if (periodDuration > 0) { require(tx.locktime >= lastUpdateTime + periodDuration); }
             require(newSpent == payoutAmount);
