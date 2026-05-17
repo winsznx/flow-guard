@@ -206,29 +206,44 @@ export class WalletConnectConnector implements IWalletConnector {
       z-index: 10000;
     `;
 
-    modal.innerHTML = `
-      <div style="
-        background: white;
-        border-radius: 16px;
-        padding: 32px;
-        max-width: 400px;
-        text-align: center;
-      ">
-        <h2 style="margin: 0 0 16px 0; color: #1a1a1a;">Scan with Zapit or Cashonize</h2>
-        <div id="wc-qr-code" style="padding: 16px; background: white; border-radius: 8px;"></div>
-        <p style="margin: 16px 0 0 0; color: #666; font-size: 14px;">
-          Open your mobile BCH wallet and scan the QR code
-        </p>
-        <button id="wc-close-btn" style="
-          margin-top: 16px;
-          padding: 8px 24px;
-          background: #f0f0f0;
-          border: none;
-          border-radius: 8px;
-          cursor: pointer;
-        ">Cancel</button>
-      </div>
+    // Audit H-09: avoid innerHTML template strings. Build the modal with
+    // createElement + textContent so any future caller passing user-controlled
+    // text in (handles, signing-server messages) cannot inject markup.
+    const card = document.createElement('div');
+    card.style.cssText = `
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 400px;
+      text-align: center;
     `;
+
+    const heading = document.createElement('h2');
+    heading.style.cssText = 'margin: 0 0 16px 0; color: #1a1a1a;';
+    heading.textContent = 'Scan with Zapit or Cashonize';
+
+    const qrSlot = document.createElement('div');
+    qrSlot.id = 'wc-qr-code';
+    qrSlot.style.cssText = 'padding: 16px; background: white; border-radius: 8px;';
+
+    const subtitle = document.createElement('p');
+    subtitle.style.cssText = 'margin: 16px 0 0 0; color: #666; font-size: 14px;';
+    subtitle.textContent = 'Open your mobile BCH wallet and scan the QR code';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.id = 'wc-close-btn';
+    closeBtn.style.cssText = `
+      margin-top: 16px;
+      padding: 8px 24px;
+      background: #f0f0f0;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    `;
+    closeBtn.textContent = 'Cancel';
+
+    card.append(heading, qrSlot, subtitle, closeBtn);
+    modal.appendChild(card);
 
     document.body.appendChild(modal);
 
@@ -279,7 +294,7 @@ export class WalletConnectConnector implements IWalletConnector {
         },
       });
 
-      element.innerHTML = '';
+      while (element.firstChild) element.removeChild(element.firstChild);
       element.appendChild(canvas);
 
       // Add copy URI button

@@ -398,54 +398,88 @@ export class CashonizeConnector implements IWalletConnector {
       },
     });
 
-    this.qrModal.innerHTML = `
-      <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6">
-        <div class="text-center mb-4">
-          <h3 class="text-xl font-semibold text-gray-900 mb-2">Connect with Cashonize</h3>
-          <p class="text-sm text-gray-600">
-            Scan this QR code with your Cashonize mobile app
-          </p>
-        </div>
+    // Audit H-09: build the modal with createElement + textContent rather than
+    // innerHTML template strings. The qrDataUrl is currently library-derived
+    // and safe, but the previous shape would silently become an HTML-injection
+    // sink the moment any field flowed in from a remote signing service.
+    const modalRoot = document.createElement('div');
+    modalRoot.className = 'bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 relative';
 
-        <div class="bg-white p-4 rounded-lg border-2 border-gray-200 mb-4">
-          <img src="${qrDataUrl}" alt="QR Code" class="w-full" />
-        </div>
+    const header = document.createElement('div');
+    header.className = 'text-center mb-4';
+    const title = document.createElement('h3');
+    title.className = 'text-xl font-semibold text-gray-900 mb-2';
+    title.textContent = 'Connect with Cashonize';
+    const subtitle = document.createElement('p');
+    subtitle.className = 'text-sm text-gray-600';
+    subtitle.textContent = 'Scan this QR code with your Cashonize mobile app';
+    header.append(title, subtitle);
 
-        <div class="space-y-3">
-          <div class="flex items-center gap-2 text-sm text-gray-600">
-            <div class="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold flex-shrink-0">1</div>
-            <span>Open Cashonize app on your phone</span>
-          </div>
-          <div class="flex items-center gap-2 text-sm text-gray-600">
-            <div class="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold flex-shrink-0">2</div>
-            <span>Tap the scan icon</span>
-          </div>
-          <div class="flex items-center gap-2 text-sm text-gray-600">
-            <div class="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold flex-shrink-0">3</div>
-            <span>Scan this QR code</span>
-          </div>
-        </div>
+    const qrWrapper = document.createElement('div');
+    qrWrapper.className = 'bg-white p-4 rounded-lg border-2 border-gray-200 mb-4';
+    const qrImg = document.createElement('img');
+    qrImg.src = qrDataUrl;
+    qrImg.alt = 'QR Code';
+    qrImg.className = 'w-full';
+    qrWrapper.appendChild(qrImg);
 
-        <div class="mt-6 pt-4 border-t border-gray-200">
-          <p class="text-xs text-gray-500 text-center">
-            Don't have Cashonize?
-            <a href="https://cashonize.com" target="_blank" rel="noopener" class="text-blue-600 hover:underline">
-              Download here
-            </a>
-          </p>
-        </div>
+    const stepsWrapper = document.createElement('div');
+    stepsWrapper.className = 'space-y-3';
+    const steps = [
+      'Open Cashonize app on your phone',
+      'Tap the scan icon',
+      'Scan this QR code',
+    ];
+    steps.forEach((label, i) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2 text-sm text-gray-600';
+      const badge = document.createElement('div');
+      badge.className =
+        'w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold flex-shrink-0';
+      badge.textContent = String(i + 1);
+      const text = document.createElement('span');
+      text.textContent = label;
+      row.append(badge, text);
+      stepsWrapper.appendChild(row);
+    });
 
-        <button
-          onclick="this.closest('.fixed').remove()"
-          class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-          aria-label="Close"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-    `;
+    const footer = document.createElement('div');
+    footer.className = 'mt-6 pt-4 border-t border-gray-200';
+    const footerCopy = document.createElement('p');
+    footerCopy.className = 'text-xs text-gray-500 text-center';
+    footerCopy.append('Don\'t have Cashonize? ');
+    const downloadLink = document.createElement('a');
+    downloadLink.href = 'https://cashonize.com';
+    downloadLink.target = '_blank';
+    downloadLink.rel = 'noopener noreferrer';
+    downloadLink.className = 'text-blue-600 hover:underline';
+    downloadLink.textContent = 'Download here';
+    footerCopy.appendChild(downloadLink);
+    footer.appendChild(footerCopy);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'absolute top-4 right-4 text-gray-400 hover:text-gray-600';
+    closeBtn.setAttribute('aria-label', 'Close');
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'w-6 h-6');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('d', 'M6 18L18 6M6 6l12 12');
+    svg.appendChild(path);
+    closeBtn.appendChild(svg);
+    closeBtn.addEventListener('click', () => this.hideQRModal());
+
+    modalRoot.append(header, qrWrapper, stepsWrapper, footer, closeBtn);
+
+    // Replace any prior content atomically
+    while (this.qrModal.firstChild) this.qrModal.removeChild(this.qrModal.firstChild);
+    this.qrModal.appendChild(modalRoot);
 
     document.body.appendChild(this.qrModal);
   }
