@@ -1,21 +1,21 @@
 # FlowGuard
 
-FlowGuard is a BCH-native operating layer for contract-backed treasuries, streams, payments, distributions, and governance workflows on Bitcoin Cash.
+A BCH-native covenant operating layer for treasuries, streams, payments, distributions, and governance.
 
-It combines CashScript covenants, wallet-driven signing, backend transaction builders, and indexer activity views so teams can run treasury logic on-chain without giving custody to an application server.
+FlowGuard combines CashScript covenants, wallet-driven signing, backend transaction builders, and indexed activity views. Teams can run treasury logic on chain without giving custody to an application server.
 
-## What FlowGuard includes
+## What ships today
 
-- Multi-member treasury vaults with policy controls, proposal workflows, and activity tracking
-- Contract-backed stream families for linear, cliffed linear, hybrid, recurring, refillable recurring, milestone, and tranche schedules
-- One-time payments and recurring payout flows
-- Airdrops, rewards, bounties, and grants backed by on-chain contract logic
-- Governance proposal and vote-lock infrastructure for treasury-linked decision making
-- Personal and organization workspace surfaces in the frontend
+- Multi-member treasury vaults with policy controls, proposal workflows, and activity tracking.
+- Contract-backed stream families: linear, cliffed linear, hybrid, recurring, refillable recurring, milestone, and tranche schedules.
+- One-time payments and recurring payout flows.
+- Airdrops, rewards, bounties, and grants backed by on-chain contract logic.
+- Governance proposals and vote-lock infrastructure tied to treasury operations.
+- Personal and organization workspace surfaces in the frontend.
 
-## Stream families supported today
+## Stream families
 
-FlowGuard does not treat every schedule as the same thing under the hood. The app currently ships with contract-backed support for:
+FlowGuard does not treat every schedule as the same thing under the hood. The current covenant set covers:
 
 - Linear vesting
 - Linear vesting with a cliff
@@ -29,24 +29,20 @@ The frontend includes a shape gallery, schedule previews, row-level batch charts
 
 ## Repository layout
 
-- `frontend/`
-  React + Vite application for the public site, personal workspace, and organization workspace
-- `backend/`
-  Express + TypeScript API for transaction building, app state, indexing hooks, and execution services
-- `contracts/`
-  CashScript covenant source and compiled artifacts for treasury, streaming, distribution, and governance modules
-- `docs/`
-  Product, guide, API, and reference documentation
+- `frontend/`: React + Vite application for the public site, personal workspace, and organization workspace.
+- `backend/`: Express + TypeScript API for transaction building, app state, indexing hooks, and execution services.
+- `contracts/`: CashScript covenant source and compiled artifacts for treasury, streaming, distribution, and governance modules.
+- `docs/`: Mintlify documentation (concepts, guides, API reference, app guide).
 
 ## Core architecture
 
-FlowGuard keeps users in control of signing:
+Users keep control of signing throughout:
 
 1. The frontend collects configuration and requests a transaction build.
 2. The backend assembles a contract-aware unsigned transaction descriptor.
 3. The user signs in a BCH wallet.
-4. The signed transaction is broadcast to the Bitcoin Cash network.
-5. The app observes the resulting contract state and updates activity/history views.
+4. The signed transaction broadcasts to the Bitcoin Cash network.
+5. The app observes the resulting contract state and updates activity views.
 
 ## Quick start
 
@@ -84,17 +80,19 @@ Open `http://localhost:5173`.
 
 ### Backend
 
-Key environment values in `backend/.env`:
+Key values in `backend/.env`:
 
 - `PORT`
 - `BCH_NETWORK=chipnet|mainnet`
-- `DATABASE_PATH`
-- `CHAINGRAPH_URL` for richer chain indexing when configured
-- backend authority or fee-payer values used by specific product flows, when enabled
+- `DATABASE_URL`: Postgres connection string (Supabase or self-hosted).
+- `CHAINGRAPH_URL`: optional, enables richer chain indexing.
+- `CORS_ALLOWED_ORIGINS`: comma-separated list of allowed frontend origins.
+- `ADMIN_EXPORT_TOKEN`: optional, enables `/api/admin/export` (redacts private-key columns).
+- Authority and fee-payer values used by specific product flows when enabled.
 
 ### Frontend
 
-- `VITE_API_BASE_URL` pointing at the backend host
+- `VITE_API_BASE_URL`: backend host the app proxies API calls to.
 
 ### Optional services
 
@@ -114,9 +112,9 @@ cd backend && pnpm build
 cd frontend && pnpm build
 ```
 
-## Contract verification commands
+## Contract verification
 
-Current local verification paths:
+Local verification paths:
 
 ```bash
 cd contracts && pnpm run check
@@ -126,17 +124,17 @@ cd contracts && pnpm run test:streaming
 
 ## Deployment notes
 
-- Frontend: static deployment for `frontend/dist`
-- Backend API: Node deployment with persistent storage for SQLite when used
-- Contracts: compiled locally and consumed by the backend and tests
-- Docs: Mint-based documentation under `docs/`
+- Frontend: static deploy of `frontend/dist`.
+- Backend API: Node deployment with a Postgres database (Supabase or self-hosted).
+- Contracts: compiled locally and consumed by the backend and tests.
+- Docs: Mintlify documentation under `docs/`.
 
-Production use should follow contract review, operational testing, and wallet compatibility checks before mainnet rollout.
+Mainnet rollout should follow contract review, operational testing, and wallet compatibility checks.
 
 ## Documentation
 
 - Product docs: `docs/`
-- Public docs site: `https://docs.flowguard.cash`
+- Public docs site: [docs.flowguard.cash](https://docs.flowguard.cash)
 
 ## Status
 
