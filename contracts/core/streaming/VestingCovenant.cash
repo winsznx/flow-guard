@@ -111,6 +111,13 @@ contract VestingCovenant(
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: cap the BCH the claimer can skim as "miner fee" on claim.
+        // Without this, a claim transaction can send the contract's entire BCH
+        // reserve to fees, breaking future claims and (with miner collusion)
+        // exfiltrating funds. Mirrors the cap enforced in complete() below.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 2000);
     }
 
     /**
@@ -172,6 +179,10 @@ contract VestingCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: bound pause-path miner fee.
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     /**
@@ -207,6 +218,10 @@ contract VestingCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: bound resume-path miner fee.
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     /**
@@ -301,5 +316,10 @@ contract VestingCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: bound transfer-path miner fee; without this, the
+        // (signed) recipient could burn the contract reserve during handover.
+        int transferFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(transferFee >= 0 && transferFee <= 2000);
     }
 }

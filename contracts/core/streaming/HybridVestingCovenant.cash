@@ -82,6 +82,11 @@ contract HybridVestingCovenant(
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: cap claim miner fee. Prevents the recipient (or a miner
+        // colluding with them) from draining the contract BCH reserve.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 2000);
     }
 
     function complete() {
@@ -129,6 +134,10 @@ contract HybridVestingCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: bound pause-path miner fee.
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     function resume(sig senderSig, pubkey senderPubkey) {
@@ -157,6 +166,10 @@ contract HybridVestingCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: bound resume-path miner fee.
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     function cancel(sig senderSig, pubkey senderPubkey) {
@@ -227,5 +240,9 @@ contract HybridVestingCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Audit H-02: bound transfer-path miner fee.
+        int transferFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(transferFee >= 0 && transferFee <= 2000);
     }
 }
