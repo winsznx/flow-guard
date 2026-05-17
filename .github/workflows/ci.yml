@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CI: 'true'
+  NODE_ENV: 'test'
+
+jobs:
+  contracts:
+    name: Contracts (compile + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Compile every covenant (cashc check + build)
+        working-directory: contracts
+        run: |
+          pnpm run check
+          pnpm run build
+      - name: Verify built artifacts exist
+        working-directory: contracts
+        run: |
+          set -e
+          for f in artifacts/treasury/VaultCovenant.json \
+                   artifacts/treasury/ProposalCovenant.json \
+                   artifacts/streaming/VestingCovenant.json \
+                   artifacts/streaming/HybridVestingCovenant.json \
+                   artifacts/streaming/RecurringPaymentCovenant.json \
+                   artifacts/streaming/TrancheVestingCovenant.json \
+                   artifacts/distribution/AirdropCovenant.json \
+                   artifacts/distribution/RewardCovenant.json \
+                   artifacts/distribution/BountyCovenant.json \
+                   artifacts/distribution/GrantCovenant.json \
+                   artifacts/governance/VoteLockCovenant.json \
+                   artifacts/governance/TallyCommitment_FixedMax.json \
+                   artifacts/governance/TallyCommitment_Attested.json; do
+            test -s "$f" || { echo "missing or empty artifact: $f" >&2; exit 1; }
+          done
+
+  backend:
+    name: Backend (typecheck + build)
+    runs-on: ubuntu-latest
+    needs: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build contracts (so backend artifact imports resolve)
+        working-directory: contracts
+        run: pnpm run build
+      - name: Typecheck
+        working-directory: backend
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+      - name: Build
+        working-directory: backend
+        run: pnpm build
+
+  frontend:
+    name: Frontend (typecheck + production build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+      - name: Production build
+        working-directory: frontend
+        run: pnpm exec vite build
+
+  audit:
+    name: pnpm audit (advisory budget)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Audit (informational, fails the job for HIGH or higher)
+        run: pnpm audit --audit-level high
