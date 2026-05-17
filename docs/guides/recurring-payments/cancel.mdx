@@ -4,7 +4,7 @@ description: "Cancel a recurring payment and recover the remaining pool."
 icon: "circle-xmark"
 ---
 
-Cancelling a recurring payment returns the entire remaining pool to the sender. Any amount already paid to the recipient is settled — only the unpaid remainder returns.
+Cancelling a recurring payment returns the entire remaining pool to the sender. Any amount already paid to the recipient is settled ,  only the unpaid remainder returns.
 
 <Note>
 Cancel requires `FLAG_CANCELABLE`. If the payment was deployed without this flag, neither sender nor anyone else can cancel it.
@@ -20,7 +20,7 @@ Cancel requires `FLAG_CANCELABLE`. If the payment was deployed without this flag
     Click **Cancel Payment**. The preview shows the remaining pool amount that will return to the sender.
   </Step>
   <Step title="Sign and confirm">
-    Sign with the sender wallet. The covenant UTXO is consumed. The remaining pool is sent to the sender's address in the same transaction. No NFT output is produced — the payment is terminated.
+    Sign with the sender wallet. The covenant UTXO is consumed. The remaining pool is sent to the sender's address in the same transaction. No NFT output is produced ,  the payment is terminated.
   </Step>
 </Steps>
 

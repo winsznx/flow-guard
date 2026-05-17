@@ -22,40 +22,40 @@ FlowGuard contracts enforce access control with BCH signature checks against con
 
 | Function     | VestingCovenant           | RecurringPaymentCovenant |
 | ------------ | ------------------------- | ------------------------ |
-| `claim()`    | Recipient                 | —                        |
-| `pay()`      | —                         | Permissionless           |
-| `complete()` | Permissionless after end  | —                        |
+| `claim()`    | Recipient                 | ,                         |
+| `pay()`      | ,                          | Permissionless           |
+| `complete()` | Permissionless after end  | ,                         |
 | `pause()`    | Sender                    | Sender                   |
 | `resume()`   | Sender                    | Sender                   |
 | `cancel()`   | Sender if cancelable      | Sender if cancelable     |
-| `transfer()` | Recipient if transferable | —                        |
-| `refill()`   | —                         | Sender                   |
+| `transfer()` | Recipient if transferable | ,                         |
+| `refill()`   | ,                          | Sender                   |
 
 ## Distribution Covenants
 
 | Function             | Airdrop                                                | Grant                     | Bounty                  | Reward                  |
 | -------------------- | ------------------------------------------------------ | ------------------------- | ----------------------- | ----------------------- |
-| `claim()`            | Permissionless submission with claim-authority co-sign | —                         | Authority co-sign       | —                       |
-| `releaseMilestone()` | —                                                      | Authority                 | —                       | —                       |
-| `reward()`           | —                                                      | —                         | —                       | Authority               |
+| `claim()`            | Permissionless submission with claim-authority co-sign | ,                          | Authority co-sign       | ,                        |
+| `releaseMilestone()` | ,                                                       | Authority                 | ,                        | ,                        |
+| `reward()`           | ,                                                       | ,                          | ,                        | Authority               |
 | `pause()`            | Authority                                              | Authority                 | Authority               | Authority               |
 | `resume()`           | Authority                                              | Authority                 | Authority               | Authority               |
 | `cancel()`           | Authority if cancelable                                | Authority if cancelable   | Authority if cancelable | Authority if cancelable |
-| `transfer()`         | —                                                      | Recipient if transferable | —                       | —                       |
+| `transfer()`         | ,                                                       | Recipient if transferable | ,                        | ,                        |
 
 ## Treasury Covenants
 
 | Function          | VaultCovenant           | ProposalCovenant              |
 | ----------------- | ----------------------- | ----------------------------- |
-| `spend()`         | M-of-N vault signers    | —                             |
-| `unlockPeriod()`  | any single vault signer | —                             |
-| `approve()`       | —                       | registered vault signer       |
-| `execute()`       | —                       | permissionless after timelock |
-| `cancel()`        | —                       | M-of-N vault signers          |
-| `expire()`        | —                       | permissionless after deadline |
-| `pause()`         | any single vault signer | —                             |
-| `resume()`        | M-of-N vault signers    | —                             |
-| `emergencyLock()` | all registered signers  | —                             |
+| `spend()`         | M-of-N vault signers    | ,                              |
+| `unlockPeriod()`  | any single vault signer | ,                              |
+| `approve()`       | ,                        | registered vault signer       |
+| `execute()`       | ,                        | permissionless after timelock |
+| `cancel()`        | ,                        | M-of-N vault signers          |
+| `expire()`        | ,                        | permissionless after deadline |
+| `pause()`         | any single vault signer | ,                              |
+| `resume()`        | M-of-N vault signers    | ,                              |
+| `emergencyLock()` | all registered signers  | ,                              |
 
 ## Governance Covenants
 

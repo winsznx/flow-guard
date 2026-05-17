@@ -15,7 +15,7 @@ icon: "square-check"
 |-|-|-|
 | `proposalId` | `bytes32` | Links vote to specific proposal |
 | `voteChoice` | `int` | `0` = AGAINST, `1` = FOR, `2` = ABSTAIN |
-| `voterHash` | `bytes20` | `hash160(voter pubkey)` — only owner can reclaim |
+| `voterHash` | `bytes20` | `hash160(voter pubkey)` ,  only owner can reclaim |
 | `unlockTimestamp` | `int` | When tokens can be reclaimed |
 
 ## NFT State (32 bytes)
@@ -50,7 +50,7 @@ Returns all locked governance FTs to voter after `unlockTimestamp`.
 Returns tokens before `unlockTimestamp` if the proposal is done. Caller must pass a valid terminal status: `2` (EXECUTED), `3` (CANCELLED), or `4` (EXPIRED).
 
 <Note>
-BCH has no cross-UTXO reads. The voter supplies `proposalFinalStatus` as a parameter — the covenant only validates enum membership (`2|3|4`). Off-chain verification of actual proposal status is required.
+BCH has no cross-UTXO reads. The voter supplies `proposalFinalStatus` as a parameter ,  the covenant only validates enum membership (`2|3|4`). Off-chain verification of actual proposal status is required.
 </Note>
 
 <Note>

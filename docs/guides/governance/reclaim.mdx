@@ -8,7 +8,7 @@ When you lock tokens to vote on a governance proposal, those tokens are held in 
 
 <Steps>
   <Step title="Wait for voting to close">
-    The proposal detail page shows the voting deadline. Tokens cannot be unlocked while the vote is still open — the covenant enforces this with `tx.locktime >= votingPeriodEnd`.
+    The proposal detail page shows the voting deadline. Tokens cannot be unlocked while the vote is still open ,  the covenant enforces this with `tx.locktime >= votingPeriodEnd`.
   </Step>
   <Step title="Open the proposal">
     Navigate to **Governance → [proposal]** and find your vote entry in the vote list.
@@ -17,7 +17,7 @@ When you lock tokens to vote on a governance proposal, those tokens are held in 
     Click **Unlock Tokens**. The app calls `POST /api/governance/:proposalId/unlock` with your address. The backend reads your stored `contract_address`, `constructor_params`, and `nft_commitment` from when you confirmed the lock.
   </Step>
   <Step title="Sign">
-    Your wallet displays the unlock transaction. Sign it — this returns your CashTokens to your address.
+    Your wallet displays the unlock transaction. Sign it ,  this returns your CashTokens to your address.
   </Step>
   <Step title="Confirm">
     The app calls `POST /api/governance/:proposalId/confirm-unlock` with the `txHash`. The backend verifies your address received the tokens and marks the unlock complete.
@@ -26,7 +26,7 @@ When you lock tokens to vote on a governance proposal, those tokens are held in 
 
 ## What if the Contract Data is Missing?
 
-If you voted using the off-chain vote endpoint (without locking on-chain), there is no VoteLockCovenant to unlock — no tokens were ever locked. Only votes submitted via `POST /governance/:id/lock` and `confirm-lock` lock actual tokens.
+If you voted using the off-chain vote endpoint (without locking on-chain), there is no VoteLockCovenant to unlock ,  no tokens were ever locked. Only votes submitted via `POST /governance/:id/lock` and `confirm-lock` lock actual tokens.
 
 ## Lost Vote Record
 

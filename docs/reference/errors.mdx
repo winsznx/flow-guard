@@ -17,11 +17,11 @@ All FlowGuard API errors return a JSON body with an `"error"` field and optional
 
 | Code | Meaning |
 |------|---------|
-| `400` | Bad request — missing or invalid parameters |
-| `401` | Authentication required — missing `x-user-address` header |
-| `403` | Forbidden — calling wallet is not authorized for this action |
+| `400` | Bad request ,  missing or invalid parameters |
+| `401` | Authentication required ,  missing `x-user-address` header |
+| `403` | Forbidden ,  calling wallet is not authorized for this action |
 | `404` | Resource not found |
-| `409` | Conflict — duplicate action or unsafe state |
+| `409` | Conflict ,  duplicate action or unsafe state |
 | `500` | Internal server error |
 
 ## Common Errors by Product
@@ -37,7 +37,7 @@ All FlowGuard API errors return a JSON body with an `"error"` field and optional
 | `Only the stream recipient can claim funds` | Wrong wallet calling claim |
 | `Stream is not cancelable` | Cancelable flag was `false` at creation |
 | `Only sender can cancel` | Wrong wallet calling cancel |
-| `Unsafe cancel destination` | Contract sender hash resolves to different address than signer — pass `"allowUnsafeRecovery": true` to override |
+| `Unsafe cancel destination` | Contract sender hash resolves to different address than signer ,  pass `"allowUnsafeRecovery": true` to override |
 | `Transaction hash not found on chipnet` | `txHash` not yet confirmed or wrong network |
 | `Funding transaction does not include the expected contract output` | Transaction sent to wrong address or insufficient amount |
 

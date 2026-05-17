@@ -11,18 +11,18 @@ CashScript is a high-level language that compiles to Bitcoin Script. A **covenan
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant BCH Node
-    participant Covenant Script
+    participant Node as BCH Node
+    participant Script as Covenant Script
 
-    Caller->>BCH Node: Submit transaction (inputs + outputs)
-    BCH Node->>Covenant Script: Execute input script
-    Covenant Script->>Covenant Script: Validate outputs match rules
+    Caller->>Node: Submit transaction (inputs + outputs)
+    Node->>Script: Execute input script
+    Script->>Script: Validate outputs match rules
     alt Valid
-        Covenant Script>>BCH Node: PASS
-        BCH Node>>Caller: Transaction confirmed
+        Script-->>Node: PASS
+        Node-->>Caller: Transaction confirmed
     else Invalid
-        Covenant Script>>BCH Node: FAIL
-        BCH Node>>Caller: Transaction rejected
+        Script-->>Node: FAIL
+        Node-->>Caller: Transaction rejected
     end
 ```
 

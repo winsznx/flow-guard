@@ -50,7 +50,7 @@ Bytes 25-31: reserved
 ## Functions
 
 <AccordionGroup>
-  <Accordion title="spend() — Execute a payout with M-of-N approval">
+  <Accordion title="spend() ,  Execute a payout with M-of-N approval">
     Called by any M signers simultaneously. Verifies two distinct signers from the registered set, enforces period cap, recipient cap, and allowlist. Automatically rolls the period forward if `periodDuration` has elapsed.
 
     ```
@@ -59,16 +59,16 @@ Bytes 25-31: reserved
           int newPeriodId, int newSpent)
     ```
   </Accordion>
-  <Accordion title="unlockPeriod() — Roll period forward without spending">
+  <Accordion title="unlockPeriod() ,  Roll period forward without spending">
     Any registered signer can call this after `periodDuration` has elapsed. Resets `spent_this_period` to 0 and increments `current_period_id`. Does not move any funds.
   </Accordion>
-  <Accordion title="pause() — Freeze the vault">
+  <Accordion title="pause() ,  Freeze the vault">
     Any single registered signer can pause the vault immediately. Use for fast incident response. Resume requires M-of-N.
   </Accordion>
-  <Accordion title="resume() — Unfreeze the vault">
+  <Accordion title="resume() ,  Unfreeze the vault">
     Requires M-of-N signers. Transitions status from PAUSED back to ACTIVE.
   </Accordion>
-  <Accordion title="emergencyLock() — Full lockdown">
+  <Accordion title="emergencyLock() ,  Full lockdown">
     Requires **all 3** registered signers simultaneously. Transitions to `EMERGENCY_LOCK`. No spending path is available from this state in the current contract version.
 
     <Warning>

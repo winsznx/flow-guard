@@ -23,6 +23,14 @@
   },
   "topbarLinks": [
     {
+      "name": "Home",
+      "url": "https://flowguard.cash"
+    },
+    {
+      "name": "Updates",
+      "url": "https://flowguard.cash/updates"
+    },
+    {
       "name": "Explorer",
       "url": "https://explorer.flowguard.cash"
     }
@@ -42,6 +50,10 @@
     {
       "name": "App Guide",
       "url": "app"
+    },
+    {
+      "name": "Blog",
+      "url": "blog"
     }
   ],
   "anchors": [
@@ -211,6 +223,12 @@
         "app/governance",
         "app/explorer",
         "app/status"
+      ]
+    },
+    {
+      "group": "Blog",
+      "pages": [
+        "blog/stream-shapes-on-bitcoin-cash"
       ]
     }
   ],

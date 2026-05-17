@@ -4,13 +4,13 @@ description: "How FlowGuard's contracts, backend services, indexer, executor, an
 icon: 'diagram-project'
 ---
 
-## System Overview
+## System overview
 
 FlowGuard has three main layers:
 
-- on-chain covenant state on Bitcoin Cash
-- backend services that build, confirm, index, and monitor transactions
-- frontend product surfaces for treasury, streams, distributions, and governance
+- On-chain covenant state on Bitcoin Cash.
+- Backend services that build, confirm, index, and monitor transactions.
+- Frontend product surfaces for treasury, streams, distributions, and governance.
 
 ```mermaid
 flowchart TD
@@ -33,7 +33,7 @@ flowchart TD
     STREAMS["Streaming Covenants"]
     DIST["Distribution Covenants"]
     IDX["Indexer"]
-    DB[("SQLite DB")]
+    DB[("Postgres")]
     API["Backend API"]
     EXE["Optional Executor"]
     APP["Frontend App"]
@@ -68,7 +68,7 @@ sequenceDiagram
     participant API as Backend API
     participant BCH as BCH Node
     participant IDX as Indexer / Monitor
-    participant DB as SQLite DB
+    participant DB as Postgres
 
     FE->>API: request build payload
     API->>FE: wcTransaction + metadata
@@ -88,7 +88,7 @@ The executor is optional infrastructure. It exists to improve liveness for permi
 ```mermaid
 sequenceDiagram
     participant EXE as Executor
-    participant DB as SQLite DB
+    participant DB as Postgres
     participant TB as TransactionBuilder
     participant BCH as BCH Node
 

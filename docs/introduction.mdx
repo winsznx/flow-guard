@@ -1,19 +1,17 @@
 ---
 title: 'Introduction'
-description: 'FlowGuard is a BCH-native covenant operating layer for treasuries, streams, distributions, and governance.'
+description: 'A BCH-native covenant operating layer for treasuries, streams, distributions, and governance.'
 icon: 'shield-halved'
 ---
 
-FlowGuard turns Bitcoin Cash and CashTokens into programmable financial products. It uses CashScript covenants and mutable CashToken NFT state to enforce treasury policy, stream schedules, recurring payouts, and distribution rules directly on-chain.
+FlowGuard turns Bitcoin Cash and CashTokens into programmable financial products. CashScript covenants and mutable CashToken NFT state enforce treasury policy, stream schedules, recurring payouts, and distribution rules directly on chain.
 
 <CardGroup cols={2}>
   <Card title="Streams" icon="lock-keyhole" href="/concepts/vesting">
-    Linear, hybrid, milestone, tranche, and recurring schedules with claim, pause, transfer, and
-    refill controls where supported.
+    Linear, hybrid, milestone, tranche, and recurring schedules with claim, pause, transfer, and refill controls where supported.
   </Card>
   <Card title="Recurring Payments" icon="arrows-rotate" href="/concepts/recurring-payments">
-    Fixed cadence BCH or CashToken payouts for payroll, subscriptions, retainers, and DAO
-    contributor compensation.
+    Fixed cadence BCH or CashToken payouts for payroll, subscriptions, retainers, and contributor compensation.
   </Card>
   <Card title="Airdrops" icon="parachute-box" href="/concepts/airdrops">
     Claim-based distributions with authority controls, scheduling, and CashToken support.
@@ -28,21 +26,19 @@ FlowGuard turns Bitcoin Cash and CashTokens into programmable financial products
     Variable incentive payouts for achievements, referrals, and loyalty programs.
   </Card>
   <Card title="Vaults" icon="vault" href="/concepts/vaults">
-    BCH and CashToken treasury control with signer thresholds, spending policy, and linked covenant
-    workflows.
+    BCH and CashToken treasury control with signer thresholds, spending policy, and linked covenant workflows.
   </Card>
   <Card title="Governance" icon="landmark" href="/concepts/governance">
-    Proposal execution and vote-lock based decision flows tied to treasury operations.
+    Proposal execution and vote-lock decision flows tied to treasury operations.
   </Card>
 </CardGroup>
 
-## How It Works
+## How it works
 
-Every FlowGuard product is represented by a covenant-controlled UTXO. Immutable deployment rules live in the contract bytecode, and mutable runtime state lives in a mutable CashToken NFT commitment. Each valid action consumes the current state UTXO, verifies the transition, and produces the next state UTXO or a terminal payout.
+Every FlowGuard product is a covenant-controlled UTXO. Immutable deployment rules live in the contract bytecode. Mutable runtime state lives in a CashToken NFT commitment. Each valid action consumes the current state UTXO, verifies the transition, and produces the next state UTXO or a terminal payout.
 
 <Note>
-  FlowGuard is not just a dashboard layered on top of a wallet. The app builds and signs real BCH
-  transactions that the contracts validate on-chain.
+  FlowGuard is more than a dashboard layered on top of a wallet. The app builds and signs real BCH transactions that the contracts validate on chain.
 </Note>
 
 ## Products
@@ -58,23 +54,23 @@ Every FlowGuard product is represented by a covenant-controlled UTXO. Immutable 
 | Vaults             | `VaultCovenant`                                                      | Multi-asset treasury management with signer policy and linked covenant actions       |
 | Governance         | `VoteLockCovenant`, `ProposalCovenant`                               | On-chain voting and treasury-linked proposal execution                               |
 
-## Shared Workspaces
+## Shared workspaces
 
-FlowGuard uses the same core stream and treasury product surfaces in both personal and organization contexts:
+FlowGuard ships the same stream and treasury surfaces in two contexts:
 
 - **Personal workspace** for individual vaults, streams, recurring payments, and distributions.
 - **Organization workspace** for treasury-linked operations, batch creation, activity review, and DAO-style policy views.
 
-The UI changes the launch context and navigation, but the app still builds the same contract-backed transaction flows underneath.
+The UI changes the launch context and navigation. The underlying contract-backed transaction flow is identical.
 
-## Quick Links
+## Quick links
 
 <CardGroup cols={3}>
   <Card title="Getting Started" icon="rocket" href="/app/getting-started">
     Connect a BCH wallet and learn the shared personal and organization workflow.
   </Card>
   <Card title="Streams API" icon="water" href="/api/streams">
-    Review current stream, refill, transfer, activity, and batch endpoints.
+    Stream, refill, transfer, activity, and batch endpoints.
   </Card>
   <Card title="Architecture" icon="diagram-project" href="/reference/architecture">
     See how vaults, streams, distributions, and governance fit together.

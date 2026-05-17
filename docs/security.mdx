@@ -1,66 +1,74 @@
 ---
-title: "Security"
-description: "What FlowGuard enforces on-chain, what still depends on off-chain services, and where the trust boundaries actually are."
-icon: "shield"
+title: 'Security'
+description: 'What FlowGuard enforces on chain, what depends on off-chain services, and where the trust boundaries are.'
+icon: 'shield'
 ---
 
-FlowGuard's security model starts with BCH consensus enforcement. The contracts validate treasury rules, stream math, timing constraints, and state transitions on-chain. Off-chain services help with UX, indexing, and liveness, but they do not replace contract enforcement.
+FlowGuard's security model starts with BCH consensus enforcement. The contracts validate treasury rules, stream math, timing constraints, and state transitions on chain. Off-chain services help with UX, indexing, and liveness. They do not replace contract enforcement.
 
-## What the Contracts Enforce
+## What the contracts enforce
 
-| Area | On-chain guarantee |
-| --- | --- |
-| Treasury policy | spending limits, signer thresholds, recipient rules, and treasury state transitions are validated by covenant logic |
-| Stream schedules | claim amounts, unlock timing, refill transitions, and terminal states follow the deployed schedule family |
-| Vote locks | locked voting state and reclaim timing are enforced by the vote lock covenant |
-| Distribution rules | campaign state, claim limits, and payout conditions are validated by the distribution contract path |
+| Area                | On-chain guarantee                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Treasury policy     | Spending limits, signer thresholds, recipient rules, and treasury state transitions are validated by covenant logic. |
+| Stream schedules    | Claim amounts, unlock timing, refill transitions, and terminal states follow the deployed schedule family.   |
+| Vote locks          | Locked voting state and reclaim timing are enforced by the vote lock covenant.                               |
+| Distribution rules  | Campaign state, claim limits, and payout conditions are validated by the distribution contract path.         |
 
-## What Off-Chain Services Do
+## What off-chain services do
 
-| Component | Role |
-| --- | --- |
-| frontend | presents product state and helps the user build the right transaction |
-| backend API | assembles transaction descriptors, confirms broadcasts, and serves indexed state |
-| indexer | reconstructs covenant state into queryable product views |
-| executor | improves liveness for permissionless timed actions |
+| Component   | Role                                                                       |
+| ----------- | -------------------------------------------------------------------------- |
+| Frontend    | Presents product state and helps the user build the right transaction.    |
+| Backend API | Assembles transaction descriptors, confirms broadcasts, and serves indexed state. |
+| Indexer     | Reconstructs covenant state into queryable product views.                  |
+| Executor    | Improves liveness for permissionless timed actions.                        |
 
-## Honest Trust Boundaries
+## Trust boundaries
 
 ### Frontend and API
 
-The frontend and API can be wrong about display state, but they still cannot make an invalid contract transition succeed on-chain. Users can self-host or independently verify if they need stronger operational assurance.
+The frontend and API can be wrong about display state. They cannot make an invalid contract transition succeed on chain. Self-host or independently verify if you need stronger operational assurance.
 
 ### Indexer
 
-Indexing improves usability and reporting. It is not the source of truth for covenant validity. If indexed state looks wrong, the on-chain contract state still governs what can actually happen.
+Indexing improves usability and reporting. It is not the source of truth for covenant validity. If indexed state looks wrong, on-chain state still governs what can happen.
 
 ### Executor
 
-Executors improve liveness for permissionless functions. They do not get special contract powers and they cannot bypass the covenant.
+Executors trigger permissionless functions when their preconditions are met. They have no special contract powers and cannot bypass the covenant.
 
 ### Metadata
 
-Descriptions, labels, and some higher-level UI context are off-chain metadata. They improve readability, but they are not the authority for contract state.
+Descriptions, labels, and higher-level UI context are off-chain metadata. They improve readability. They are not authoritative for contract state.
 
-## Key Management
+## Authentication
+
+Mutating API calls require a wallet-ownership proof. The client signs a one-shot server-issued nonce with the private key for the declared BCH address. The backend verifies the signature against the address's pubkey hash before any state-changing handler runs. Read endpoints stay open.
+
+## Key management
 
 FlowGuard does not remove the need for good key management.
 
-- protect signer keys and treasury operators carefully
-- use hardware wallets for high-value operations
-- choose signer thresholds that fit your recovery and control needs
+- Protect signer keys and treasury operators carefully.
+- Use hardware wallets for high-value operations.
+- Choose signer thresholds that fit your recovery and control needs.
 
-## Current Contract Status
+## Current contract status
 
-FlowGuard is operating on Chipnet and should be treated as a BCH-native testnet product today. Contract verification and local test coverage have improved, but mainnet-grade production assumptions should wait for the full deployment and audit posture you are comfortable with.
+FlowGuard runs on Chipnet today. Treat it as a BCH-native testnet product until contract review and the deployment posture meet your production bar. Local test coverage and contract verification have improved, but mainnet rollout should follow the operational checks each team is comfortable with.
 
-## Self-Hosted Verification
+## Self-hosted verification
 
-If you want a stronger verification posture, run your own:
+For stronger assurance, run your own:
 
-- frontend
-- backend API
-- indexer
-- executor
+- Frontend
+- Backend API
+- Indexer
+- Executor
 
 That gives you an independent operating view while still using the same on-chain covenants.
+
+## Reporting
+
+If you find a security issue, please email [security@flowguard.cash](mailto:security@flowguard.cash) with reproduction steps. We acknowledge receipt within 48 hours and triage on a best-effort basis. Public disclosure should follow coordinated disclosure norms.

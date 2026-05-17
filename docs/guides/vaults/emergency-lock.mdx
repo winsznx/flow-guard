@@ -7,7 +7,7 @@ icon: "triangle-exclamation"
 Emergency lock is a last-resort safety mechanism that freezes the vault completely. Unlike `pause()`, which any single signer can invoke, `emergencyLock()` requires **all three** registered signers to sign simultaneously.
 
 <Warning>
-Emergency lock is irreversible in the current contract version. The vault cannot be resumed or recovered after this state is entered. Plan accordingly — use `pause()` for routine safety responses.
+Emergency lock is irreversible in the current contract version. The vault cannot be resumed or recovered after this state is entered. Plan accordingly ,  use `pause()` for routine safety responses.
 </Warning>
 
 ## When to Use
@@ -16,7 +16,7 @@ Emergency lock is irreversible in the current contract version. The vault cannot
 - Active exploit targeting the vault
 - Protocol-wide emergency requiring immediate fund freeze
 
-For routine operational pauses (e.g. upgrades, maintenance), use `pause()` instead — a single signer can do it and it is reversible with M-of-N.
+For routine operational pauses (e.g. upgrades, maintenance), use `pause()` instead ,  a single signer can do it and it is reversible with M-of-N.
 
 ## How It Works
 

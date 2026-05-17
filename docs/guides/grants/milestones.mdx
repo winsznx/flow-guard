@@ -8,10 +8,10 @@ icon: "flag-checkered"
 
 When a grant is funded, the covenant stores:
 
-- `startTime` — when the first milestone window begins
-- `stepInterval` — duration in seconds between milestones
-- `stepAmount` — on-chain token units per milestone
-- `totalReleased` — how much has already been released
+- `startTime` ,  when the first milestone window begins
+- `stepInterval` ,  duration in seconds between milestones
+- `stepAmount` ,  on-chain token units per milestone
+- `totalReleased` ,  how much has already been released
 
 The CashScript covenant enforces:
 ```
@@ -52,4 +52,4 @@ The grant panel in the app shows the full release history as a timeline.
 
 ## Early Release Not Possible
 
-The covenant enforces time. If a milestone has not elapsed, the `release` call returns `400: Nothing releasable yet`. There is no override — the contract itself prevents early release.
+The covenant enforces time. If a milestone has not elapsed, the `release` call returns `400: Nothing releasable yet`. There is no override ,  the contract itself prevents early release.
