@@ -7,6 +7,17 @@
  *          Contestants submit work proofs. Authority verifies off-chain,
  *          co-signs valid claims. First maxWinners claimants win.
  *
+ * AUTHORITY MODEL (audit C-06):
+ *   - `authorityHash` is the creator's BCH wallet pubkey-hash. It controls
+ *     pause / resume / cancel. cancel() pays remaining pool to the creator's
+ *     P2PKH(authorityHash), so a backend compromise cannot redirect funds.
+ *   - `claimAuthorityHash` is a backend-held co-signer key. It only authorises
+ *     the claim path (after off-chain proof verification). It cannot pause,
+ *     resume, or cancel, so a backend compromise cannot drain the pool.
+ *   - To run without a backend co-signer, deploy with
+ *     `claimAuthorityHash == authorityHash`. Then both paths are
+ *     creator-wallet-gated.
+ *
  * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):
  *   [0]:     status (uint8: 0=ACTIVE, 1=PAUSED, 2=CANCELLED, 3=COMPLETED)
  *   [1]:     flags (uint8: bit0=cancelable, bit2=usesTokens)
@@ -16,12 +27,13 @@
  *   [19-39]: reserved (21 bytes)
  *
  * CONTRACT PARAMETERS (compiled into bytecode, immutable):
- *   vaultId         — links bounty to source vault
- *   authorityHash   — hash160(authority pubkey)
- *   rewardPerWinner — satoshis or FT per winner (fixed equal prize)
- *   maxWinners      — maximum number of prizes available
- *   startTimestamp  — when competition opens (0 = immediate)
- *   endTimestamp    — competition deadline (0 = no deadline)
+ *   vaultId            — links bounty to source vault
+ *   authorityHash      — hash160 of creator wallet pubkey (admin: pause/resume/cancel; cancel-refund target)
+ *   claimAuthorityHash — hash160 of claim co-signer pubkey (claim-only)
+ *   rewardPerWinner    — satoshis or FT per winner (fixed equal prize)
+ *   maxWinners         — maximum number of prizes available
+ *   startTimestamp     — when competition opens (0 = immediate)
+ *   endTimestamp       — competition deadline (0 = no deadline)
  */
 
 pragma cashscript ^0.13.0;
@@ -29,6 +41,7 @@ pragma cashscript ^0.13.0;
 contract BountyCovenant(
     bytes32 vaultId,
     bytes20 authorityHash,
+    bytes20 claimAuthorityHash,
     int rewardPerWinner,
     int maxWinners,
     int startTimestamp,
@@ -41,7 +54,7 @@ contract BountyCovenant(
         int totalPaid    = int(c.split(2)[1].split(8)[0]);
         int winnersCount = int(c.split(10)[1].split(4)[0]);
 
-        require(hash160(authPubkey) == authorityHash);
+        require(hash160(authPubkey) == claimAuthorityHash);
         require(checkSig(authSig, authPubkey));
         require(status == 0); // ACTIVE
 
