@@ -177,7 +177,11 @@ CREATE INDEX IF NOT EXISTS idx_stream_batches_sender ON stream_batches(sender, c
 CREATE INDEX IF NOT EXISTS idx_stream_batches_status ON stream_batches(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stream_batches_launch_source ON stream_batches(launch_source, created_at DESC);
 
-CREATE OR REPLACE VIEW streams_with_vested AS
+-- Supabase Advisor: views default to security_invoker=false, which runs the
+-- query with the view OWNER's privileges and bypasses RLS on the underlying
+-- table. We expose the same RLS surface as `streams` itself.
+CREATE OR REPLACE VIEW streams_with_vested
+WITH (security_invoker = true) AS
 SELECT
     s.*,
     CASE
