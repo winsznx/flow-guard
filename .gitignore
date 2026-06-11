@@ -90,3 +90,4 @@ backend/scripts/verify-import.mjs
 bch refrences/
 
 internal/
+.vercel
