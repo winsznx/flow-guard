@@ -26,10 +26,11 @@ import type {
   CashScriptSignResponse,
 } from '../types/wallet';
 
-// Get WalletConnect Project ID from environment
-// Free at: https://cloud.walletconnect.com
-const WALLETCONNECT_PROJECT_ID =
-  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1'; // Fallback demo ID
+// WalletConnect Project ID - sourced exclusively from env. Free at
+// https://cloud.walletconnect.com. No hardcoded fallback so a misconfigured
+// deploy fails loudly at connect() time instead of routing through a shared
+// throwaway project id.
+const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined;
 
 // Get network from environment
 const BCH_NETWORK = (import.meta.env.VITE_BCH_NETWORK || 'chipnet') as 'mainnet' | 'chipnet';
@@ -223,7 +224,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
   async connect(): Promise<WalletInfo> {
     try {
       // Validate project ID
-      if (!WALLETCONNECT_PROJECT_ID || WALLETCONNECT_PROJECT_ID === 'demo-project-id') {
+      if (!WALLETCONNECT_PROJECT_ID) {
         throw new Error(
           'WalletConnect requires a Project ID.\n\n' +
             'Get one free at: https://cloud.walletconnect.com\n' +
@@ -240,7 +241,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       } else {
         console.log('[Web3ModalWC] Initializing WalletConnect...');
         this.client = await SignClient.init({
-          projectId: WALLETCONNECT_PROJECT_ID,
+          projectId: WALLETCONNECT_PROJECT_ID!,
           metadata: {
             name: 'FlowGuard',
             description: 'BCH-native treasuries, streams, payments, and governance',
@@ -467,7 +468,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
 
     // Initialize Web3Modal
     this.web3Modal = new Web3Modal({
-      projectId: WALLETCONNECT_PROJECT_ID,
+      projectId: WALLETCONNECT_PROJECT_ID!,
       walletConnectVersion: 2,
       enableExplorer: false,
       enableAccountView: true,

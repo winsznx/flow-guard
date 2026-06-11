@@ -15,13 +15,13 @@ import {
   CashScriptSignOptions,
   CashScriptSignResponse,
 } from '../types/wallet';
-import { createWalletConnector, MainnetConnector } from '../connectors';
+import { createWalletConnector } from '../connectors';
 
 let activeEventConnector: IWalletConnector | null = null;
 let activeAddressChangedHandler: ((data?: any) => void) | null = null;
 let activeDisconnectHandler: ((data?: any) => void) | null = null;
 
-// Module-level lock — guarantees init runs at most once per page load,
+// Module-level lock - guarantees init runs at most once per page load,
 // even if the hook re-mounts, state cascades, or dependency references shift.
 // Survives all React re-renders because it lives outside the component tree.
 let initFiredOnce = false;
@@ -37,7 +37,7 @@ interface WalletStore extends WalletState {
   setState: (state: Partial<WalletState>) => void;
   setConnectingRef: (value: boolean) => void;
   setInitAttempted: (value: boolean) => void;
-  connect: (walletType: WalletType, seedPhrase?: string) => Promise<void>;
+  connect: (walletType: WalletType) => Promise<void>;
   disconnect: () => Promise<void>;
   signTransaction: (tx: Transaction) => Promise<SignedTransaction>;
   signCashScriptTransaction: (options: CashScriptSignOptions) => Promise<CashScriptSignResponse>;
@@ -67,7 +67,7 @@ const useWalletStore = create<WalletStore>((set, get) => ({
   setConnectingRef: (value) => set({ isConnectingRef: value }),
   setInitAttempted: (value) => set({ initAttempted: value }),
 
-  connect: async (walletType: WalletType, seedPhrase?: string) => {
+  connect: async (walletType: WalletType) => {
     const state = get();
 
     // Prevent concurrent connection attempts
@@ -91,20 +91,14 @@ const useWalletStore = create<WalletStore>((set, get) => ({
           [WalletType.PAYTACA]: 'Paytaca wallet not found. Please install the Paytaca browser extension from the Chrome Web Store.',
           [WalletType.CASHONIZE]: 'Cashonize wallet not available. Please install Cashonize mobile app from https://cashonize.com',
           [WalletType.WALLETCONNECT]: 'WalletConnect not available',
-          [WalletType.MAINNET]: 'mainnet.cash library not available',
+          [WalletType.WIZARDCONNECT]: 'WizardConnect unavailable - browser environment required.',
         };
         throw new Error(messages[walletType] || 'Wallet not available');
       }
 
-      // Connect (pass seed phrase if provided for mainnet.cash)
-      console.log(`Connecting to ${walletType} wallet...`, seedPhrase ? 'with seed phrase' : 'new wallet');
+      console.log(`Connecting to ${walletType} wallet...`);
 
-      let walletInfo;
-      if (walletType === WalletType.MAINNET && seedPhrase) {
-        walletInfo = await (newConnector as MainnetConnector).connect(seedPhrase);
-      } else {
-        walletInfo = await newConnector.connect();
-      }
+      const walletInfo = await newConnector.connect();
 
       console.log('Wallet connected successfully:', {
         type: walletType,
@@ -374,8 +368,12 @@ export function useWallet() {
           savedWalletType === WalletType.WALLETCONNECT
           && /(timeout|relay|websocket|network|temporar|stale session)/i.test(message);
 
-        if (isTransientWalletConnectError) {
-          console.warn('[useWallet] WalletConnect reconnect failed transiently; preserving saved session metadata');
+        const isTransientWizardConnectError =
+          savedWalletType === WalletType.WIZARDCONNECT
+          && /(timeout|relay|websocket|nostr|network|temporar|did not scan)/i.test(message);
+
+        if (isTransientWalletConnectError || isTransientWizardConnectError) {
+          console.warn('[useWallet] Wallet reconnect failed transiently; preserving saved session metadata');
           // Reset the lock so a manual reconnect attempt can fire
           initFiredOnce = false;
           return;

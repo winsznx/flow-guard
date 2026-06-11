@@ -10,7 +10,7 @@ export enum WalletType {
   PAYTACA = 'paytaca',           // Paytaca browser extension
   CASHONIZE = 'cashonize',       // Cashonize mobile wallet (CashScript-aware)
   WALLETCONNECT = 'walletconnect', // WalletConnect v2 (Zapit, etc.)
-  MAINNET = 'mainnet',           // mainnet.cash (seed phrase wallet)
+  WIZARDCONNECT = 'wizardconnect', // WizardConnect - BCH-native, NIP-17 transport (beta)
 }
 
 export interface WalletBalance {
@@ -36,6 +36,15 @@ export interface CashScriptSignOptions {
   sourceOutputs: SourceOutput[];
   broadcast?: boolean; // default true
   userPrompt?: string;
+  /**
+   * WizardConnect-specific input path tuples: [inputIndex, pathName, addressIndex].
+   * Required for multi-input covenant spends through WizardConnect.
+   * Ignored by Paytaca, Cashonize, and Web3Modal connectors. Default for
+   * single-input user spends: [[0, 'receive', 0]].
+   *
+   * See: https://gitlab.com/riftenlabs/lib/wizardconnect/-/raw/master/docs/protocol.md
+   */
+  inputPaths?: [number, string, number][];
 }
 
 /**

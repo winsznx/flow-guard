@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Wallet, Copy, LogOut, ChevronDown, Check, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Wallet, Copy, LogOut, ChevronDown, Check, ExternalLink, Settings } from 'lucide-react';
 import { useWallet } from '../../hooks/useWallet';
 import { getExplorerAddressUrl } from '../../utils/blockchain';
 
@@ -63,8 +64,10 @@ export const WalletDropdown = () => {
         return 'Paytaca';
       case 'walletconnect':
         return 'WalletConnect';
-      case 'mainnet':
-        return 'Testing Wallet';
+      case 'cashonize':
+        return 'Cashonize';
+      case 'wizardconnect':
+        return 'WizardConnect';
       default:
         return 'Unknown';
     }
@@ -198,6 +201,14 @@ export const WalletDropdown = () => {
                 View on Explorer
               </a>
             )}
+            <Link
+              to="/settings"
+              onClick={() => setIsOpen(false)}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-textSecondary hover:bg-surfaceAlt rounded-md transition-colors mb-1"
+            >
+              <Settings className="w-4 h-4" />
+              Settings
+            </Link>
             <button
               onClick={handleDisconnect}
               disabled={isDisconnecting}

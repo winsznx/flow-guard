@@ -9,9 +9,10 @@
  * - NO bg-white (use bg-surface)
  */
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { WalletType } from '../../types/wallet';
-import { Wallet, X, ExternalLink, Smartphone, Download, Key, Loader2 } from 'lucide-react';
+import { isWizardConnectEnabled } from '../../connectors';
+import { Wallet, X, ExternalLink, Smartphone, Loader2, Sparkles, Check, AlertCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 interface WalletOption {
@@ -21,40 +22,53 @@ interface WalletOption {
   Icon: LucideIcon;
   installUrl?: string;
   recommended?: boolean;
+  beta?: boolean;
 }
 
-const walletOptions: WalletOption[] = [
-  {
-    type: WalletType.WALLETCONNECT,
-    name: 'WalletConnect',
-    description: 'Paytaca, Selene',
-    Icon: Smartphone,
-    recommended: true,
-  },
-  {
-    type: WalletType.PAYTACA,
-    name: 'Paytaca',
-    description: 'Browser extension or mobile app',
-    Icon: Wallet,
-  },
-  {
-    type: WalletType.CASHONIZE,
-    name: 'Cashonize',
-    description: 'CashScript-aware mobile wallet (Covenant support)',
-    Icon: Smartphone,
-  },
-  {
-    type: WalletType.MAINNET,
-    name: 'Testing Wallet',
-    description: 'Seed phrase wallet (dev/testing only)',
-    Icon: Key,
-  },
-];
+const PAYTACA_INSTALL_URL =
+  'https://chrome.google.com/webstore/detail/paytaca/pakphhpnneopheifihmjcjnbdbhaaiaa';
+
+function buildWalletOptions(): WalletOption[] {
+  const options: WalletOption[] = [
+    {
+      type: WalletType.PAYTACA,
+      name: 'Paytaca',
+      description: 'Browser extension - best for desktop covenant flows',
+      Icon: Wallet,
+      installUrl: PAYTACA_INSTALL_URL,
+    },
+    {
+      type: WalletType.CASHONIZE,
+      name: 'Cashonize',
+      description: 'CashScript-aware mobile wallet (covenant support)',
+      Icon: Smartphone,
+    },
+    {
+      type: WalletType.WALLETCONNECT,
+      name: 'WalletConnect',
+      description: 'Connect any WalletConnect v2 BCH wallet (Zapit, Selene)',
+      Icon: Smartphone,
+      recommended: true,
+    },
+  ];
+
+  if (isWizardConnectEnabled()) {
+    options.push({
+      type: WalletType.WIZARDCONNECT,
+      name: 'WizardConnect',
+      description: 'BCH-native, end-to-end encrypted relay (covenant only)',
+      Icon: Sparkles,
+      beta: true,
+    });
+  }
+
+  return options;
+}
 
 interface WalletModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelectWallet: (walletType: WalletType, seedPhrase?: string) => Promise<void>;
+  onSelectWallet: (walletType: WalletType) => Promise<void>;
   isConnecting: boolean;
   error: string | null;
 }
@@ -67,76 +81,75 @@ export function WalletModal({
   error,
 }: WalletModalProps) {
   const [selectedWallet, setSelectedWallet] = useState<WalletType | null>(null);
-  const [showSeedInput, setShowSeedInput] = useState(false);
-  const [seedPhrase, setSeedPhrase] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
   const [hideForWC, setHideForWC] = useState(false);
+  const [paytacaDetected, setPaytacaDetected] = useState<boolean | null>(null);
+
+  const walletOptions = buildWalletOptions();
+
+  // Probe for the Paytaca extension once when the modal opens so we can render
+  // an explicit "install" affordance instead of routing the user through an
+  // error-message URL when they click the Paytaca option.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const probe = async () => {
+      if (typeof window === 'undefined') {
+        if (!cancelled) setPaytacaDetected(false);
+        return;
+      }
+      // Check immediate availability.
+      const w = window as unknown as { paytaca?: { address?: () => Promise<unknown> } };
+      if (w.paytaca && typeof w.paytaca.address === 'function') {
+        if (!cancelled) setPaytacaDetected(true);
+        return;
+      }
+      // Poll up to 1.5s for late injection. Real Paytaca injects within ~200ms;
+      // this is the modal's responsiveness budget, not the full connect budget.
+      const start = Date.now();
+      while (Date.now() - start < 1500) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (cancelled) return;
+        const wNow = window as unknown as { paytaca?: { address?: () => Promise<unknown> } };
+        if (wNow.paytaca && typeof wNow.paytaca.address === 'function') {
+          setPaytacaDetected(true);
+          return;
+        }
+      }
+      if (!cancelled) setPaytacaDetected(false);
+    };
+    probe();
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  // Hide our modal during WalletConnect to allow QR modal to show
-  const isWalletConnect = selectedWallet === WalletType.WALLETCONNECT;
-  const shouldHide = hideForWC && isWalletConnect && isConnecting;
+  // Hide our modal during WalletConnect or WizardConnect to allow the QR modal to show.
+  const usesExternalQrModal =
+    selectedWallet === WalletType.WALLETCONNECT
+    || selectedWallet === WalletType.WIZARDCONNECT;
+  const shouldHide = hideForWC && usesExternalQrModal && isConnecting;
 
   const handleConnect = async (walletType: WalletType) => {
-    // For mainnet.cash, show seed phrase input option
-    if (walletType === WalletType.MAINNET && !showSeedInput) {
-      setSelectedWallet(walletType);
-      setShowSeedInput(true);
-      return;
-    }
-
     setSelectedWallet(walletType);
     setLocalError(null);
 
-    // Hide our modal if WalletConnect (to show QR modal)
-    if (walletType === WalletType.WALLETCONNECT) {
+    // Hide our modal if a wallet renders its own QR modal
+    if (usesExternalQrModal || walletType === WalletType.WALLETCONNECT || walletType === WalletType.WIZARDCONNECT) {
       setHideForWC(true);
     }
 
     try {
-      await onSelectWallet(walletType, seedPhrase || undefined);
-
-      // Connection succeeded - close modal immediately
-      console.log('[WalletModal] Connection succeeded, closing modal...');
-
-      // Reset state first
-      setShowSeedInput(false);
-      setSeedPhrase('');
+      await onSelectWallet(walletType);
       setSelectedWallet(null);
       setHideForWC(false);
-
-      // Close modal
       onClose();
-    } catch (err: any) {
-      // Connection failed - show our modal again with error
-      console.log('[WalletModal] Connection failed:', err);
+    } catch (err) {
       setHideForWC(false);
       setSelectedWallet(null);
-      setLocalError(err.message || 'Connection failed. Please try again.');
+      const message = err instanceof Error ? err.message : 'Connection failed. Please try again.';
+      setLocalError(message);
     }
-  };
-
-  const handleGoBack = () => {
-    setShowSeedInput(false);
-    setSeedPhrase('');
-    setSelectedWallet(null);
-    setLocalError(null);
-  };
-
-  const handleImportSeed = async () => {
-    if (!seedPhrase.trim()) {
-      setLocalError('Please enter a seed phrase');
-      return;
-    }
-
-    const words = seedPhrase.trim().split(/\s+/);
-    if (words.length !== 12) {
-      setLocalError('Seed phrase must be 12 words');
-      return;
-    }
-
-    await handleConnect(WalletType.MAINNET);
   };
 
   return (
@@ -172,157 +185,111 @@ export function WalletModal({
             </div>
           )}
 
-          {!showSeedInput ? (
-            <>
-              <p className="text-sm text-textSecondary">
-                Choose a wallet to connect to FlowGuard
-              </p>
+          <p className="text-sm text-textSecondary">
+            Choose a wallet to connect to FlowGuard
+          </p>
 
               {/* Wallet Options */}
               <div className="space-y-3">
                 {walletOptions.map((wallet) => {
                   const WalletIcon = wallet.Icon;
                   const isPending = isConnecting && selectedWallet === wallet.type;
+                  const isPaytaca = wallet.type === WalletType.PAYTACA;
+                  // For Paytaca: when probe says not installed, the primary
+                  // button becomes an explicit Install action instead of a
+                  // Connect attempt that throws a noisy error.
+                  const showInstallCta =
+                    isPaytaca && paytacaDetected === false && !!wallet.installUrl;
+
+                  const baseCardClass = `w-full p-4 border rounded-xl transition-all group bg-surface
+                    ${isPending ? 'border-primary bg-accentDim' : 'border-border'}
+                    ${!isConnecting && 'hover:border-primary hover:shadow-md'}
+                    ${isConnecting ? 'opacity-50 cursor-not-allowed' : ''}`;
+
+                  const inner = (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-primarySoft rounded-lg">
+                          <WalletIcon className="w-6 h-6 text-primary" />
+                        </div>
+                        <div className="text-left">
+                          <div className="flex items-center flex-wrap gap-2">
+                            <h3 className="font-semibold text-textPrimary group-hover:text-primary transition-colors">
+                              {wallet.name}
+                            </h3>
+                            {wallet.recommended && (
+                              <span className="px-2 py-0.5 text-xs bg-primarySoft text-primary rounded-full font-medium">
+                                Recommended
+                              </span>
+                            )}
+                            {wallet.beta && (
+                              <span className="px-2 py-0.5 text-xs bg-accentDim text-primary rounded-full font-medium border border-accent">
+                                Beta
+                              </span>
+                            )}
+                            {isPaytaca && paytacaDetected === true && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-primarySoft text-primary rounded-full font-medium">
+                                <Check className="w-3 h-3" /> Detected
+                              </span>
+                            )}
+                            {isPaytaca && paytacaDetected === false && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-accentDim text-textSecondary rounded-full font-medium border border-border">
+                                <AlertCircle className="w-3 h-3" /> Not installed
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-textSecondary">
+                            {showInstallCta
+                              ? 'Install the Paytaca browser extension to connect from this device.'
+                              : wallet.description}
+                          </p>
+                        </div>
+                      </div>
+
+                      {isPending && (
+                        <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
+                      )}
+                      {!isPending && showInstallCta && (
+                        <ExternalLink className="w-4 h-4 text-textMuted group-hover:text-primary transition-colors shrink-0" />
+                      )}
+                    </div>
+                  );
+
+                  if (showInstallCta) {
+                    return (
+                      <a
+                        key={wallet.type}
+                        href={wallet.installUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="Install Paytaca browser extension (opens Chrome Web Store in a new tab)"
+                        className={baseCardClass + ' block'}
+                      >
+                        {inner}
+                      </a>
+                    );
+                  }
 
                   return (
                     <button
                       key={wallet.type}
                       onClick={() => handleConnect(wallet.type)}
                       disabled={isConnecting}
-                      className={`w-full p-4 border rounded-xl transition-all group bg-surface
-                        ${isPending ? 'border-primary bg-accentDim' : 'border-border'}
-                        ${!isConnecting && 'hover:border-primary hover:shadow-md'}
-                        ${isConnecting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={baseCardClass}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="p-3 bg-primarySoft rounded-lg">
-                            <WalletIcon className="w-6 h-6 text-primary" />
-                          </div>
-                          <div className="text-left">
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-semibold text-textPrimary group-hover:text-primary transition-colors">
-                                {wallet.name}
-                              </h3>
-                              {wallet.recommended && (
-                                <span className="px-2 py-0.5 text-xs bg-primarySoft text-primary rounded-full font-medium">
-                                  Recommended
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-sm text-textSecondary">
-                              {wallet.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        {isPending ? (
-                          <Loader2 className="w-5 h-5 text-primary animate-spin" />
-                        ) : wallet.installUrl ? (
-                          <a
-                            href={wallet.installUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="p-2 hover:bg-surfaceAlt rounded-lg transition-colors"
-                            title="Install extension"
-                          >
-                            <ExternalLink className="w-4 h-4 text-textMuted hover:text-primary transition-colors" />
-                          </a>
-                        ) : null}
-                      </div>
+                      {inner}
                     </button>
                   );
                 })}
               </div>
 
-              {/* Info */}
-              <div className="mt-6 p-4 bg-surfaceAlt rounded-lg border border-border">
-                <p className="text-xs text-textSecondary">
-                  <strong className="text-textPrimary">Note:</strong> By connecting your wallet, you agree to FlowGuard's
-                  terms. Your wallet remains in your custody at all times.
-                </p>
-              </div>
-            </>
-          ) : (
-            /* Seed Phrase Import Screen */
-            <div className="space-y-4">
-              <button
-                onClick={handleGoBack}
-                className="text-sm text-textSecondary hover:text-primary transition-colors flex items-center gap-1"
-              >
-                ← Back to wallet options
-              </button>
-
-              <div>
-                <h3 className="text-lg font-semibold text-textPrimary mb-2">
-                  Import or Create Wallet
-                </h3>
-                <p className="text-sm text-textSecondary mb-4">
-                  Choose an option below to get started
-                </p>
-              </div>
-
-              {/* Create New Wallet Button */}
-              <button
-                onClick={() => handleConnect(WalletType.MAINNET)}
-                disabled={isConnecting}
-                className="w-full p-4 border border-border rounded-xl hover:border-primary hover:shadow-md transition-all bg-surface disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-primarySoft rounded-lg">
-                    <Download className="w-5 h-5 text-primary" />
-                  </div>
-                  <div className="text-left">
-                    <h4 className="font-semibold text-textPrimary">
-                      Create New Wallet
-                    </h4>
-                    <p className="text-sm text-textSecondary">
-                      Generate a new wallet with a seed phrase
-                    </p>
-                  </div>
-                </div>
-              </button>
-
-              <div className="text-center text-sm text-textMuted">
-                or
-              </div>
-
-              {/* Import Existing Wallet */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Key className="w-5 h-5 text-primary" />
-                  <label className="font-semibold text-textPrimary">
-                    Import Existing Wallet
-                  </label>
-                </div>
-
-                <textarea
-                  value={seedPhrase}
-                  onChange={(e) => setSeedPhrase(e.target.value)}
-                  placeholder="Enter your 12-word seed phrase..."
-                  className="w-full p-3 border border-border rounded-lg bg-surface text-textPrimary placeholder-textMuted focus:ring-2 focus:ring-focusRing focus:border-primary resize-none transition-colors"
-                  rows={3}
-                  disabled={isConnecting}
-                />
-
-                <button
-                  onClick={handleImportSeed}
-                  disabled={isConnecting || !seedPhrase.trim()}
-                  className="w-full px-4 py-3 bg-primary hover:bg-primaryHover text-background font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isConnecting ? 'Importing...' : 'Import Wallet'}
-                </button>
-              </div>
-
-              {/* Security Notice */}
-              <div className="mt-4 p-4 bg-accentDim border border-accent rounded-lg">
-                <p className="text-xs text-primary">
-                  <strong>⚠️ Security Notice:</strong> Never share your seed phrase with anyone. FlowGuard will never ask for your seed phrase after initial import.
-                </p>
-              </div>
-            </div>
-          )}
+          {/* Info */}
+          <div className="mt-6 p-4 bg-surfaceAlt rounded-lg border border-border">
+            <p className="text-xs text-textSecondary">
+              <strong className="text-textPrimary">Note:</strong> By connecting your wallet, you agree to FlowGuard's
+              terms. Your wallet remains in your custody at all times.
+            </p>
+          </div>
         </div>
       </div>
     </div>

@@ -27,8 +27,8 @@ import type {
   CashScriptSignResponse,
 } from '../types/wallet';
 
-const WALLETCONNECT_PROJECT_ID =
-  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '2cce9f0a8e5f0f8e88f6d5a5e4f3e2d1';
+// WalletConnect Project ID - sourced exclusively from env. No hardcoded fallback.
+const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined;
 
 export class CashonizeConnector implements IWalletConnector {
   type: WalletType = 'walletconnect' as WalletType; // Uses WC protocol
@@ -58,7 +58,7 @@ export class CashonizeConnector implements IWalletConnector {
     try {
       console.log('[Cashonize] Initializing WalletConnect...');
 
-      if (!WALLETCONNECT_PROJECT_ID || WALLETCONNECT_PROJECT_ID === 'demo-project-id') {
+      if (!WALLETCONNECT_PROJECT_ID) {
         throw new Error(
           'WalletConnect requires a project ID. Get one free at https://cloud.walletconnect.com\n' +
             'Then add to .env.local: VITE_WALLETCONNECT_PROJECT_ID=your-id'
@@ -67,7 +67,7 @@ export class CashonizeConnector implements IWalletConnector {
 
       // Initialize SignClient
       this.client = await SignClient.init({
-        projectId: WALLETCONNECT_PROJECT_ID,
+        projectId: WALLETCONNECT_PROJECT_ID!,
         metadata: {
           name: 'FlowGuard',
           description: 'BCH-native treasuries, streams, payments, and governance',
