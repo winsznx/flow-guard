@@ -6,6 +6,7 @@ import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { Textarea } from '../components/ui/Textarea';
 import { useWallet } from '../hooks/useWallet';
+import { authFetch } from '../utils/auth';
 import { ChevronLeft, Repeat, Calendar, DollarSign, AlertCircle } from 'lucide-react';
 
 type PaymentInterval = 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'YEARLY';
@@ -106,7 +107,8 @@ export default function CreatePaymentPage() {
         description: formData.description,
       };
 
-      const response = await fetch('/api/payments/create', {
+      const response = await authFetch('/api/payments/create', {
+        wallet,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -388,7 +390,7 @@ export default function CreatePaymentPage() {
                     {formData.endDate && (
                       <> until <span className="text-textPrimary font-bold">{formData.endDate}</span> ({estimatedPeriods} payment{estimatedPeriods !== 1 ? 's' : ''})</>
                     )}
-                    {!formData.endDate && <> — no end date (funds {estimatedPeriods} periods upfront)</>}
+                    {!formData.endDate && <> - no end date (funds {estimatedPeriods} periods upfront)</>}
                   </p>
                   <p className="pt-2 border-t border-border/40 text-base">
                     Wallet deposit required:{' '}

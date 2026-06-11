@@ -6,6 +6,7 @@ import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { Textarea } from '../components/ui/Textarea';
 import { useWallet } from '../hooks/useWallet';
+import { authFetch } from '../utils/auth';
 import { ChevronLeft, Gift, Users, DollarSign, Calendar, AlertCircle } from 'lucide-react';
 
 type CampaignType = 'AIRDROP' | 'BOUNTY' | 'REWARD' | 'GRANT';
@@ -117,7 +118,8 @@ export default function CreateAirdropPage() {
         maxClaimsPerAddress: parseInt(formData.maxClaimsPerAddress),
       };
 
-      const response = await fetch('/api/airdrops/create', {
+      const response = await authFetch('/api/airdrops/create', {
+        wallet,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

@@ -160,7 +160,7 @@ export default function CreateVaultPage() {
 
       // Step 1: Create vault (deploy contract)
       setDepositStatus('creating');
-      const newVault = await createVault(vaultData, wallet.address);
+      const newVault = await createVault(vaultData, wallet);
 
       if (!newVault.contractAddress) {
         throw new Error('Vault created but contract address not available. Please try again.');
@@ -172,12 +172,12 @@ export default function CreateVaultPage() {
 
         try {
           // Deposit BCH to the contract address
-          // For mainnet.cash wallets, show confirmation dialog
+          // All supported wallets sign on their own surface; no extra confirmation needed.
           const depositTxid = await depositToVault(
             wallet,
             newVault.contractAddress,
             vaultData.totalDeposit,
-            wallet.walletType === 'mainnet' ? confirmTransaction : undefined,
+            undefined,
             newVault.id,
           );
 
@@ -189,7 +189,7 @@ export default function CreateVaultPage() {
             newVault.id,
             depositTxid,
             vaultData.totalDeposit,
-            wallet.address
+            wallet,
           );
 
           setDepositStatus('success');

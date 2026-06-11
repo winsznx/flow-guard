@@ -20,6 +20,7 @@ import { Textarea } from '../components/ui/Textarea';
 import { StreamScheduleChart } from '../components/streams/StreamScheduleChart';
 import { useWallet } from '../hooks/useWallet';
 import { useNetwork } from '../hooks/useNetwork';
+import { authFetch } from '../utils/auth';
 import { rememberDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import {
   buildScheduleChartPoints,
@@ -1099,7 +1100,8 @@ export default function CreateStreamPage() {
           : undefined,
       };
 
-      const response = await fetch('/api/streams/create', {
+      const response = await authFetch('/api/streams/create', {
+        wallet,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(streamPayload),

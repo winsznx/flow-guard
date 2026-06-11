@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { addSigner } from '../../utils/api';
+import { useWallet } from '../../hooks/useWallet';
 
 interface AddSignerModalProps {
   vaultId: string;
@@ -17,9 +18,7 @@ export const AddSignerModal: React.FC<AddSignerModalProps> = ({
   const [signerAddress, setSignerAddress] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Mock user address - will be replaced with wallet integration
-  const userAddress = '0x1234567890123456789012345678901234567890';
+  const wallet = useWallet();
 
   const validateAddress = (address: string): boolean => {
     // Basic validation - should be a valid BCH address format
@@ -36,9 +35,14 @@ export const AddSignerModal: React.FC<AddSignerModalProps> = ({
       return;
     }
 
+    if (!wallet.address) {
+      setError('Connect your wallet to add a signer');
+      return;
+    }
+
     try {
       setLoading(true);
-      await addSigner(vaultId, signerAddress, userAddress);
+      await addSigner(vaultId, signerAddress, wallet);
       onSuccess();
     } catch (err: any) {
       setError(err.message || 'Failed to add signer');

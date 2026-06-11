@@ -72,7 +72,7 @@ export default function CreateProposalPage() {
         reason: formData.reason.trim(),
       };
 
-      const createdProposal = await createProposal(id, proposalData, wallet.address);
+      const createdProposal = await createProposal(id, proposalData, wallet);
 
       if (!wallet.signCashScriptTransaction) {
         throw new Error(
@@ -122,7 +122,7 @@ export default function CreateProposalPage() {
             <ChevronLeft className="w-4 h-4" />
             Back to Treasury
           </Link>
-          <h1 className="text-5xl font-display font-bold text-textPrimary mb-2">Create Proposal</h1>
+          <h1 className="text-3xl font-display font-bold text-textPrimary mb-2 sm:text-4xl lg:text-5xl">Create Proposal</h1>
           <p className="text-textMuted font-mono">
             Submit a payment proposal for multi-sig approval
           </p>

@@ -7,6 +7,7 @@ import { approveProposalOnChain, executePayoutOnChain, getExplorerTxUrl } from '
 import { AddSignerModal } from '../components/vaults/AddSignerModal';
 import { useWallet } from '../hooks/useWallet';
 import { useNetwork } from '../hooks/useNetwork';
+import { authFetch } from '../utils/auth';
 import { CheckCircle, DollarSign, Unlock, ExternalLink, ChevronLeft, Wallet, Shield, FileText, Clock, ArrowUpRight, ArrowDownLeft, Activity, Zap, Users, AlertCircle } from 'lucide-react';
 
 type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
@@ -345,11 +346,11 @@ export default function VaultDetailPage() {
       });
       console.log('Attempting cycle unlock...');
 
-      const response = await fetch(`/api/vaults/${id}/unlock`, {
+      const response = await authFetch(`/api/vaults/${id}/unlock`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-address': wallet.address,
         },
         body: JSON.stringify({ cycleNumber }),
       });

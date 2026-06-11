@@ -104,7 +104,7 @@ export default function CreateBudgetPlanPage() {
         throw new Error('Please enter a valid BCH address (bitcoincash: or bchtest:)');
       }
 
-      await createBudgetPlan(formData.treasuryId, planData, wallet.address);
+      await createBudgetPlan(formData.treasuryId, planData, wallet);
 
       navigate('/budgets');
     } catch (err: any) {
