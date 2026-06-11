@@ -74,6 +74,9 @@ jobs:
       - name: Build
         working-directory: backend
         run: pnpm build
+      - name: SIWX smoke tests
+        working-directory: backend
+        run: pnpm test:siwx
 
   frontend:
     name: Frontend (typecheck + production build)
