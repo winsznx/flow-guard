@@ -2632,7 +2632,7 @@ We're focused on gathering feedback from early users and preparing for mainnet l
 - External security audits
 - Beta testing program
 - Mainnet deployment (post-audit)
-- Advanced features leveraging May 2026 BCHN Layla upgrade
+- Advanced features built on the May 2026 BCHN Layla upgrade
 
 ## Get Started
 
@@ -2733,7 +2733,7 @@ export default function UpdateDetailPage() {
     return (
       <main className="bg-background min-h-screen">
         <div className="max-w-4xl mx-auto px-6 py-32 text-center">
-          <h1 className="font-display text-4xl font-bold text-textPrimary mb-4">Post Not Found</h1>
+          <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-textPrimary mb-4">Post Not Found</h1>
           <Link to="/updates" className="text-primary hover:text-primaryHover">
             ← Back to Updates
           </Link>
@@ -2811,7 +2811,7 @@ export default function UpdateDetailPage() {
             }
             if (line.startsWith('# ')) {
               return (
-                <h1 key={i} className="font-display text-4xl font-bold text-textPrimary mt-12 mb-6">
+                <h1 key={i} className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-textPrimary mt-12 mb-6">
                   {line.slice(2)}
                 </h1>
               );

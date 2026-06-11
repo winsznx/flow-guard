@@ -1168,7 +1168,7 @@ export default function BatchCreateStreamsPage() {
       <div className="min-h-screen bg-background flex items-center justify-center px-4">
         <Card className="max-w-lg p-8 text-center">
           <Wallet2 className="w-12 h-12 text-primary mx-auto mb-4" />
-          <h1 className="font-display text-3xl text-textPrimary mb-3">Connect your treasury signer</h1>
+          <h1 className="font-display text-2xl sm:text-3xl text-textPrimary mb-3">Connect your treasury signer</h1>
           <p className="text-textSecondary mb-6">
             Batch stream creation builds and funds real covenant outputs. Connect the treasury wallet that will fund the full payroll run.
           </p>
@@ -1821,7 +1821,7 @@ export default function BatchCreateStreamsPage() {
                 <p className="text-xs uppercase tracking-[0.18em] text-primary font-mono mb-2">
                   {selectedTemplate.eyebrow}
                 </p>
-                <h3 className="font-display text-3xl text-textPrimary mb-2">{selectedTemplate.title}</h3>
+                <h3 className="font-display text-2xl sm:text-3xl text-textPrimary mb-2">{selectedTemplate.title}</h3>
                 <p className="text-textSecondary mb-4">{selectedTemplate.description}</p>
                 <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                   <div className="rounded-2xl border border-border bg-surface px-4 py-3">

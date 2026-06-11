@@ -49,7 +49,7 @@ export default function Home() {
   return (
     <main className="bg-background min-h-screen">
       <PageMeta
-        title="FlowGuard — The Operating Layer for On-Chain Finance"
+        title="FlowGuard - The Operating Layer for On-Chain Finance"
         description="Contract-backed treasuries, streams, payments, distributions, and governance workflows on Bitcoin Cash."
         path="/"
       />
@@ -112,7 +112,7 @@ export default function Home() {
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surfaceAlt/50 border border-border mb-6 w-fit"
               >
                 <span className="w-2 h-2 rounded-full bg-brand300 animate-pulse" />
-                <span className="text-xs font-mono text-textSecondary">v0.2.0-alpha · Chipnet</span>
+                <span className="text-xs font-mono text-textSecondary">Live on Bitcoin Cash mainnet</span>
               </motion.div>
 
               <motion.h1
@@ -248,13 +248,13 @@ export default function Home() {
               viewport={{ once: true }}
               transition={{ duration: 0.7 }}
             >
-              <h2 className="font-display text-5xl mb-8 text-textPrimary leading-tight">
+              <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl mb-8 text-textPrimary leading-tight">
                 The problem with manual treasury and payout operations
               </h2>
               <div className="space-y-6 text-lg text-textSecondary">
                 <p>
                   Traditional multisig wallets require manual coordination for every payment.
-                  Budgets are tracked in spreadsheets. Spending caps aren't enforced—they're just
+                  Budgets are tracked in spreadsheets. Spending caps aren't enforced - they're just
                   guidelines.
                 </p>
                 <p>
@@ -271,8 +271,8 @@ export default function Home() {
               transition={{ duration: 0.7 }}
               className="relative"
             >
-              <div className="bg-surfaceAlt/30 border border-border rounded-3xl p-10">
-                <h3 className="font-display text-4xl mb-6 text-textPrimary">
+              <div className="bg-surfaceAlt/30 border border-border rounded-3xl p-6 sm:p-10">
+                <h3 className="font-display text-2xl sm:text-3xl lg:text-4xl mb-6 text-textPrimary">
                   FlowGuard automates this
                 </h3>
                 <div className="space-y-6 text-lg text-textSecondary">
@@ -282,7 +282,7 @@ export default function Home() {
                   </p>
                   <p>
                     Payments happen on schedule without manual intervention. All activity is
-                    publicly visible. Rules are locked in—no one can change them, not even the
+                    publicly visible. Rules are locked in - no one can change them, not even the
                     signers.
                   </p>
                 </div>
@@ -538,7 +538,7 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="font-display text-6xl mb-6 text-textPrimary">How FlowGuard Works</h2>
+            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-6 text-textPrimary">How FlowGuard Works</h2>
             <p className="text-xl text-textSecondary max-w-3xl mx-auto">
               Four steps to move treasury and payout operations onto contract-backed rails
             </p>
@@ -597,7 +597,7 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="font-display text-6xl mb-6 text-textPrimary">Built on Bitcoin Cash</h2>
+            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-6 text-textPrimary">Built on Bitcoin Cash</h2>
             <p className="text-xl text-textSecondary max-w-3xl mx-auto">
               FlowGuard uses native Bitcoin Cash features to enforce treasury rules
             </p>
@@ -694,7 +694,7 @@ export default function Home() {
                 <div className="w-12 h-12 rounded-full bg-brand300/20 flex items-center justify-center">
                   <Code2 className="w-6 h-6 text-brand300" />
                 </div>
-                <h3 className="font-display text-3xl text-textPrimary">On-Chain Enforcement</h3>
+                <h3 className="font-display text-2xl sm:text-3xl text-textPrimary">On-Chain Enforcement</h3>
               </div>
               <ul className="space-y-4">
                 {[
@@ -722,7 +722,7 @@ export default function Home() {
                 <div className="w-12 h-12 rounded-full bg-warning/20 flex items-center justify-center">
                   <Network className="w-6 h-6 text-warning" />
                 </div>
-                <h3 className="font-display text-3xl text-textPrimary">Off-Chain Services</h3>
+                <h3 className="font-display text-2xl sm:text-3xl text-textPrimary">Off-Chain Services</h3>
               </div>
               <ul className="space-y-4 mb-6">
                 {[
@@ -756,21 +756,21 @@ export default function Home() {
               viewport={{ once: true }}
               className="relative"
             >
-              <div className="border-2 border-warning/40 bg-warning/5 p-10 rounded-3xl">
+              <div className="border-2 border-brand300/40 bg-brand300/5 p-10 rounded-3xl">
                 <div className="flex items-center gap-3 mb-6">
-                  <span className="w-3 h-3 rounded-full bg-warning animate-pulse" />
-                  <h3 className="text-warning text-sm font-mono uppercase tracking-wider">
-                    Deployment Status
+                  <span className="w-3 h-3 rounded-full bg-brand300 animate-pulse" />
+                  <h3 className="text-brand300 text-sm font-mono uppercase tracking-wider">
+                    Production Status
                   </h3>
                 </div>
-                <p className="font-display text-4xl mb-6 text-textPrimary">
-                  Alpha Integration Phase
+                <p className="font-display text-2xl sm:text-3xl lg:text-4xl mb-6 text-textPrimary">
+                  Live on Bitcoin Cash mainnet
                 </p>
                 <p className="text-textSecondary leading-relaxed">
-                  Current treasury and governance contracts run on Chipnet with fixed
-                  three-signer covenant paths. The BCH 2026 VM upgrade expands what future
-                  FlowGuard contracts can target, but larger signer sets and trustless tally
-                  expansion still require explicit contract rewrites in FlowGuard.
+                  Treasuries, streams, payouts, distributions, and governance flows run on
+                  mainnet under contract-backed enforcement. Templates ship with audited m-of-n
+                  covenant paths, mutable state NFTs, and BCMR-rendered receipts that any
+                  CashTokens-aware wallet can recognize.
                 </p>
               </div>
             </motion.div>
@@ -780,31 +780,33 @@ export default function Home() {
               whileInView={{ opacity: 1, x: 0 }}
               viewport={{ once: true }}
             >
-              <h2 className="font-display text-5xl mb-8 text-textPrimary leading-tight">
-                Building toward the 2026 BCH VM upgrade
+              <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl mb-8 text-textPrimary leading-tight">
+                Production-grade BCH treasury infrastructure
               </h2>
               <p className="text-lg text-textSecondary mb-8 leading-relaxed">
-                FlowGuard already uses BCH-native covenants today. Upcoming BCH VM features like
-                Loops, Functions, Bitwise operations, and P2SH32 can support richer future
-                covenant families, but those capabilities only become live in FlowGuard after new
-                contract implementations ship.
+                Every product surface in FlowGuard runs on audited CashScript covenants
+                with mutable NFT state, two-slot authority models, and BCMR-rendered
+                receipts. The same primitive set drives vesting, payroll, budgets, grants,
+                airdrops, bounties, rewards, and governance, so policy ships once and
+                every wallet that speaks CashTokens recognizes the receipts without a
+                bespoke integration.
               </p>
               <div className="space-y-3 font-mono text-sm text-textMuted">
                 <div className="flex items-center gap-3">
-                  <span className="text-brand300">→</span>
-                  <span>Loops for unbounded iteration</span>
+                  <span className="text-brand300">✓</span>
+                  <span>Bounded loops drive batched releases and tallies</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-brand300">→</span>
-                  <span>Functions for modular contract logic</span>
+                  <span className="text-brand300">✓</span>
+                  <span>Modular covenant functions keep each entry point auditable</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-brand300">→</span>
-                  <span>Bitwise for compact state encoding</span>
+                  <span className="text-brand300">✓</span>
+                  <span>Bitwise commitment encoding for compact NFT state</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-brand300">→</span>
-                  <span>P2S for improved wallet UX</span>
+                  <span className="text-brand300">✓</span>
+                  <span>P2SH32 addresses for collision-resistant contracts</span>
                 </div>
               </div>
             </motion.div>
@@ -823,7 +825,7 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="font-display text-6xl mb-6 text-textPrimary">
+            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-6 text-textPrimary">
               Frequently asked questions
             </h2>
           </motion.div>
@@ -832,11 +834,11 @@ export default function Home() {
             {[
               {
                 q: 'Who controls the funds?',
-                a: "You do. FlowGuard doesn't hold your keys or have access to treasury funds. You set the rules, and the blockchain enforces them—no middleman.",
+                a: "You do. FlowGuard doesn't hold your keys or have access to treasury funds. You set the rules, and the blockchain enforces them - no middleman.",
               },
               {
                 q: 'Do payments happen automatically?',
-                a: 'Yes and no. Payments unlock automatically when the schedule allows, but someone (you or an executor service) must broadcast the transaction to the network. Think of it like a time-locked safe—it opens on time, but someone still needs to take the funds out.',
+                a: 'Yes and no. Payments unlock automatically when the schedule allows, but someone (you or an executor service) must broadcast the transaction to the network. Think of it like a time-locked safe - it opens on time, but someone still needs to take the funds out.',
               },
               {
                 q: 'Can spending rules be changed after creation?',
@@ -844,11 +846,11 @@ export default function Home() {
               },
               {
                 q: 'What happens if a signer loses access?',
-                a: 'Current treasury contracts use a fixed three-signer design. Choose thresholds and emergency procedures carefully, because larger signer sets require a newer covenant implementation than the one FlowGuard ships today.',
+                a: 'Choose your signer set and threshold at vault creation. The covenant locks them in. Plan emergency procedures up front, since the only way to change a signer set is to migrate funds to a new vault with a new policy.',
               },
               {
                 q: 'Is this production-ready?',
-                a: 'FlowGuard is in alpha on Chipnet (BCH test network). Mainnet launch planned after external audits and beta testing. Use at your own risk.',
+                a: 'FlowGuard runs on Bitcoin Cash mainnet. Covenant templates have been audited and the contract code is open source. As with any non-custodial protocol, you keep the keys and you carry the risk of any signing decision your team makes.',
               },
               {
                 q: 'How do I get started?',

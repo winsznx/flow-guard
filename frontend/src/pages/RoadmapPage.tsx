@@ -66,9 +66,9 @@ const ROADMAP: RoadmapPhase[] = [
   },
   {
     phase: 'Phase 2',
-    title: 'Beta & Security Hardening',
-    description: 'External audits and mainnet preparation',
-    status: 'in-progress',
+    title: 'Audits and Hardening',
+    description: 'External security review and production readiness, completed ahead of mainnet',
+    status: 'completed',
     items: [
       {
         title: 'Security Audits',
@@ -112,12 +112,12 @@ const ROADMAP: RoadmapPhase[] = [
     phase: 'Phase 3',
     title: 'Mainnet Launch',
     description: 'Production deployment on Bitcoin Cash mainnet',
-    status: 'planned',
+    status: 'completed',
     items: [
       {
         title: 'Mainnet Deployment',
         description: 'Launch on BCH mainnet',
-        status: 'planned',
+        status: 'completed',
         quarter: 'Q3 2026',
         items: [
           'Smart contract deployment to mainnet',
@@ -154,44 +154,38 @@ const ROADMAP: RoadmapPhase[] = [
   },
   {
     phase: 'Phase 4',
-    title: 'Layla Upgrade Features',
-    description: 'Advanced capabilities leveraging May 2026 BCHN upgrade',
-    status: 'planned',
+    title: 'Post-Layla Covenant Expansion',
+    description: 'Templates rewritten to take direct advantage of the Layla VM',
+    status: 'in-progress',
     items: [
       {
-        title: 'Advanced Covenant Features',
-        description: 'Leverage new VM capabilities',
-        status: 'planned',
-        quarter: 'Q3 2026',
+        title: 'Loop-driven batched releases',
+        description: 'Single-transaction payouts to large recipient sets',
+        status: 'in-progress',
         items: [
-          'Loops for unbounded iteration',
-          'Functions for modular contract logic',
-          'Bitwise operations for compact state',
-          'P2SH32 for improved wallet UX',
+          'Batched airdrop and reward claims under one covenant spend',
+          'Bounded loop guards on every batch path',
+          'Per-recipient receipt NFT minted in the same transaction',
         ],
       },
       {
-        title: 'Trustless Vote Tallying',
-        description: 'On-chain governance without trust assumptions',
-        status: 'planned',
-        quarter: 'Q3-Q4 2026',
+        title: 'On-chain vote tallying',
+        description: 'Token-weighted proposals settled by the covenant, not an indexer',
+        status: 'in-progress',
         items: [
-          'Fully on-chain vote counting',
-          'Arbitrary M-of-N signature schemes',
-          'Token-weighted voting',
-          'Quadratic voting support',
+          'Arbitrary m-of-n signer covenants',
+          'Token-weighted tallies bound to the settlement transaction',
+          'Lock-and-release voting that returns weight after a proposal closes',
         ],
       },
       {
-        title: 'Advanced Treasury Types',
-        description: 'Specialized treasury configurations',
+        title: 'Conditional unlock primitives',
+        description: 'Specialized templates that reuse Layla VM features',
         status: 'planned',
-        quarter: 'Q4 2026',
         items: [
-          'Broader contract-backed schedule families',
-          'Conditional unlocks (oracle-based)',
-          'Multi-token treasury support',
-          'Cross-treasury transfers',
+          'Oracle-conditional unlocks',
+          'Multi-token treasury templates',
+          'Cross-treasury transfer covenants',
         ],
       },
     ],
@@ -301,10 +295,10 @@ export default function RoadmapPage() {
               </div>
               <div>
                 <div className="font-semibold text-textPrimary">
-                  Current Phase: Beta & Security Hardening
+                  Current Phase: Mainnet Operations
                 </div>
                 <div className="text-sm text-textSecondary">
-                  Deepening treasury, stream, and governance operations before mainnet
+                  Mainnet contracts are live. Active work focuses on broader templates and post-Layla covenant rewrites.
                 </div>
               </div>
             </div>
@@ -339,7 +333,7 @@ export default function RoadmapPage() {
                     </div>
                     <div className="flex-1">
                       <div className="flex flex-wrap items-center gap-3 mb-2">
-                        <h2 className="font-display text-3xl font-bold text-textPrimary">
+                        <h2 className="font-display text-2xl sm:text-3xl font-bold text-textPrimary">
                           {phase.phase}: {phase.title}
                         </h2>
                         <span

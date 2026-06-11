@@ -1,3 +1,17 @@
+/**
+ * @deprecated Operator-flavored status dashboard.
+ *
+ * No longer mounted at `/status` - that route now serves the public
+ * StatusPage (Stripe / Vercel / GitHub-Status style) intended for the open
+ * internet. This page leaks internal details (process memory, raw row counts,
+ * internal service URLs, manual-execution warnings) and must NOT be exposed
+ * publicly.
+ *
+ * New canonical mount: `/app/admin/indexer-status` (admin-gated).
+ * Routing wire-up lands in a follow-up PR.
+ *
+ * Until then, keep this file compiling but do not link to it from public nav.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,

@@ -211,7 +211,7 @@ export default function PayrollPage() {
       {/* Use Cases */}
       <section className="py-20 px-6 lg:px-12">
         <div className="max-w-5xl mx-auto">
-          <h2 className="font-display text-4xl text-center mb-12 text-textPrimary">Common use cases</h2>
+          <h2 className="font-display text-2xl sm:text-3xl lg:text-4xl text-center mb-12 text-textPrimary">Common use cases</h2>
           <div className="space-y-6">
             {[
               {

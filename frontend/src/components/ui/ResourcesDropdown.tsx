@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, BookOpen, HelpCircle, FileText, PenLine } from 'lucide-react';
+import { ChevronDown, BookOpen, HelpCircle, FileText, PenLine, Activity, ShieldCheck, LifeBuoy } from 'lucide-react';
 import { BLOG_URL, DOCS_SITE_URL } from '../../utils/publicUrls';
 
 interface Resource {
@@ -17,10 +17,27 @@ interface Resource {
 const resources: Resource[] = [
     {
         name: 'FAQ',
-        href: '#faq',
+        href: '/faq',
         description: 'Frequently asked questions',
         icon: HelpCircle,
-        isExternal: true,
+    },
+    {
+        name: 'Help',
+        href: '/help',
+        description: 'Guides and support center',
+        icon: LifeBuoy,
+    },
+    {
+        name: 'Status',
+        href: '/status',
+        description: 'System health and uptime',
+        icon: Activity,
+    },
+    {
+        name: 'Security',
+        href: '/security',
+        description: 'Audits, disclosures, threat model',
+        icon: ShieldCheck,
     },
     {
         name: 'Updates',

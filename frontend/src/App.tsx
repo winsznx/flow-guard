@@ -38,14 +38,23 @@ const PaymentDetailPage = lazy(() => import('./pages/PaymentDetailPage'));
 const AirdropsPage = lazy(() => import('./pages/AirdropsPage'));
 const CreateAirdropPage = lazy(() => import('./pages/CreateAirdropPage'));
 const AirdropDetailPage = lazy(() => import('./pages/AirdropDetailPage'));
+const BountiesPage = lazy(() => import('./pages/BountiesPage'));
+const CreateBountyPage = lazy(() => import('./pages/CreateBountyPage'));
+const BountyDetailPage = lazy(() => import('./pages/BountyDetailPage'));
+const RewardsPage = lazy(() => import('./pages/RewardsPage'));
+const CreateRewardPage = lazy(() => import('./pages/CreateRewardPage'));
+const RewardDetailPage = lazy(() => import('./pages/RewardDetailPage'));
+const GrantsPage = lazy(() => import('./pages/GrantsPage'));
+const CreateGrantPage = lazy(() => import('./pages/CreateGrantPage'));
+const GrantDetailPage = lazy(() => import('./pages/GrantDetailPage'));
 const ClaimLinkPage = lazy(() => import('./pages/ClaimLinkPage'));
 const ExplorerPage = lazy(() => import('./pages/ExplorerPage'));
-const IndexerStatusPage = lazy(() => import('./pages/IndexerStatusPage'));
+const StatusPage = lazy(() => import('./pages/StatusPage'));
 
 const VestingPage = lazy(() => import('./pages/solutions/VestingPage'));
 const PayrollPage = lazy(() => import('./pages/solutions/PayrollPage'));
 const BudgetingPage = lazy(() => import('./pages/solutions/BudgetingPage'));
-const GrantsPage = lazy(() => import('./pages/solutions/GrantsPage'));
+const GrantsInfoPage = lazy(() => import('./pages/solutions/GrantsPage'));
 const GovernanceInfoPage = lazy(() => import('./pages/solutions/GovernanceInfoPage'));
 
 const UpdatesPage = lazy(() => import('./pages/UpdatesPage'));
@@ -55,6 +64,18 @@ const RoadmapPage = lazy(() => import('./pages/RoadmapPage'));
 const TermsPage = lazy(() => import('./pages/TermsPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 const DisclaimerPage = lazy(() => import('./pages/DisclaimerPage'));
+
+// Onboarding / trust / support surfaces (Phase 2 mainnet-readiness pages).
+// All public except SettingsPage, which is an authenticated account surface.
+const FaqPage = lazy(() => import('./pages/FaqPage'));
+const SecurityPage = lazy(() => import('./pages/SecurityPage'));
+const HowItWorksPage = lazy(() => import('./pages/HowItWorksPage'));
+const PricingPage = lazy(() => import('./pages/PricingPage'));
+const UseCasesPage = lazy(() => import('./pages/UseCasesPage'));
+const DemoPage = lazy(() => import('./pages/DemoPage'));
+const HelpPage = lazy(() => import('./pages/HelpPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 
 const AppShellPage = lazy(() => import('./pages/AppShellPage').then((m) => ({ default: m.AppShellPage })));
 const DaoOverviewPage = lazy(() => import('./pages/dao/DaoOverviewPage').then((m) => ({ default: m.DaoOverviewPage })));
@@ -81,7 +102,8 @@ function App() {
 
   // Scroll to top on route change
   useEffect(() => {
-    if (!location.pathname.startsWith('/app') && !location.pathname.startsWith('/streams') && !location.pathname.startsWith('/vaults') && !location.pathname.startsWith('/payments') && !location.pathname.startsWith('/airdrops') && !location.pathname.startsWith('/proposals') && !location.pathname.startsWith('/budgets') && !location.pathname.startsWith('/governance') && location.pathname !== '/explorer') {
+    const isProductGrants = location.pathname === '/grants' || location.pathname.startsWith('/grants/');
+    if (!location.pathname.startsWith('/app') && !location.pathname.startsWith('/streams') && !location.pathname.startsWith('/vaults') && !location.pathname.startsWith('/payments') && !location.pathname.startsWith('/airdrops') && !location.pathname.startsWith('/bounties') && !location.pathname.startsWith('/rewards') && !isProductGrants && !location.pathname.startsWith('/proposals') && !location.pathname.startsWith('/budgets') && !location.pathname.startsWith('/governance') && location.pathname !== '/explorer') {
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
   }, [location.pathname, location.search]);
@@ -216,7 +238,7 @@ function App() {
           <Route path="/vesting" element={<VestingPage />} />
           <Route path="/payroll" element={<PayrollPage />} />
           <Route path="/budgeting" element={<BudgetingPage />} />
-          <Route path="/grants" element={<GrantsPage />} />
+          <Route path="/grants-info" element={<GrantsInfoPage />} />
           <Route path="/governance-info" element={<GovernanceInfoPage />} />
 
           {/* Updates/Blog (public) */}
@@ -231,6 +253,27 @@ function App() {
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/disclaimer" element={<DisclaimerPage />} />
+
+          {/* Onboarding / trust / support (all public, lazy-loaded) */}
+          <Route path="/faq" element={<FaqPage />} />
+          <Route path="/security" element={<SecurityPage />} />
+          <Route path="/how-it-works" element={<HowItWorksPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/use-cases" element={<UseCasesPage />} />
+          <Route path="/demo" element={<DemoPage />} />
+          <Route path="/help" element={<HelpPage />} />
+
+          {/* Authenticated account surface */}
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <SettingsPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
 
           {/* NEW: Streams (Recipient View) */}
           <Route
@@ -392,6 +435,102 @@ function App() {
             }
           />
 
+          {/* Bounties Product */}
+          <Route
+            path="/bounties"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <BountiesPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/bounties/create"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <CreateBountyPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/bounties/:id"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <BountyDetailPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Rewards Product */}
+          <Route
+            path="/rewards"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <RewardsPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/rewards/create"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <CreateRewardPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/rewards/:id"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <RewardDetailPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Grants Product */}
+          <Route
+            path="/grants"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <GrantsPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/grants/create"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <CreateGrantPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/grants/:id"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout>
+                  <GrantDetailPage />
+                </DashboardLayout>
+              </ProtectedRoute>
+            }
+          />
+
           {/* Public Explorer (no auth required) */}
           <Route path="/claim/:token" element={<ClaimLinkPage />} />
 
@@ -399,7 +538,7 @@ function App() {
           <Route path="/explorer" element={onExplorerHost ? <Navigate to="/" replace /> : <ExplorerPage />} />
 
           {/* Public Status Page (standalone) */}
-          <Route path="/status" element={<IndexerStatusPage />} />
+          <Route path="/status" element={<StatusPage />} />
 
           {/* Protected routes with dashboard layout */}
           <Route
@@ -502,6 +641,11 @@ function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* 404 catch-all - MUST stay last. Renders NotFoundPage with the
+              attempted path, a search box, and curated destinations so users
+              recover instead of seeing a blank screen. */}
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
         </Suspense>
       </main>

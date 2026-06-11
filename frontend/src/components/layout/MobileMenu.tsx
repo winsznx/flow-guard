@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { APP_SITE_URL, BLOG_URL, DOCS_SITE_URL } from '../../utils/publicUrls';
 import { Link } from 'react-router-dom';
-import { X, ChevronDown, ChevronRight, Coins, Users, PieChart, Gift, Vote, BookOpen, HelpCircle, FileText, PenLine } from 'lucide-react';
+import { X, ChevronDown, ChevronRight, Coins, Users, PieChart, Gift, Vote, BookOpen, HelpCircle, FileText, PenLine, Target, Award, HandCoins, Activity, ShieldCheck, Tag, Sparkles, PlayCircle, LifeBuoy, Lightbulb } from 'lucide-react';
 
 interface MobileMenuProps {
     isOpen: boolean;
@@ -48,8 +48,8 @@ const solutions = [
         description: 'Set spending limits that enforce themselves'
     },
     {
-        name: 'Grants',
-        href: '/grants',
+        name: 'Grants Info',
+        href: '/grants-info',
         icon: Gift,
         description: 'Fund projects with accountability'
     },
@@ -59,15 +59,74 @@ const solutions = [
         icon: Vote,
         description: 'Make treasury decisions as a group'
     },
+    {
+        name: 'Bounties',
+        href: '/bounties',
+        icon: Target,
+        description: 'Reward task winners with on-chain payouts'
+    },
+    {
+        name: 'Rewards',
+        href: '/rewards',
+        icon: Award,
+        description: 'Distribute pooled incentives to contributors'
+    },
+    {
+        name: 'Grants',
+        href: '/grants',
+        icon: HandCoins,
+        description: 'Milestone-based grant streams'
+    },
+    {
+        name: 'Use Cases',
+        href: '/use-cases',
+        icon: Lightbulb,
+        description: 'Real-world FlowGuard scenarios'
+    },
+    {
+        name: 'How it works',
+        href: '/how-it-works',
+        icon: Sparkles,
+        description: 'From smart contract to wallet'
+    },
+    {
+        name: 'Pricing',
+        href: '/pricing',
+        icon: Tag,
+        description: 'Fees, plans, and what you pay for'
+    },
+    {
+        name: 'Demo',
+        href: '/demo',
+        icon: PlayCircle,
+        description: 'See FlowGuard in action'
+    },
 ];
 
 const resources = [
     {
         name: 'FAQ',
-        href: '#faq',
+        href: '/faq',
         icon: HelpCircle,
-        isExternal: true,
         description: 'Frequently asked questions'
+    },
+    {
+        name: 'Help',
+        href: '/help',
+        icon: LifeBuoy,
+        description: 'Guides and support center'
+    },
+    {
+        name: 'Status',
+        href: '/status',
+        icon: Activity,
+        description: 'System health and uptime'
+    },
+    {
+        name: 'Security',
+        href: '/security',
+        icon: ShieldCheck,
+        description: 'Audits, disclosures, threat model'
     },
     {
         name: 'Updates',
@@ -186,13 +245,13 @@ export function MobileMenu({ isOpen, onClose }: MobileMenuProps) {
                                     Developers
                                 </Link>
 
-                                <a
-                                    href="#security"
+                                <Link
+                                    to="/security"
                                     onClick={onClose}
                                     className="block text-lg font-medium text-textSecondary hover:text-textPrimary transition-colors"
                                 >
                                     Security
-                                </a>
+                                </Link>
 
                                 {/* Resources Section */}
                                 <div className="space-y-3">

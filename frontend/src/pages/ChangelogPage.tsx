@@ -36,6 +36,34 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.0',
+    date: '2026-06-01',
+    status: 'stable',
+    network: 'mainnet',
+    breaking: true,
+    highlights: [
+      'Mainnet launch on Bitcoin Cash',
+      'Audited covenant templates for vault, stream, payment, airdrop, bounty, grant, and reward flows',
+      'BCMR-decorated receipt NFTs across every workflow',
+      'Post-Layla VM features in production: bounded loops, functions, bitwise, P2SH32',
+    ],
+    added: [
+      'Production deployment of every covenant template against BCH mainnet',
+      'Receipt NFTs rendered through BCMR in CashTokens-aware wallets',
+      'Batched payouts using bounded loops for airdrops and rewards',
+      'P2SH32 addressing across all template families',
+    ],
+    changed: [
+      'Templates rewritten on top of the Layla VM (loops, functions, bitwise, P2SH32)',
+      'Default network in the app shell switched to BCH mainnet',
+    ],
+    migration: 'Chipnet alpha state does not migrate. Recreate vaults, streams, and payouts on mainnet.',
+    links: {
+      repo: 'https://github.com/winsznx/flow-guard',
+      docs: '/docs',
+    },
+  },
+  {
     version: '0.2.0-alpha',
     date: '2026-02-15',
     status: 'alpha',
@@ -243,7 +271,7 @@ export default function ChangelogPage() {
                   {/* Version Header */}
                   <div className="mb-6">
                     <div className="flex flex-wrap items-center gap-3 mb-4">
-                      <h2 className="font-display text-3xl font-bold text-textPrimary">
+                      <h2 className="font-display text-2xl sm:text-3xl font-bold text-textPrimary">
                         {entry.version}
                       </h2>
                       <span

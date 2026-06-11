@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, Coins, Users, PieChart, Gift, Vote } from 'lucide-react';
+import { ChevronDown, Coins, Users, PieChart, Gift, Vote, Lightbulb, Sparkles, PlayCircle } from 'lucide-react';
 
 interface Solution {
   name: string;
@@ -29,8 +29,8 @@ const solutions: Solution[] = [
     icon: PieChart,
   },
   {
-    name: 'Grants',
-    href: '/grants',
+    name: 'Grants Info',
+    href: '/grants-info',
     description: 'Fund projects with accountability',
     icon: Gift,
   },
@@ -39,6 +39,24 @@ const solutions: Solution[] = [
     href: '/governance-info',
     description: 'Make treasury decisions as a group',
     icon: Vote,
+  },
+  {
+    name: 'Use Cases',
+    href: '/use-cases',
+    description: 'Real-world FlowGuard scenarios',
+    icon: Lightbulb,
+  },
+  {
+    name: 'How it works',
+    href: '/how-it-works',
+    description: 'From smart contract to wallet',
+    icon: Sparkles,
+  },
+  {
+    name: 'Demo',
+    href: '/demo',
+    description: 'See FlowGuard in action',
+    icon: PlayCircle,
   },
 ];
 

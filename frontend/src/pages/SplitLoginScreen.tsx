@@ -66,7 +66,7 @@ export const SplitLoginScreen: React.FC = () => {
                 </div>
 
                 <div className="max-w-md w-full mx-auto">
-                    <h2 className="text-3xl font-extrabold text-[#1a1a1a] tracking-tight mb-2">Choose Your Workspace</h2>
+                    <h2 className="text-2xl sm:text-3xl font-extrabold text-[#1a1a1a] tracking-tight mb-2">Choose Your Workspace</h2>
                     <p className="text-textSecondary mb-10">Select how you want to use FlowGuard.</p>
 
                     <div className="space-y-4">
@@ -101,7 +101,7 @@ export const SplitLoginScreen: React.FC = () => {
                                 <div>
                                     <h3 className="text-lg font-bold text-textPrimary mb-1 group-hover:text-[#00E676] transition-colors flex items-center gap-2">
                                         Organization Workspace
-                                        <span className="bg-[#00E676] text-white text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-sans shrink-0">BETA</span>
+                                        <span className="bg-[#00E676] text-white text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-sans shrink-0">Multi-signer</span>
                                     </h3>
                                     <p className="text-sm text-textSecondary leading-relaxed">
                                         Manage multi-member treasuries, roles, governance workflows, and shared treasury policy controls.

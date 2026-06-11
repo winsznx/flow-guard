@@ -73,7 +73,7 @@ export default function BudgetingPage() {
             className="text-xl text-textSecondary mb-10 max-w-3xl mx-auto"
           >
             Define monthly spending caps by category or recipient. Require multiple approvals for large expenses.
-            Budget rules can't be bypassed—they're locked into the blockchain.
+            Budget rules can't be bypassed - they're locked into the blockchain.
           </motion.p>
 
           <motion.div
