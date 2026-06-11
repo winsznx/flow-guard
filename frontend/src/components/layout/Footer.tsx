@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Twitter, Send, Youtube } from 'lucide-react';
 import { APP_SITE_URL, BLOG_URL, DOCS_SITE_URL, EXPLORER_SITE_URL, MAIN_SITE_URL } from '../../utils/publicUrls';
+import { BchPriceTicker } from '../ui/BchPriceTicker';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
@@ -35,7 +36,7 @@ export function Footer() {
             <div className="inline-flex items-center px-3 py-1 rounded-full bg-brand300/20 border border-brand300/30">
               <span className="w-1.5 h-1.5 rounded-full bg-brand300 mr-2 animate-pulse"></span>
               <span className="text-xs font-mono font-medium text-brand100 uppercase tracking-wider">
-                Chipnet Alpha
+                Live on BCH mainnet
               </span>
             </div>
           </div>
@@ -62,13 +63,33 @@ export function Footer() {
                   </Link>
                 </li>
                 <li>
-                  <Link to="/grants" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
-                    Grants
+                  <Link to="/grants-info" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Grants Info
                   </Link>
                 </li>
                 <li>
                   <Link to="/governance-info" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
                     Governance
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/use-cases" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Use Cases
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/how-it-works" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    How it works
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/pricing" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Pricing
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/demo" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Demo
                   </Link>
                 </li>
               </ul>
@@ -82,6 +103,21 @@ export function Footer() {
                   <a href={APP_SITE_URL} className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
                     Launch App
                   </a>
+                </li>
+                <li>
+                  <Link to="/bounties" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Bounties
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/rewards" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Rewards
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/grants" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Grants
+                  </Link>
                 </li>
                 <li>
                   <a href={DOCS_SITE_URL} target="_blank" rel="noopener noreferrer" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
@@ -162,6 +198,21 @@ export function Footer() {
                     Audit Reports
                   </a>
                 </li>
+                <li>
+                  <Link to="/faq" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    FAQ
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/help" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Help
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/security" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                    Security
+                  </Link>
+                </li>
               </ul>
             </div>
 
@@ -191,9 +242,12 @@ export function Footer() {
 
         {/* Bottom Bar */}
         <div className="pt-8 border-t border-brand300/20 flex flex-col md:flex-row justify-between items-center gap-4">
-          <p className="text-sm text-brand100/60">
-            &copy; {currentYear} FlowGuard Labs. All rights reserved.
-          </p>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <p className="text-sm text-brand100/60">
+              &copy; {currentYear} FlowGuard Labs. All rights reserved.
+            </p>
+            <BchPriceTicker variant="inline" />
+          </div>
           <div className="flex items-center gap-6">
             <a
               href="https://x.com/flowguard_"

@@ -19,6 +19,8 @@ import governanceRouter from './api/governance.js';
 import explorerRouter from './api/explorer.js';
 import explorerAdvancedRouter from './api/explorer-advanced.js';
 import adminRouter from './api/admin.js';
+import statusRouter from './api/status.js';
+import priceRouter from './api/price.js';
 import authRouter from './api/auth.js';
 import { initializeSchema } from './database/init.js';
 import { startBlockchainMonitor, stopBlockchainMonitor } from './services/blockchain-monitor.js';
@@ -132,6 +134,8 @@ app.use('/api', grantsRouter); // Grant programs
 app.use('/api', governanceRouter); // Treasury governance
 app.use('/api', explorerRouter); // Public activity explorer
 app.use('/api', explorerAdvancedRouter); // Advanced explorer features
+app.use('/api', statusRouter); // Public status surface (no auth)
+app.use('/api', priceRouter);  // Public BCH price feed (no auth)
 app.use('/api', adminRouter); // Admin/operator endpoints
 app.use('/api', proposalsRouter); // LAST - has catch-all /:id routes
 
