@@ -11,12 +11,14 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
-    "@bitauth/libauth": "^3.0.0",
+    "@bitauth/libauth": "3.0.0",
     "@walletconnect/modal": "^2.7.0",
     "@walletconnect/sign-client": "^2.23.4",
     "@walletconnect/types": "^2.16.0",
     "@walletconnect/utils": "^2.16.0",
     "@web3modal/standalone": "^2.4.3",
+    "@wizardconnect/core": "^0.2.4",
+    "@wizardconnect/dapp": "^0.2.2",
     "buffer": "^6.0.3",
     "cashscript": "^0.10.0",
     "framer-motion": "^12.29.2",

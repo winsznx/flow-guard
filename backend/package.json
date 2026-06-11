@@ -18,10 +18,11 @@
     "register:vault": "node src/scripts/register-vault.mjs",
     "backfill:logical-ids": "node scripts/backfill-logical-ids.mjs",
     "deploy:chipnet:legacy": "NODE_OPTIONS='--no-warnings --experimental-loader ./node_modules/tsx/dist/esm/index.mjs' node --loader tsx/esm src/scripts/deploy-chipnet.ts || tsx src/scripts/deploy-chipnet.ts",
-    "verify:deployment": "tsx src/scripts/verify-deployment.ts"
+    "verify:deployment": "tsx src/scripts/verify-deployment.ts",
+    "test:siwx": "tsx test/auth-siwx.smoke.ts && tsx test/auth-siwx.http.smoke.ts"
   },
   "dependencies": {
-    "@bitauth/libauth": "^3.0.0",
+    "@bitauth/libauth": "3.0.0",
     "@types/pg": "^8.20.0",
     "cashscript": "^0.12.1",
     "cors": "^2.8.5",

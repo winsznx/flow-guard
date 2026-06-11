@@ -88,3 +88,5 @@ backend/scripts/verify-import.mjs
 
 # Local reference material (not part of the project)
 bch refrences/
+
+internal/
