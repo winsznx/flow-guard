@@ -81,6 +81,15 @@ contract AirdropCovenant(
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // LIFT-pattern fee cap: cap the total BCH leaving the contract on each
+        // claim so the reserve cannot be drained to miners over many claims.
+        // outputs[0] is the recipient leg (dust in token mode, payout in BCH
+        // mode); outputs[1] is the self-preserved state UTXO. Anything not
+        // accounted for in those two outputs is the miner fee.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 2000);
+
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 
@@ -102,6 +111,10 @@ contract AirdropCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Bound miner-fee skim on the control path.
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     function resume(sig authSig, pubkey authPubkey) {
@@ -120,6 +133,9 @@ contract AirdropCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     function cancel(sig authSig, pubkey authPubkey) {
@@ -144,5 +160,11 @@ contract AirdropCovenant(
         } else {
             require(tx.outputs[0].value == remainingPool);
         }
+
+        // Bound miner-fee skim on cancel. With BCH refund this is the inputs
+        // value less the refund payment; with token refund the recipient gets
+        // dust BCH only — both expressions reduce to inputs - outputs[0].value.
+        int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(cancelFee >= 0 && cancelFee <= 2000);
     }
 }

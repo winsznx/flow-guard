@@ -1,123 +1,47 @@
 {
   "contractName": "VoteLockCovenant",
   "constructorInputs": [
-    {
-      "name": "proposalId",
-      "type": "bytes32"
-    },
-    {
-      "name": "voteChoice",
-      "type": "int"
-    },
-    {
-      "name": "voterHash",
-      "type": "bytes20"
-    },
-    {
-      "name": "unlockTimestamp",
-      "type": "int"
-    }
+    { "name": "proposalId", "type": "bytes32" },
+    { "name": "voteChoice", "type": "int" },
+    { "name": "voterHash", "type": "bytes20" },
+    { "name": "unlockTimestamp", "type": "int" }
   ],
   "abi": [
     {
       "name": "reclaim",
       "inputs": [
-        {
-          "name": "voterSig",
-          "type": "sig"
-        },
-        {
-          "name": "voterPubkey",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "earlyReclaim",
-      "inputs": [
-        {
-          "name": "voterSig",
-          "type": "sig"
-        },
-        {
-          "name": "voterPubkey",
-          "type": "pubkey"
-        },
-        {
-          "name": "proposalFinalStatus",
-          "type": "int"
-        }
+        { "name": "voterSig", "type": "sig" },
+        { "name": "voterPubkey", "type": "pubkey" }
       ]
     }
   ],
-  "bytecode": "OP_4 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_0 OP_UTXOTOKENCOMMITMENT OP_1 OP_SPLIT OP_NIP OP_4 OP_SPLIT OP_DROP OP_SWAP OP_4 OP_SPLIT OP_DROP OP_EQUALVERIFY OP_DUP OP_0 OP_NUMEQUAL OP_OVER OP_1 OP_NUMEQUAL OP_BOOLOR OP_SWAP OP_2 OP_NUMEQUAL OP_BOOLOR OP_VERIFY OP_4 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_3 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_TXLOCKTIME OP_ROT OP_GREATERTHANOREQUAL OP_VERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_ROT OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTTOKENAMOUNT OP_0 OP_UTXOTOKENAMOUNT OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_UTXOTOKENCATEGORY OP_EQUAL OP_NIP OP_ELSE OP_4 OP_ROLL OP_1 OP_NUMEQUALVERIFY OP_5 OP_PICK OP_HASH160 OP_3 OP_PICK OP_EQUALVERIFY OP_2ROT OP_SWAP OP_CHECKSIGVERIFY OP_4 OP_PICK OP_2 OP_NUMEQUAL OP_5 OP_PICK OP_3 OP_NUMEQUAL OP_BOOLOR OP_5 OP_ROLL OP_4 OP_NUMEQUAL OP_BOOLOR OP_VERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_4 OP_ROLL OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTTOKENAMOUNT OP_0 OP_UTXOTOKENAMOUNT OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_UTXOTOKENCATEGORY OP_EQUAL OP_NIP OP_NIP OP_NIP OP_ENDIF",
-  "source": "/**\n * VoteLockCovenant — Production Grade\n *\n * ENFORCEABILITY: [ENFORCEABLE-NOW]\n *\n * PURPOSE: Lock governance tokens with an immutable vote choice commitment.\n * - Lock GovernanceFT until unlock_timestamp\n * - Commit vote choice (FOR/AGAINST/ABSTAIN) at lock time\n * - Prevent double-voting via UTXO consumption (CashTokens model)\n * - Allow reclaim after unlock time or early unlock after proposal completes\n *\n * ANTI-DOUBLE-VOTE:\n * - UTXO model guarantees uniqueness — once FT locked here, it cannot\n *   exist elsewhere. Consuming this UTXO = casting the vote.\n *   No on-chain tracking needed beyond the VoteNFT.\n *\n * NFT COMMITMENT (32 bytes — within CashTokens 40-byte limit):\n *   [0]:     version (uint8)\n *   [1-4]:   proposal_id_prefix (4 bytes, first 4 bytes of proposalId)\n *   [5]:     vote_choice (uint8: 0=AGAINST, 1=FOR, 2=ABSTAIN)\n *   [6-7]:   reserved\n *   [8-12]:  lock_timestamp (5 bytes, unix seconds)\n *   [13-17]: unlock_timestamp (5 bytes, unix seconds)\n *   [18-31]: reserved\n *\n * CONTRACT PARAMETERS (compiled into bytecode, immutable):\n *   proposalId       — links vote to proposal\n *   voteChoice       — 0=AGAINST, 1=FOR, 2=ABSTAIN (immutable)\n *   voterHash        — hash160 of voter pubkey (prevents theft)\n *   unlockTimestamp  — when tokens can be reclaimed\n *\n * PRE-LAYLA: Fully supported\n * POST-LAYLA: No changes needed\n */\n\npragma cashscript ^0.13.0;\n\ncontract VoteLockCovenant(\n    bytes32 proposalId,\n    int voteChoice,\n    bytes20 voterHash,\n    int unlockTimestamp\n) {\n    /**\n     * reclaim() — Voter reclaims governance tokens after unlock time\n     *\n     * Validates:\n     * - Voter signature (voter must be the original locker)\n     * - tx.locktime >= unlockTimestamp\n     * - GovernanceFT returned in full to voter\n     */\n    function reclaim(sig voterSig, pubkey voterPubkey) {\n        // Verify this vote belongs to the correct proposal\n        bytes c = tx.inputs[0].nftCommitment;\n        require(c.split(1)[1].split(4)[0] == proposalId.split(4)[0]);\n\n        // 0=AGAINST, 1=FOR, 2=ABSTAIN\n        require(voteChoice == 0 || voteChoice == 1 || voteChoice == 2);\n\n        require(hash160(voterPubkey) == voterHash);\n        require(checkSig(voterSig, voterPubkey));\n\n        // Unlock time must have passed (CLTV pattern)\n        require(tx.locktime >= unlockTimestamp);\n\n        // Return tokens to voter's P2PKH address\n        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(voterHash));\n        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);\n        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);\n    }\n\n    /**\n     * earlyReclaim() — Reclaim tokens after proposal lifecycle ends\n     *\n     * If the proposal was executed, cancelled, or expired, the voter\n     * no longer needs to wait for unlockTimestamp.\n     */\n    function earlyReclaim(sig voterSig, pubkey voterPubkey, int proposalFinalStatus) {\n        require(hash160(voterPubkey) == voterHash);\n        require(checkSig(voterSig, voterPubkey));\n\n        // proposalFinalStatus must be one of: EXECUTED(2), CANCELLED(3), EXPIRED(4)\n        require(\n            proposalFinalStatus == 2 ||\n            proposalFinalStatus == 3 ||\n            proposalFinalStatus == 4\n        );\n\n        // Return tokens to voter\n        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(voterHash));\n        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);\n        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);\n    }\n}\n",
+  "bytecode": "OP_TXLOCKTIME OP_CHECKLOCKTIMEVERIFY OP_DROP OP_0 OP_UTXOTOKENCOMMITMENT OP_1 OP_SPLIT OP_NIP OP_4 OP_SPLIT OP_DROP OP_SWAP OP_4 OP_SPLIT OP_DROP OP_EQUALVERIFY OP_DUP OP_0 OP_NUMEQUAL OP_OVER OP_1 OP_NUMEQUAL OP_BOOLOR OP_SWAP OP_2 OP_NUMEQUAL OP_BOOLOR OP_VERIFY OP_3 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_2SWAP OP_SWAP OP_CHECKSIGVERIFY OP_TXLOCKTIME OP_ROT OP_GREATERTHANOREQUAL OP_VERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_ROT OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTTOKENAMOUNT OP_0 OP_UTXOTOKENAMOUNT OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_UTXOTOKENCATEGORY OP_EQUAL",
+  "source": "/**\n * VoteLockCovenant — Production Grade\n *\n * ENFORCEABILITY: [ENFORCEABLE-NOW]\n *\n * PURPOSE: Lock governance tokens with an immutable vote choice commitment.\n * - Lock GovernanceFT until unlock_timestamp\n * - Commit vote choice (FOR/AGAINST/ABSTAIN) at lock time\n * - Prevent double-voting via UTXO consumption (CashTokens model)\n * - Allow reclaim after unlock time or early unlock after proposal completes\n *\n * ANTI-DOUBLE-VOTE:\n * - UTXO model guarantees uniqueness — once FT locked here, it cannot\n *   exist elsewhere. Consuming this UTXO = casting the vote.\n *   No on-chain tracking needed beyond the VoteNFT.\n *\n * NFT COMMITMENT (32 bytes — within CashTokens 40-byte limit):\n *   [0]:     version (uint8)\n *   [1-4]:   proposal_id_prefix (4 bytes, first 4 bytes of proposalId)\n *   [5]:     vote_choice (uint8: 0=AGAINST, 1=FOR, 2=ABSTAIN)\n *   [6-7]:   reserved\n *   [8-12]:  lock_timestamp (5 bytes, unix seconds)\n *   [13-17]: unlock_timestamp (5 bytes, unix seconds)\n *   [18-31]: reserved\n *\n * CONTRACT PARAMETERS (compiled into bytecode, immutable):\n *   proposalId       — links vote to proposal\n *   voteChoice       — 0=AGAINST, 1=FOR, 2=ABSTAIN (immutable)\n *   voterHash        — hash160 of voter pubkey (prevents theft)\n *   unlockTimestamp  — when tokens can be reclaimed\n *\n * PRE-LAYLA: Fully supported\n * POST-LAYLA: No changes needed\n */\n\npragma cashscript ^0.13.0;\n\ncontract VoteLockCovenant(\n    bytes32 proposalId,\n    int voteChoice,\n    bytes20 voterHash,\n    int unlockTimestamp\n) {\n    /**\n     * reclaim() — Voter reclaims governance tokens after unlock time\n     *\n     * Validates:\n     * - Voter signature (voter must be the original locker)\n     * - tx.locktime >= unlockTimestamp\n     * - GovernanceFT returned in full to voter\n     */\n    function reclaim(sig voterSig, pubkey voterPubkey) {\n        // Verify this vote belongs to the correct proposal\n        bytes c = tx.inputs[0].nftCommitment;\n        require(c.split(1)[1].split(4)[0] == proposalId.split(4)[0]);\n\n        // 0=AGAINST, 1=FOR, 2=ABSTAIN\n        require(voteChoice == 0 || voteChoice == 1 || voteChoice == 2);\n\n        require(hash160(voterPubkey) == voterHash);\n        require(checkSig(voterSig, voterPubkey));\n\n        // Unlock time must have passed (CLTV pattern)\n        require(tx.locktime >= unlockTimestamp);\n\n        // Return tokens to voter's P2PKH address\n        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(voterHash));\n        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);\n        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);\n    }\n\n    // earlyReclaim() — REMOVED.\n    //\n    // The previous implementation accepted a user-supplied `proposalFinalStatus`\n    // integer with NO on-chain verification of the actual proposal state, which\n    // let any voter bypass the entire token lockup at will (audit critical\n    // finding, comprehensive-audit-and-plan §B). Removing the entrypoint is the\n    // safest fix.\n    //\n    // A future revision can reintroduce early-reclaim properly by:\n    //   1. Adding a `proposalLockingBytecodeHash` constructor parameter that\n    //      cryptographically binds this VoteLock to a specific ProposalCovenant\n    //      instance.\n    //   2. Requiring tx.inputs[1] to hold an NFT whose\n    //      hash256(lockingBytecode) == proposalLockingBytecodeHash and whose\n    //      commitment status byte is CANCELLED (3) or EXPIRED (4). Note:\n    //      EXECUTED (2) is not reachable because execute() burns the proposal\n    //      NFT — voters affected by an executed proposal must wait for\n    //      unlockTimestamp via reclaim().\n    //\n    // Until that revision ships, voters reclaim via reclaim() once\n    // unlockTimestamp passes. unlockTimestamp is chosen at lock time to comfortably\n    // exceed the proposal's execution timelock, so this is a UX regression rather\n    // than a functional one.\n}\n",
+  "fingerprint": "3abcff7e1d2a51c363bcc7d2fd3449c28d48484180cd8397edc8c41e3129cdc8",
   "debug": {
-    "bytecode": "5479009c6300cf517f77547f757c547f758876009c78519c9b7c529c9b695479a97888537a547aadc57ba26900cd0376a9147b7e0288ac7e8800d300d09d00d100ce877767547a519d5579a9537988717cad5479529c5579539c9b557a549c9b6900cd0376a914547a7e0288ac7e8800d300d09d00d100ce8777777768",
-    "sourceMap": "52:4:70:5;;;;;54:28:54:29;:18::44:1;55:24:55:25:0;:16::26:1;:::29;:36::37:0;:16::38:1;:::41;:45::55:0;:62::63;:45::64:1;:::67;:8::69;58:16:58:26:0;:30::31;:16:::1;:35::45:0;:49::50;:35:::1;:16;:54::64:0;:68::69;:54:::1;:16;:8::71;60:24:60:35:0;;:16::36:1;:40::49:0;:8::51:1;61:25:61:33:0;;:35::46;;:8::49:1;64:16:64:27:0;:31::46;:16:::1;:8::48;67:27:67:28:0;:16::45:1;:49::84:0;:74::83;:49::84:1;;;:8::86;68:27:68:28:0;:16::41:1;:55::56:0;:45::69:1;:8::71;69:27:69:28:0;:16::43:1;:57::58:0;:47::73:1;:8::75;52:4:70:5;;78::93::0;;;;79:24:79:35;;:16::36:1;:40::49:0;;:8::51:1;80:25:80:46:0;;:8::49:1;84:12:84:31:0;;:35::36;:12:::1;85::85:31:0;;:35::36;:12:::1;84;86::86:31:0;;:35::36;:12:::1;84;83:8:87:10;90:27:90:28:0;:16::45:1;:49::84:0;:74::83;;:49::84:1;;;:8::86;91:27:91:28:0;:16::41:1;:55::56:0;:45::69:1;:8::71;92:27:92:28:0;:16::43:1;:57::58:0;:47::73:1;:8::75;78:4:93:5;;;38:0:94:1",
+    "bytecode": "c5b17500cf517f77547f757c547f758876009c78519c9b7c529c9b695379a97888727cadc57ba26900cd0376a9147b7e0288ac7e8800d300d09d00d100ce87",
+    "sourceMap": "52:55:52:55;::::1;;54:28:54:29:0;:18::44:1;55:24:55:25:0;:16::26:1;:::29;:36::37:0;:16::38:1;:::41;:45::55:0;:62::63;:45::64:1;:::67;:8::69;58:16:58:26:0;:30::31;:16:::1;:35::45:0;:49::50;:35:::1;:16;:54::64:0;:68::69;:54:::1;:16;:8::71;60:24:60:35:0;;:16::36:1;:40::49:0;:8::51:1;61:25:61:46:0;;:8::49:1;64:16:64:27:0;:31::46;:16:::1;:8::48;67:27:67:28:0;:16::45:1;:49::84:0;:74::83;:49::84:1;;;:8::86;68:27:68:28:0;:16::41:1;:55::56:0;:45::69:1;:8::71;69:27:69:28:0;:16::43:1;:57::58:0;:47::73:1;:8::75",
     "logs": [],
     "requires": [
-      {
-        "ip": 21,
-        "line": 55
-      },
-      {
-        "ip": 33,
-        "line": 58
-      },
-      {
-        "ip": 38,
-        "line": 60
-      },
-      {
-        "ip": 43,
-        "line": 61
-      },
-      {
-        "ip": 47,
-        "line": 64
-      },
-      {
-        "ip": 55,
-        "line": 67
-      },
-      {
-        "ip": 60,
-        "line": 68
-      },
-      {
-        "ip": 66,
-        "line": 69
-      },
-      {
-        "ip": 77,
-        "line": 79
-      },
-      {
-        "ip": 80,
-        "line": 80
-      },
-      {
-        "ip": 95,
-        "line": 83
-      },
-      {
-        "ip": 104,
-        "line": 90
-      },
-      {
-        "ip": 109,
-        "line": 91
-      },
-      {
-        "ip": 115,
-        "line": 92
-      }
-    ]
+      { "ip": 5, "line": 52, "message": "Using tx.locktime requires a non-final sequence number on the spending input" },
+      { "ip": 19, "line": 55 },
+      { "ip": 31, "line": 58 },
+      { "ip": 36, "line": 60 },
+      { "ip": 39, "line": 61 },
+      { "ip": 43, "line": 64 },
+      { "ip": 51, "line": 67 },
+      { "ip": 56, "line": 68 },
+      { "ip": 62, "line": 69 }
+    ],
+    "sourceTags": "0:2:lg"
   },
   "compiler": {
     "name": "cashc",
-    "version": "0.13.0-next.3"
+    "version": "0.13.0",
+    "options": {
+      "enforceFunctionParameterTypes": true,
+      "enforceLocktimeGuard": true
+    }
   },
-  "updatedAt": "2026-05-07T01:27:04.744Z"
+  "updatedAt": "2026-06-10T16:50:43.358Z"
 }

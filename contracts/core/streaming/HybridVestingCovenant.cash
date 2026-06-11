@@ -151,6 +151,7 @@ contract HybridVestingCovenant(
         require(checkSig(senderSig, senderPubkey));
         require(status == 1);
         require(pauseStart > 0);
+        require(tx.locktime > pauseStart);
 
         int pauseDuration = tx.locktime - pauseStart;
         int newCursor = cursor + pauseDuration;

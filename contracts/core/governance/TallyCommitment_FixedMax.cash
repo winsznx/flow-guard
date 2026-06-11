@@ -71,6 +71,7 @@ contract TallyCommitment_FixedMax(
         if (choice2 == VOTE_ABSTAIN) { totalAbstain = totalAbstain + amount2; }
 
         int totalVotes = totalFor + totalAgainst + totalAbstain;
+        require(totalVotes > 0);
         require(totalVotes >= quorumThreshold);
         require((totalFor * 100) / totalVotes >= majorityThreshold);
 
@@ -86,6 +87,7 @@ contract TallyCommitment_FixedMax(
             0x0000000000000000000000000000000000000000000000000000;
 
         require(tx.outputs[0].nftCommitment == tallyCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
     }
 }

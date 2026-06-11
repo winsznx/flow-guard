@@ -58,6 +58,7 @@ contract TallyCommitment_Attested(
         require(int(tallyCommitment.split(1)[1].split(1)[0]) == 1);
 
         require(tx.outputs[0].nftCommitment == tallyCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
         require(requiredAttestations == 2);
     }

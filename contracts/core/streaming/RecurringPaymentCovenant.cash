@@ -120,6 +120,7 @@ contract RecurringPaymentCovenant(
 
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
     }
 
@@ -150,6 +151,7 @@ contract RecurringPaymentCovenant(
 
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
     }
 

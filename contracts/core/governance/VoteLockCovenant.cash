@@ -69,26 +69,27 @@ contract VoteLockCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
     }
 
-    /**
-     * earlyReclaim() — Reclaim tokens after proposal lifecycle ends
-     *
-     * If the proposal was executed, cancelled, or expired, the voter
-     * no longer needs to wait for unlockTimestamp.
-     */
-    function earlyReclaim(sig voterSig, pubkey voterPubkey, int proposalFinalStatus) {
-        require(hash160(voterPubkey) == voterHash);
-        require(checkSig(voterSig, voterPubkey));
-
-        // proposalFinalStatus must be one of: EXECUTED(2), CANCELLED(3), EXPIRED(4)
-        require(
-            proposalFinalStatus == 2 ||
-            proposalFinalStatus == 3 ||
-            proposalFinalStatus == 4
-        );
-
-        // Return tokens to voter
-        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(voterHash));
-        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
-        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
-    }
+    // earlyReclaim() — REMOVED.
+    //
+    // The previous implementation accepted a user-supplied `proposalFinalStatus`
+    // integer with NO on-chain verification of the actual proposal state, which
+    // let any voter bypass the entire token lockup at will (audit critical
+    // finding, comprehensive-audit-and-plan §B). Removing the entrypoint is the
+    // safest fix.
+    //
+    // A future revision can reintroduce early-reclaim properly by:
+    //   1. Adding a `proposalLockingBytecodeHash` constructor parameter that
+    //      cryptographically binds this VoteLock to a specific ProposalCovenant
+    //      instance.
+    //   2. Requiring tx.inputs[1] to hold an NFT whose
+    //      hash256(lockingBytecode) == proposalLockingBytecodeHash and whose
+    //      commitment status byte is CANCELLED (3) or EXPIRED (4). Note:
+    //      EXECUTED (2) is not reachable because execute() burns the proposal
+    //      NFT — voters affected by an executed proposal must wait for
+    //      unlockTimestamp via reclaim().
+    //
+    // Until that revision ships, voters reclaim via reclaim() once
+    // unlockTimestamp passes. unlockTimestamp is chosen at lock time to comfortably
+    // exceed the proposal's execution timelock, so this is a UX regression rather
+    // than a functional one.
 }

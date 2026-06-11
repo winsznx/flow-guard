@@ -90,6 +90,12 @@ contract BountyCovenant(
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // LIFT-pattern fee cap on claim. Keeps BCH reserve solvent across
+        // many sequential bounty payouts.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 2000);
+
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 
@@ -111,6 +117,9 @@ contract BountyCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     function resume(sig authSig, pubkey authPubkey) {
@@ -129,6 +138,9 @@ contract BountyCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     function cancel(sig authSig, pubkey authPubkey) {
@@ -154,5 +166,8 @@ contract BountyCovenant(
         } else {
             require(tx.outputs[0].value == remainingPool);
         }
+
+        int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(cancelFee >= 0 && cancelFee <= 2000);
     }
 }

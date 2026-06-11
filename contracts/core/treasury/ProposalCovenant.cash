@@ -89,18 +89,31 @@ contract ProposalCovenant(
     /**
      * execute() — Execute an approved proposal
      *
-     * ProposalNFT is burned after execution.
+     * ProposalNFT is burned after execution. Requires a signature from one of
+     * the vault signers (audit critical finding: previously permissionless, so
+     * any actor could burn the proposal NFT without releasing funds, leaving
+     * the proposal permanently "EXECUTED" from the indexer's view while the
+     * vault stayed unspent).
      */
-    function execute() {
+    function execute(sig executorSig, pubkey executorPubkey) {
         bytes c = tx.inputs[0].nftCommitment;
         int status            = int(c.split(1)[1].split(1)[0]);
         int executionTimelock = int(c.split(9)[1].split(5)[0]);
         bytes20 payoutHash    = c.split(14)[1].split(20)[0];
 
+        // Only vault signers can execute. Same set as approve / cancel.
+        bytes20 pkHash = hash160(executorPubkey);
+        require(pkHash == signer1Hash || pkHash == signer2Hash || pkHash == signer3Hash);
+        require(checkSig(executorSig, executorPubkey));
+
         require(status == 1); // APPROVED
         require(tx.locktime >= executionTimelock);
         require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(payoutHash));
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
+
+        // Bound miner-fee skim.
+        int executeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(executeFee >= 0 && executeFee <= 2000);
     }
 
     /**
@@ -131,6 +144,9 @@ contract ProposalCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(cancelFee >= 0 && cancelFee <= 2000);
     }
 
     /**
@@ -154,5 +170,10 @@ contract ProposalCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Bound miner-fee skim on the permissionless expire path so a miner
+        // colluding with anyone cannot drain the proposal NFT's BCH dust.
+        int expireFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(expireFee >= 0 && expireFee <= 2000);
     }
 }
