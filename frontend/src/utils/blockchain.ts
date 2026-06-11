@@ -5,6 +5,7 @@
 
 import { binToHex, decodeTransaction, hexToBin } from '@bitauth/libauth';
 import { broadcastTransaction, getDepositInfo } from './api';
+import { authFetch } from './auth';
 import type { Transaction, SignedTransaction, CashScriptSignOptions, CashScriptSignResponse, SourceOutput } from '../types/wallet';
 import { emitTransactionNotice, normalizeWalletNetwork } from './txNotice';
 
@@ -22,6 +23,7 @@ export interface WalletInterface {
   signTransaction: (tx: Transaction) => Promise<SignedTransaction>;
   signRawTransaction?: (txHex: string) => Promise<string>;
   signCashScriptTransaction?: (options: CashScriptSignOptions) => Promise<CashScriptSignResponse>;
+  signMessage: (message: string) => Promise<string>;
   getAddress?: () => Promise<string | null>;
   isConnected: boolean;
   address: string | null;
@@ -182,6 +184,7 @@ export async function runLifecycleAction<TPayload = Record<string, unknown>>(
     signResult,
     signOptions,
     options.signContext,
+    options.wallet,
     options.metadata,
   );
 
@@ -274,6 +277,7 @@ export async function resolveTxHashFromSignResult(
   signResult: CashScriptSignResponse,
   signOptions: CashScriptSignOptions,
   context: string,
+  wallet: WalletInterface,
   metadata?: {
     txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout';
     vaultId?: string;
@@ -300,7 +304,7 @@ export async function resolveTxHashFromSignResult(
     return signResult.signedTransactionHash;
   }
 
-  const broadcastResult = await broadcastTransaction(signedTxHex, metadata);
+  const broadcastResult = await broadcastTransaction(signedTxHex, wallet, metadata);
   return signResult.signedTransactionHash || broadcastResult.txid;
 }
 
@@ -542,7 +546,7 @@ export async function signAndBroadcast(
     }
 
     // Broadcast the (potentially signed) transaction with metadata
-    const result = await broadcastTransaction(signedTxHex, metadata);
+    const result = await broadcastTransaction(signedTxHex, wallet, metadata);
     return publishTransactionNotice(result.txid, wallet, 'Transaction broadcast');
   } catch (error: any) {
     console.error('Failed to sign and broadcast transaction:', error);
@@ -583,7 +587,7 @@ async function signFromBackendPayload(
     const signResult = await wallet.signCashScriptTransaction(
       signOptions
     );
-    const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'WalletConnect signing failed', metadata);
+    const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'WalletConnect signing failed', wallet, metadata);
     return publishTransactionNotice(txHash, wallet, getNoticeLabelFromTxType(metadata?.txType));
   }
 
@@ -630,7 +634,8 @@ export async function createProposalOnChain(
       fromAddress: wallet.address || undefined,
     },
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/proposals/${proposalId}/create-onchain`, {
+      const response = await authFetch(`${apiUrl}/proposals/${proposalId}/create-onchain`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -652,7 +657,8 @@ export async function createProposalOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/proposals/${proposalId}/confirm-create`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/proposals/${proposalId}/confirm-create`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -697,7 +703,8 @@ export async function approveProposalOnChain(
       fromAddress: wallet.address || undefined,
     },
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/proposals/${proposalId}/approve-onchain`, {
+      const response = await authFetch(`${apiUrl}/proposals/${proposalId}/approve-onchain`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -719,7 +726,8 @@ export async function approveProposalOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/proposals/${proposalId}/confirm-approval`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/proposals/${proposalId}/confirm-approval`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -765,7 +773,8 @@ export async function executePayoutOnChain(
   }
 
   const apiUrl = '/api';
-  const response = await fetch(`${apiUrl}/proposals/${proposalId}/execute`, {
+  const response = await authFetch(`${apiUrl}/proposals/${proposalId}/execute`, {
+    wallet,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -789,6 +798,7 @@ export async function executePayoutOnChain(
     signResult,
     signOptions,
     'Proposal execute signing failed',
+    wallet,
     {
       txType: 'payout',
       proposalId,
@@ -799,7 +809,8 @@ export async function executePayoutOnChain(
     },
   );
 
-  const submitResponse = await fetch(`${apiUrl}/proposals/${proposalId}/execute-signature`, {
+  const submitResponse = await authFetch(`${apiUrl}/proposals/${proposalId}/execute-signature`, {
+    wallet,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -859,7 +870,8 @@ export async function unlockCycleOnChain(
   }
 
   const apiUrl = '/api';
-  const response = await fetch(`${apiUrl}/vaults/${vaultId}/unlock-onchain`, {
+  const response = await authFetch(`${apiUrl}/vaults/${vaultId}/unlock-onchain`, {
+    wallet,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -898,7 +910,8 @@ export async function unlockCycleOnChain(
       wcTransaction: initialPayload.wcTransaction,
       payload: initialPayload,
     }),
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/vaults/${vaultId}/confirm-unlock-onchain`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/vaults/${vaultId}/confirm-unlock-onchain`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -951,6 +964,7 @@ export async function depositToVault(
             signResult,
             signOptions,
             'Vault funding signing failed',
+            wallet,
             {
               txType: 'create',
               vaultId,
@@ -1075,7 +1089,8 @@ export async function fundStreamContract(
         fromAddress: wallet.address || undefined,
       },
       build: async () => {
-        const response = await fetch(`${apiUrl}/streams/${streamId}/funding-info`, {
+        const response = await authFetch(`${apiUrl}/streams/${streamId}/funding-info`, {
+          wallet,
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -1099,7 +1114,8 @@ export async function fundStreamContract(
           payload,
         };
       },
-      confirm: ({ txHash }) => fetch(`${apiUrl}/streams/${streamId}/confirm-funding`, {
+      confirm: ({ txHash }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-funding`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1170,7 +1186,8 @@ export async function fundBatchStreamContracts(
       actionLabel: 'Batch streams funded',
       signContext: 'Batch stream funding signing failed',
       build: async () => {
-        const response = await fetch(`/api/treasuries/${vaultId}/batch-create`, {
+        const response = await authFetch(`/api/treasuries/${vaultId}/batch-create`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1197,7 +1214,8 @@ export async function fundBatchStreamContracts(
           ? buildPayload.streams.map((stream) => stream.id)
           : [];
 
-        return fetch(`/api/treasuries/${vaultId}/batch-create/confirm`, {
+        return authFetch(`/api/treasuries/${vaultId}/batch-create/confirm`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1250,7 +1268,8 @@ export async function claimStreamFunds(
       actionLabel: 'Stream claim',
       signContext: 'Stream claim signing failed',
       build: async (signerAddress) => {
-        const response = await fetch(`${apiUrl}/streams/${streamId}/claim`, {
+        const response = await authFetch(`${apiUrl}/streams/${streamId}/claim`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1282,7 +1301,8 @@ export async function claimStreamFunds(
           },
         };
       },
-      confirm: ({ txHash, buildPayload }) => fetch(`${apiUrl}/streams/${streamId}/confirm-claim`, {
+      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-claim`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1327,7 +1347,8 @@ export async function cancelStreamOnChain(
     actionLabel: 'Stream cancelled',
     signContext: 'Stream cancel signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/streams/${streamId}/cancel`, {
+      const response = await authFetch(`${apiUrl}/streams/${streamId}/cancel`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1353,7 +1374,8 @@ export async function cancelStreamOnChain(
         },
       };
     },
-    confirm: ({ txHash, signerAddress, buildPayload }) => fetch(`${apiUrl}/streams/${streamId}/confirm-cancel`, {
+    confirm: ({ txHash, signerAddress, buildPayload }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-cancel`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1385,7 +1407,8 @@ export async function pauseStreamOnChain(
     actionLabel: 'Stream paused',
     signContext: 'Stream pause signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/streams/${streamId}/pause`, {
+      const response = await authFetch(`${apiUrl}/streams/${streamId}/pause`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1404,7 +1427,8 @@ export async function pauseStreamOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/streams/${streamId}/confirm-pause`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-pause`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1430,7 +1454,8 @@ export async function resumeStreamOnChain(
     actionLabel: 'Stream resumed',
     signContext: 'Stream resume signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/streams/${streamId}/resume`, {
+      const response = await authFetch(`${apiUrl}/streams/${streamId}/resume`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1449,7 +1474,8 @@ export async function resumeStreamOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/streams/${streamId}/confirm-resume`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-resume`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1480,7 +1506,8 @@ export async function refillStreamOnChain(
     actionLabel: 'Stream refilled',
     signContext: 'Stream refill signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/streams/${streamId}/refill`, {
+      const response = await authFetch(`${apiUrl}/streams/${streamId}/refill`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1502,7 +1529,8 @@ export async function refillStreamOnChain(
         },
       };
     },
-    confirm: ({ txHash, signerAddress, buildPayload }) => fetch(`${apiUrl}/streams/${streamId}/confirm-refill`, {
+    confirm: ({ txHash, signerAddress, buildPayload }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-refill`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1529,7 +1557,8 @@ export async function transferStreamOnChain(
     actionLabel: 'Stream transferred',
     signContext: 'Stream transfer signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/streams/${streamId}/transfer`, {
+      const response = await authFetch(`${apiUrl}/streams/${streamId}/transfer`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1549,7 +1578,8 @@ export async function transferStreamOnChain(
         payload: { newRecipientAddress },
       };
     },
-    confirm: ({ txHash, signerAddress, buildPayload }) => fetch(`${apiUrl}/streams/${streamId}/confirm-transfer`, {
+    confirm: ({ txHash, signerAddress, buildPayload }) => authFetch(`${apiUrl}/streams/${streamId}/confirm-transfer`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1581,7 +1611,8 @@ export async function fundPaymentContract(
     const apiUrl = '/api';
 
     const fetchFundingInfo = async () => {
-      const response = await fetch(`${apiUrl}/payments/${paymentId}/funding-info`, {
+      const response = await authFetch(`${apiUrl}/payments/${paymentId}/funding-info`, {
+        wallet,
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1604,7 +1635,7 @@ export async function fundPaymentContract(
         broadcast: false,
       };
       const prepResult = await wallet.signCashScriptTransaction!(prepOptions);
-      preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed');
+      preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
       console.log('[FlowGuard] Consolidation tx broadcast:', preparationTxId);
       publishTransactionNotice(preparationTxId, wallet, 'Token preparation');
 
@@ -1633,7 +1664,8 @@ export async function fundPaymentContract(
           payload: data,
         };
       },
-      confirm: ({ txHash }) => fetch(`${apiUrl}/payments/${paymentId}/confirm-funding`, {
+      confirm: ({ txHash }) => authFetch(`${apiUrl}/payments/${paymentId}/confirm-funding`, {
+        wallet,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ txHash }),
@@ -1687,7 +1719,8 @@ export async function claimPaymentFunds(
       actionLabel: 'Payment claim',
       signContext: 'Payment claim signing failed',
       build: async (signerAddress) => {
-        const response = await fetch(`${apiUrl}/payments/${paymentId}/claim`, {
+        const response = await authFetch(`${apiUrl}/payments/${paymentId}/claim`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1720,7 +1753,8 @@ export async function claimPaymentFunds(
           },
         };
       },
-      confirm: ({ txHash, buildPayload }) => fetch(`${apiUrl}/payments/${paymentId}/confirm-claim`, {
+      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/payments/${paymentId}/confirm-claim`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1762,7 +1796,8 @@ export async function pausePaymentOnChain(
     actionLabel: 'Payment paused',
     signContext: 'Payment pause signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/payments/${paymentId}/pause`, {
+      const response = await authFetch(`${apiUrl}/payments/${paymentId}/pause`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1781,7 +1816,8 @@ export async function pausePaymentOnChain(
         payload,
       };
     },
-    confirm: ({ txHash }) => fetch(`${apiUrl}/payments/${paymentId}/confirm-pause`, {
+    confirm: ({ txHash }) => authFetch(`${apiUrl}/payments/${paymentId}/confirm-pause`, {
+      wallet,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ txHash }),
@@ -1804,7 +1840,8 @@ export async function resumePaymentOnChain(
     actionLabel: 'Payment resumed',
     signContext: 'Payment resume signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/payments/${paymentId}/resume`, {
+      const response = await authFetch(`${apiUrl}/payments/${paymentId}/resume`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1823,7 +1860,8 @@ export async function resumePaymentOnChain(
         payload,
       };
     },
-    confirm: ({ txHash }) => fetch(`${apiUrl}/payments/${paymentId}/confirm-resume`, {
+    confirm: ({ txHash }) => authFetch(`${apiUrl}/payments/${paymentId}/confirm-resume`, {
+      wallet,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ txHash }),
@@ -1846,7 +1884,8 @@ export async function cancelPaymentOnChain(
     actionLabel: 'Payment cancelled',
     signContext: 'Payment cancel signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/payments/${paymentId}/cancel`, {
+      const response = await authFetch(`${apiUrl}/payments/${paymentId}/cancel`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1865,7 +1904,8 @@ export async function cancelPaymentOnChain(
         payload,
       };
     },
-    confirm: ({ txHash }) => fetch(`${apiUrl}/payments/${paymentId}/confirm-cancel`, {
+    confirm: ({ txHash }) => authFetch(`${apiUrl}/payments/${paymentId}/confirm-cancel`, {
+      wallet,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ txHash }),
@@ -1888,7 +1928,8 @@ export async function pauseAirdropOnChain(
     actionLabel: 'Airdrop paused',
     signContext: 'Airdrop pause signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/airdrops/${airdropId}/pause`, {
+      const response = await authFetch(`${apiUrl}/airdrops/${airdropId}/pause`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1907,7 +1948,8 @@ export async function pauseAirdropOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/airdrops/${airdropId}/confirm-pause`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/airdrops/${airdropId}/confirm-pause`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1934,7 +1976,8 @@ export async function cancelAirdropOnChain(
     actionLabel: 'Airdrop cancelled',
     signContext: 'Airdrop cancel signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/airdrops/${airdropId}/cancel`, {
+      const response = await authFetch(`${apiUrl}/airdrops/${airdropId}/cancel`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1956,7 +1999,8 @@ export async function cancelAirdropOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/airdrops/${airdropId}/confirm-cancel`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/airdrops/${airdropId}/confirm-cancel`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1988,7 +2032,8 @@ export async function fundAirdropContract(
     const apiUrl = '/api';
 
     const fetchFundingInfo = async () => {
-      const response = await fetch(`${apiUrl}/airdrops/${airdropId}/funding-info`, {
+      const response = await authFetch(`${apiUrl}/airdrops/${airdropId}/funding-info`, {
+        wallet,
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -2011,7 +2056,7 @@ export async function fundAirdropContract(
         broadcast: false,
       };
       const prepResult = await wallet.signCashScriptTransaction!(prepOptions);
-      preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed');
+      preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
       console.log('[FlowGuard] Consolidation tx broadcast:', preparationTxId);
       publishTransactionNotice(preparationTxId, wallet, 'Token preparation');
 
@@ -2039,7 +2084,8 @@ export async function fundAirdropContract(
           payload: data,
         };
       },
-      confirm: ({ txHash }) => fetch(`${apiUrl}/airdrops/${airdropId}/confirm-funding`, {
+      confirm: ({ txHash }) => authFetch(`${apiUrl}/airdrops/${airdropId}/confirm-funding`, {
+        wallet,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ txHash }),
@@ -2099,7 +2145,8 @@ export async function claimAirdropFunds(
       signContext: 'Airdrop claim signing failed',
       build: async (signerAddress) => {
         const claimerAddress = claimerAddressOverride || signerAddress;
-        const response = await fetch(`${apiUrl}/airdrops/${airdropId}/claim`, {
+        const response = await authFetch(`${apiUrl}/airdrops/${airdropId}/claim`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2133,7 +2180,8 @@ export async function claimAirdropFunds(
           },
         };
       },
-      confirm: ({ txHash, buildPayload }) => fetch(`${apiUrl}/airdrops/${airdropId}/confirm-claim`, {
+      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/airdrops/${airdropId}/confirm-claim`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2197,7 +2245,8 @@ export async function lockTokensToVote(
       actionLabel: 'Vote locked',
       signContext: 'Governance lock signing failed',
       build: async (signerAddress) => {
-        const response = await fetch(`${apiUrl}/governance/${proposalId}/lock`, {
+        const response = await authFetch(`${apiUrl}/governance/${proposalId}/lock`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2227,7 +2276,8 @@ export async function lockTokensToVote(
           },
         };
       },
-      confirm: ({ txHash, buildPayload }) => fetch(`${apiUrl}/governance/${proposalId}/confirm-lock`, {
+      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/governance/${proposalId}/confirm-lock`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2284,7 +2334,8 @@ export async function unlockVotingTokens(
       actionLabel: 'Vote unlocked',
       signContext: 'Governance unlock signing failed',
       build: async (signerAddress) => {
-        const response = await fetch(`${apiUrl}/governance/${proposalId}/unlock`, {
+        const response = await authFetch(`${apiUrl}/governance/${proposalId}/unlock`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2313,7 +2364,8 @@ export async function unlockVotingTokens(
           },
         };
       },
-      confirm: ({ txHash, buildPayload }) => fetch(`${apiUrl}/governance/${proposalId}/confirm-unlock`, {
+      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/governance/${proposalId}/confirm-unlock`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2358,7 +2410,8 @@ export async function fundBudgetPlan(
       actionLabel: 'Budget funded',
       signContext: 'Budget funding signing failed',
       build: async (signerAddress) => {
-        const response = await fetch(`${apiUrl}/budget-plans/${budgetId}/funding-info`, {
+        const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/funding-info`, {
+          wallet,
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -2377,7 +2430,8 @@ export async function fundBudgetPlan(
           payload,
         };
       },
-      confirm: ({ txHash }) => fetch(`${apiUrl}/budget-plans/${budgetId}/confirm-funding`, {
+      confirm: ({ txHash }) => authFetch(`${apiUrl}/budget-plans/${budgetId}/confirm-funding`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2424,7 +2478,8 @@ export async function releaseMilestone(
       actionLabel: 'Milestone released',
       signContext: 'Budget release signing failed',
       build: async (signerAddress) => {
-        const response = await fetch(`${apiUrl}/budget-plans/${budgetId}/release`, {
+        const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/release`, {
+          wallet,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2459,7 +2514,8 @@ export async function releaseMilestone(
           },
         };
       },
-      confirm: ({ txHash, buildPayload }) => fetch(`${apiUrl}/budget-plans/${budgetId}/confirm-release`, {
+      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/budget-plans/${budgetId}/confirm-release`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2500,7 +2556,8 @@ export async function pauseBudgetPlanOnChain(
     actionLabel: 'Budget paused',
     signContext: 'Budget pause signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/budget-plans/${budgetId}/pause`, {
+      const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/pause`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2519,7 +2576,8 @@ export async function pauseBudgetPlanOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/budget-plans/${budgetId}/confirm-pause`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/budget-plans/${budgetId}/confirm-pause`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2546,7 +2604,8 @@ export async function cancelBudgetPlanOnChain(
     actionLabel: 'Budget cancelled',
     signContext: 'Budget cancel signing failed',
     build: async (signerAddress) => {
-      const response = await fetch(`${apiUrl}/budget-plans/${budgetId}/cancel`, {
+      const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/cancel`, {
+        wallet,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2568,7 +2627,8 @@ export async function cancelBudgetPlanOnChain(
         payload,
       };
     },
-    confirm: ({ txHash, signerAddress }) => fetch(`${apiUrl}/budget-plans/${budgetId}/confirm-cancel`, {
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/budget-plans/${budgetId}/confirm-cancel`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2579,4 +2639,576 @@ export async function cancelBudgetPlanOnChain(
   });
 
   return confirm.txHash;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Reward lifecycle helpers
+// Backend surface: /api/rewards/:id/{funding-info,confirm-funding,distribute,
+// confirm-distribute,pause,confirm-pause,cancel,confirm-cancel}
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fund a reward campaign on-chain. Mirrors fundAirdropContract: GET funding-info
+ * → wallet signs (broadcast=false) → backend broadcasts and confirms.
+ */
+export async function fundRewardContract(
+  wallet: WalletInterface,
+  rewardId: string,
+): Promise<{ txHash: string; confirmation: 'confirmed' | 'pending'; detail?: string | null }> {
+  if (!wallet.address) {
+    throw new Error('Wallet not connected');
+  }
+
+  const apiUrl = '/api';
+
+  const fundingInfoResponse = await authFetch(`${apiUrl}/rewards/${rewardId}/funding-info`, {
+    wallet,
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const fundingInfo = await parseJsonSafe(fundingInfoResponse);
+  if (!fundingInfoResponse.ok) {
+    throw new Error(getApiErrorMessage(fundingInfo, 'Failed to get reward funding info'));
+  }
+  if (!fundingInfo?.wcTransaction) {
+    throw new Error('Backend did not return reward funding transaction');
+  }
+
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: 'Reward funded',
+    signContext: 'Reward funding signing failed',
+    metadata: { txType: 'create', fromAddress: wallet.address || undefined },
+    build: async () => ({
+      wcTransaction: fundingInfo.wcTransaction as SerializedWcTransaction,
+      payload: fundingInfo,
+    }),
+    confirm: ({ txHash }) => authFetch(`${apiUrl}/rewards/${rewardId}/confirm-funding`, {
+      wallet,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return {
+    txHash: confirm.txHash,
+    confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending',
+    detail: confirm.message || null,
+  };
+}
+
+/**
+ * Distribute a single reward to a recipient. Caller must be the campaign creator.
+ */
+export async function distributeRewardOnChain(
+  wallet: WalletInterface,
+  rewardId: string,
+  recipientAddress: string,
+  amount: number,
+): Promise<string> {
+  const apiUrl = '/api';
+
+  const { confirm } = await runLifecycleAction<{
+    rewardAmount: number;
+    wcTransaction: SerializedWcTransaction;
+  }>({
+    wallet,
+    actionLabel: 'Reward distributed',
+    signContext: 'Reward distribution signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/rewards/${rewardId}/distribute`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+        body: JSON.stringify({
+          recipientAddress,
+          amount,
+          signerAddress,
+        }),
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build distribute transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return distribute transaction');
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload: {
+          rewardAmount: Number(payload.rewardAmount ?? amount),
+          wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        },
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/rewards/${rewardId}/confirm-distribute`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ recipientAddress, amount, txHash }),
+    }),
+  });
+
+  return confirm.txHash;
+}
+
+/**
+ * Pause an active reward campaign.
+ */
+export async function pauseRewardOnChain(
+  wallet: WalletInterface,
+  rewardId: string,
+): Promise<string> {
+  const apiUrl = '/api';
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: 'Reward paused',
+    signContext: 'Reward pause signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/rewards/${rewardId}/pause`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return pause transaction');
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/rewards/${rewardId}/confirm-pause`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return confirm.txHash;
+}
+
+/**
+ * Cancel a reward campaign. Refunds remainingPool to the authority address.
+ */
+export async function cancelRewardOnChain(
+  wallet: WalletInterface,
+  rewardId: string,
+): Promise<{ txHash: string; warning?: string; cancelReturnAddress?: string; signerMatchesReturn?: boolean }> {
+  const apiUrl = '/api';
+  let warning: string | undefined;
+  let cancelReturnAddress: string | undefined;
+  let signerMatchesReturn: boolean | undefined;
+
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: 'Reward cancelled',
+    signContext: 'Reward cancel signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/rewards/${rewardId}/cancel`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return cancel transaction');
+      }
+      warning = typeof payload.warning === 'string' ? payload.warning : undefined;
+      cancelReturnAddress = typeof payload.cancelReturnAddress === 'string' ? payload.cancelReturnAddress : undefined;
+      signerMatchesReturn = payload.signerMatchesReturn === true;
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/rewards/${rewardId}/confirm-cancel`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return { txHash: confirm.txHash, warning, cancelReturnAddress, signerMatchesReturn };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Grants                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fund a deployed GrantCovenant. Wraps the canonical wallet-signs /
+ * backend-broadcasts round-trip: GET funding-info → wallet sign with
+ * `broadcast: false` → POST confirm-funding with the resulting txid.
+ */
+export async function fundGrantContract(
+  wallet: WalletInterface,
+  grantId: string,
+): Promise<{ txHash: string; confirmation: 'confirmed' | 'pending'; detail?: string | null }> {
+  let preparationTxId: string | null = null;
+  try {
+    if (!wallet.address) {
+      throw new Error('Wallet not connected');
+    }
+
+    const apiUrl = '/api';
+
+    const fetchFundingInfo = async () => {
+      const response = await authFetch(`${apiUrl}/grants/${grantId}/funding-info`, {
+        wallet,
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to get funding info'));
+      }
+      return payload;
+    };
+
+    let data = await fetchFundingInfo();
+
+    if (data.requiresPreparation && data.preparationTransaction) {
+      console.log('[FlowGuard] Wallet needs consolidation for grant token creation, signing prep tx...');
+      const prepOptions = {
+        ...deserializeWcSignOptions(data.preparationTransaction),
+        broadcast: false,
+      };
+      const prepResult = await wallet.signCashScriptTransaction!(prepOptions);
+      preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
+      publishTransactionNotice(preparationTxId, wallet, 'Grant token preparation');
+
+      await new Promise((resolve) => setTimeout(resolve, 8000));
+      data = await fetchFundingInfo();
+    }
+
+    const { confirm } = await runLifecycleAction({
+      wallet,
+      actionLabel: 'Grant funded',
+      signContext: 'Grant funding signing failed',
+      metadata: {
+        txType: 'create',
+        fromAddress: wallet.address || undefined,
+      },
+      build: async () => {
+        const { wcTransaction } = data;
+        if (!wcTransaction) {
+          throw new Error(
+            'Grant funding requires a CashScript-compatible wallet transaction object from backend.',
+          );
+        }
+        return {
+          wcTransaction: wcTransaction as SerializedWcTransaction,
+          payload: data,
+        };
+      },
+      confirm: ({ txHash }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-funding`, {
+        wallet,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash }),
+      }),
+    });
+
+    return {
+      txHash: confirm.txHash,
+      confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending',
+      detail: confirm.message || null,
+    };
+  } catch (error: any) {
+    console.error('Failed to fund grant:', error);
+
+    if (error.message?.includes('insufficient') || error.message?.includes('balance')) {
+      throw new Error('Insufficient balance in wallet');
+    }
+
+    if (error.message?.includes('user') || error.message?.includes('cancel')) {
+      throw new Error('Transaction cancelled by user');
+    }
+
+    const details = error.message || 'Unknown error';
+    if (preparationTxId && /transaction signing failed: internal error/i.test(details)) {
+      throw new Error(
+        `Preparation transaction broadcast (${preparationTxId}), but the wallet has not indexed the new UTXO yet. ` +
+        'Wait 15-30 seconds, refresh, then click Fund again.',
+      );
+    }
+    if (preparationTxId) {
+      throw new Error(`Funding failed: ${details}. Preparation tx broadcast: ${preparationTxId}`);
+    }
+    throw new Error(`Funding failed: ${details}`);
+  }
+}
+
+/**
+ * Release the next milestone tranche from a GrantCovenant. The signer must be
+ * the grant creator; the backend co-signs with the claimAuthority key. The
+ * `milestoneNumber` returned from the build step is forwarded into
+ * confirm-release so the DB row matches the on-chain commitment update.
+ */
+export async function releaseGrantMilestone(
+  wallet: WalletInterface,
+  grantId: string,
+): Promise<{ txHash: string; milestoneNumber: number; releaseAmount: number }> {
+  const apiUrl = '/api';
+  const { confirm, build } = await runLifecycleAction<{
+    releaseAmount: number;
+    milestoneNumber: number;
+    wcTransaction: SerializedWcTransaction;
+  }>({
+    wallet,
+    actionLabel: 'Grant milestone released',
+    signContext: 'Grant release signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/grants/${grantId}/release`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build release transaction'));
+      }
+
+      const releaseAmount = Number(payload?.releaseAmount);
+      const milestoneNumber = Number(payload?.milestoneNumber);
+      const { wcTransaction } = payload;
+      if (!Number.isFinite(releaseAmount) || releaseAmount <= 0) {
+        throw new Error('No milestone available to release yet');
+      }
+      if (!Number.isFinite(milestoneNumber) || milestoneNumber <= 0) {
+        throw new Error('Backend did not return a milestone number');
+      }
+      if (!wcTransaction) {
+        throw new Error('Backend did not return release transaction');
+      }
+
+      return {
+        wcTransaction: wcTransaction as SerializedWcTransaction,
+        payload: {
+          releaseAmount,
+          milestoneNumber,
+          wcTransaction: wcTransaction as SerializedWcTransaction,
+        },
+      };
+    },
+    confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-release`, {
+      wallet,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: buildPayload.releaseAmount,
+        milestoneNumber: buildPayload.milestoneNumber,
+        txHash,
+      }),
+    }),
+  });
+
+  return {
+    txHash: confirm.txHash,
+    milestoneNumber: build.payload.milestoneNumber,
+    releaseAmount: build.payload.releaseAmount,
+  };
+}
+
+/**
+ * Pause an ACTIVE grant. Requires the creator wallet AND the `cancelable`
+ * flag bit0 set in the original commitment.
+ */
+export async function pauseGrantOnChain(
+  wallet: WalletInterface,
+  grantId: string,
+): Promise<string> {
+  const apiUrl = '/api';
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: 'Grant paused',
+    signContext: 'Grant pause signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/grants/${grantId}/pause`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return pause transaction');
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-pause`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return confirm.txHash;
+}
+
+/**
+ * Cancel an ACTIVE or PAUSED grant. Refund is contract-enforced to the
+ * authorityHash-derived P2PKH - the API surfaces a warning when the caller
+ * does not match that refund target.
+ */
+export async function cancelGrantOnChain(
+  wallet: WalletInterface,
+  grantId: string,
+): Promise<{
+  txHash: string;
+  warning?: string;
+  cancelReturnAddress?: string;
+  authorityReturnAddress?: string;
+  signerMatchesReturn?: boolean;
+}> {
+  const apiUrl = '/api';
+  let warning: string | undefined;
+  let cancelReturnAddress: string | undefined;
+  let authorityReturnAddress: string | undefined;
+  let signerMatchesReturn: boolean | undefined;
+
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: 'Grant cancelled',
+    signContext: 'Grant cancel signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/grants/${grantId}/cancel`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+        body: JSON.stringify({}),
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return cancel transaction');
+      }
+      warning = typeof payload.warning === 'string' ? payload.warning : undefined;
+      cancelReturnAddress = typeof payload.cancelReturnAddress === 'string' ? payload.cancelReturnAddress : undefined;
+      authorityReturnAddress = typeof payload.authorityReturnAddress === 'string' ? payload.authorityReturnAddress : undefined;
+      signerMatchesReturn = typeof payload.signerMatchesReturn === 'boolean' ? payload.signerMatchesReturn : undefined;
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-cancel`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return {
+    txHash: confirm.txHash,
+    warning,
+    cancelReturnAddress,
+    authorityReturnAddress,
+    signerMatchesReturn,
+  };
+}
+
+/**
+ * Transfer a grant to a new recipient. Only the CURRENT recipient may sign,
+ * and only when the `transferable` flag bit1 was set at create time.
+ */
+export async function transferGrantOnChain(
+  wallet: WalletInterface,
+  grantId: string,
+  newRecipientAddress: string,
+): Promise<{ txHash: string; newRecipientAddress: string }> {
+  const apiUrl = '/api';
+  const { confirm, build } = await runLifecycleAction<{ newRecipientAddress: string }>({
+    wallet,
+    actionLabel: 'Grant transferred',
+    signContext: 'Grant transfer signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/grants/${grantId}/transfer`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+        body: JSON.stringify({ newRecipientAddress }),
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Failed to build transfer transaction'));
+      }
+      if (!payload?.wcTransaction) {
+        throw new Error('Backend did not return transfer transaction');
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload: { newRecipientAddress },
+      };
+    },
+    confirm: ({ txHash, signerAddress, buildPayload }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-transfer`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash, newRecipientAddress: buildPayload.newRecipientAddress }),
+    }),
+  });
+
+  return { txHash: confirm.txHash, newRecipientAddress: build.payload.newRecipientAddress };
 }

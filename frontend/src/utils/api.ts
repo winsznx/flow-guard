@@ -1,3 +1,5 @@
+import { authFetch, type WalletForAuth } from './auth';
+
 const API_BASE_URL = '/api';
 
 export interface VaultsResponse {
@@ -36,17 +38,27 @@ export async function fetchVault(id: string, userAddress?: string): Promise<any>
   return response.json();
 }
 
-export async function createVault(data: any, userAddress: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/vaults`, {
+/**
+ * Create a new vault. Goes through `authFetch`, which on first call per session
+ * prompts the wallet for a SIWX login signature and caches a 30-minute bearer
+ * - subsequent guarded calls reuse the bearer with no further wallet prompts.
+ */
+export async function createVault(data: any, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/vaults`, {
+    wallet,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-address': userAddress,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
-    throw new Error('Failed to create vault');
+    let detail = '';
+    try {
+      const body = await response.json();
+      detail = body?.message || body?.error || '';
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || 'Failed to create vault');
   }
   return response.json();
 }
@@ -62,14 +74,12 @@ export async function fetchProposals(vaultId: string): Promise<any[]> {
 export async function createProposal(
   vaultId: string,
   data: any,
-  userAddress: string
+  wallet: WalletForAuth,
 ): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/proposals`, {
+  const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/proposals`, {
+    wallet,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-address': userAddress,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -80,13 +90,11 @@ export async function createProposal(
 
 export async function approveProposal(
   proposalId: string,
-  userAddress: string
+  wallet: WalletForAuth,
 ): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/proposals/${proposalId}/approve`, {
+  const response = await authFetch(`${API_BASE_URL}/proposals/${proposalId}/approve`, {
+    wallet,
     method: 'POST',
-    headers: {
-      'x-user-address': userAddress,
-    },
   });
   if (!response.ok) {
     throw new Error('Failed to approve proposal');
@@ -97,14 +105,12 @@ export async function approveProposal(
 export async function addSigner(
   vaultId: string,
   signerAddress: string,
-  userAddress: string
+  wallet: WalletForAuth,
 ): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/signers`, {
+  const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/signers`, {
+    wallet,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-address': userAddress,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ signerAddress }),
   });
   if (!response.ok) {
@@ -116,6 +122,7 @@ export async function addSigner(
 
 export async function broadcastTransaction(
   txHex: string,
+  wallet: WalletForAuth,
   metadata?: {
     txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout';
     vaultId?: string;
@@ -125,7 +132,8 @@ export async function broadcastTransaction(
     toAddress?: string;
   }
 ): Promise<{ txid: string; success: boolean }> {
-  const response = await fetch(`${API_BASE_URL}/transactions/broadcast`, {
+  const response = await authFetch(`${API_BASE_URL}/transactions/broadcast`, {
+    wallet,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -170,17 +178,17 @@ export async function updateVaultBalance(
   vaultId: string,
   txid: string,
   amount: number,
-  userAddress: string
+  wallet: WalletForAuth,
 ): Promise<any> {
   const maxAttempts = 8;
   const baseDelayMs = 1200;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/confirm-funding`, {
+    const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/confirm-funding`, {
+      wallet,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-address': userAddress,
       },
       body: JSON.stringify({ txHash: txid, amount }),
     });
@@ -216,18 +224,20 @@ export async function fetchStream(id: string): Promise<any> {
   return response.json();
 }
 
-export async function createStream(data: any, userAddress: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/streams/create`, {
+export async function createStream(data: any, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/streams/create`, {
+    wallet,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-address': userAddress },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create stream');
   return response.json();
 }
 
-export async function claimStream(id: string, amount?: number): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/streams/${id}/claim`, {
+export async function claimStream(id: string, wallet: WalletForAuth, amount?: number): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/streams/${id}/claim`, {
+    wallet,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ amount }),
@@ -236,11 +246,12 @@ export async function claimStream(id: string, amount?: number): Promise<any> {
   return response.json();
 }
 
-export async function cancelStream(id: string, sender: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/streams/${id}/cancel`, {
+export async function cancelStream(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/streams/${id}/cancel`, {
+    wallet,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sender }),
+    body: JSON.stringify({ sender: wallet.address }),
   });
   if (!response.ok) throw new Error('Failed to cancel stream');
   return response.json();
@@ -260,30 +271,31 @@ export async function fetchPayment(id: string): Promise<any> {
   return response.json();
 }
 
-export async function createPayment(data: any, userAddress: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/payments/create`, {
+export async function createPayment(data: any, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/payments/create`, {
+    wallet,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-address': userAddress },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create payment');
   return response.json();
 }
 
-export async function pausePayment(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/payments/${id}/pause`, { method: 'POST' });
+export async function pausePayment(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/payments/${id}/pause`, { wallet, method: 'POST' });
   if (!response.ok) throw new Error('Failed to pause payment');
   return response.json();
 }
 
-export async function resumePayment(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/payments/${id}/resume`, { method: 'POST' });
+export async function resumePayment(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/payments/${id}/resume`, { wallet, method: 'POST' });
   if (!response.ok) throw new Error('Failed to resume payment');
   return response.json();
 }
 
-export async function cancelPayment(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/payments/${id}/cancel`, { method: 'POST' });
+export async function cancelPayment(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/payments/${id}/cancel`, { wallet, method: 'POST' });
   if (!response.ok) throw new Error('Failed to cancel payment');
   return response.json();
 }
@@ -307,34 +319,36 @@ export async function fetchAirdrop(id: string): Promise<any> {
   return response.json();
 }
 
-export async function createAirdrop(data: any, userAddress: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops/create`, {
+export async function createAirdrop(data: any, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/airdrops/create`, {
+    wallet,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-address': userAddress },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create airdrop');
   return response.json();
 }
 
-export async function claimAirdrop(id: string, claimer: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops/${id}/claim`, {
+export async function claimAirdrop(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/airdrops/${id}/claim`, {
+    wallet,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ claimerAddress: claimer }),
+    body: JSON.stringify({ claimerAddress: wallet.address }),
   });
   if (!response.ok) throw new Error('Failed to claim airdrop');
   return response.json();
 }
 
-export async function pauseAirdrop(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops/${id}/pause`, { method: 'POST' });
+export async function pauseAirdrop(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/airdrops/${id}/pause`, { wallet, method: 'POST' });
   if (!response.ok) throw new Error('Failed to pause airdrop');
   return response.json();
 }
 
-export async function cancelAirdrop(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops/${id}/cancel`, { method: 'POST' });
+export async function cancelAirdrop(id: string, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/airdrops/${id}/cancel`, { wallet, method: 'POST' });
   if (!response.ok) throw new Error('Failed to cancel airdrop');
   return response.json();
 }
@@ -347,20 +361,22 @@ export async function fetchGovernanceProposals(vaultId: string, status?: string)
   return response.json();
 }
 
-export async function createGovernanceProposal(vaultId: string, data: any, userAddress: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/governance`, {
+export async function createGovernanceProposal(vaultId: string, data: any, wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/governance`, {
+    wallet,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-address': userAddress },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create governance proposal');
   return response.json();
 }
 
-export async function castVote(proposalId: string, vote: 'FOR' | 'AGAINST' | 'ABSTAIN', userAddress: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/governance/${proposalId}/vote`, {
+export async function castVote(proposalId: string, vote: 'FOR' | 'AGAINST' | 'ABSTAIN', wallet: WalletForAuth): Promise<any> {
+  const response = await authFetch(`${API_BASE_URL}/governance/${proposalId}/vote`, {
+    wallet,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-address': userAddress },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ vote }),
   });
   if (!response.ok) throw new Error('Failed to cast vote');
@@ -371,13 +387,13 @@ export async function castVote(proposalId: string, vote: 'FOR' | 'AGAINST' | 'AB
 export async function createBudgetPlan(
   vaultId: string,
   data: any,
-  userAddress: string
+  wallet: WalletForAuth,
 ): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/budget-plans`, {
+  const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/budget-plans`, {
+    wallet,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-user-address': userAddress,
     },
     body: JSON.stringify(data),
   });
@@ -413,9 +429,11 @@ export async function fetchBudgetPlan(id: string): Promise<any> {
 
 export async function updateBudgetPlanStatus(
   id: string,
-  status: string
+  status: string,
+  wallet: WalletForAuth,
 ): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/budget-plans/${id}/status`, {
+  const response = await authFetch(`${API_BASE_URL}/budget-plans/${id}/status`, {
+    wallet,
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
