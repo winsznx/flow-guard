@@ -14,6 +14,7 @@ import { StatsCard } from '../components/shared/StatsCard';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
 import { Card } from '../components/ui/Card';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
 
@@ -682,8 +683,7 @@ export default function StreamsPage() {
         {/* Data Table */}
         {loading ? (
           <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p className="text-textSecondary font-sans">Loading streams...</p>
+            <SkeletonTable rows={6} columns={5} />
           </div>
         ) : (
           <div className="space-y-4">

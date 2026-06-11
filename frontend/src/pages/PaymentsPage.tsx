@@ -9,6 +9,7 @@ import { Repeat, Plus, DollarSign, Clock, Zap, TrendingUp, Calendar, ExternalLin
 import { useWallet } from '../hooks/useWallet';
 import { useWalletModal } from '../hooks/useWalletModal';
 import { Button } from '../components/ui/Button';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import { DataTable, Column } from '../components/shared/DataTable';
 import { StatsCard } from '../components/shared/StatsCard';
 import { getExplorerTxUrl } from '../utils/blockchain';
@@ -389,10 +390,7 @@ export default function PaymentsPage() {
 
         {/* Data Table */}
         {loading ? (
-          <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p className="text-textSecondary font-sans">Loading payments...</p>
-          </div>
+          <SkeletonTable rows={6} columns={5} />
         ) : (
           <DataTable
             columns={columns}
