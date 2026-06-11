@@ -80,3 +80,8 @@ Authority-only admin paths (`hash160(authPubkey) == authorityHash`, valid signat
 - Allowed only from `ACTIVE` or `PAUSED`, with cancelable flag bit0 set.
 - Computes `remainingPool = totalPool - totalClaimed`, requires `remainingPool > 0`.
 - `tx.outputs[0]` must pay `authorityHash` with `remainingPool` (BCH or FT mode by flag bit2).
+
+## Recent hardening
+
+- Two-slot authority model: `authorityHash` gates pause / resume / cancel, `claimAuthorityHash` gates the claim co-signature. A backend compromise on the claim key cannot pause, resume, cancel, or redirect the refund.
+- LIFT-pattern fee cap of 2000 sats on `claim`, `pause`, `resume`, and `cancel`. The BCH leaving the covenant minus the recipient and continuation outputs must fall in `[0, 2000]`, so miners cannot drain the reserve across many claims.

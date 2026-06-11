@@ -90,6 +90,7 @@
         "concepts/cashtokens-covenants",
         "concepts/stream-lifecycle",
         "concepts/supported-assets",
+        "concepts/wallet-options",
         {
           "group": "Vaults",
           "pages": ["concepts/vaults"]
@@ -201,12 +202,16 @@
         "api/vaults",
         "api/proposals",
         "api/airdrops",
+        "api/bounties",
+        "api/grants",
+        "api/rewards",
         "api/payments",
         "api/budgets",
         "api/governance",
         "api/explorer",
         "api/indexer",
-        "api/executor"
+        "api/executor",
+        "api/public-endpoints"
       ]
     },
     {

@@ -6,6 +6,73 @@ icon: "telescope"
 
 The Explorer provides a public, unified view across all FlowGuard activity ,  vesting streams, recurring payments, airdrops, and treasury proposals.
 
+## Scopes
+
+The Explorer page renders one canonical surface for on-chain activity, switched between three personas via the `?scope=` query param. The URL is the source of truth, so every scope plus filter combination is shareable and deep-linkable.
+
+| Scope | Query | Description |
+|-------|-------|-------------|
+| `global` | `?scope=global` (default) | Public discovery feed across every vault, stream, payment, airdrop, and proposal. Anonymous. |
+| `personal` | `?scope=personal` | Wallet-scoped feed. Resolves to the connected wallet's cashaddr (chipnet or mainnet) and filters activity where the address is sender, recipient, signer, or proposer. Replaces the legacy `/streams/activity` page. |
+| `treasury` | `?scope=treasury` | Vault-scoped feed. When combined with `vaultId`, narrows to a single treasury covenant; without `vaultId`, defaults the entity type to `vault`. |
+
+Personal scope reads the connected wallet through the standard SIWX session. If no wallet is connected, the personal tab is disabled and the page falls back to global. To pin a specific address without a wallet session, pass `?scope=personal&address=bchtest:q...` directly.
+
+Treasury scope can be opened against any vault id:
+
+```http
+GET /explorer?scope=treasury&vaultId=vault_01HX...
+```
+
+## Search and filter params
+
+`ExplorerPage` reads the following query params. All filters are URL-driven, so changing any of them produces a new shareable link and replaces the current history entry.
+
+| Param | Values | Description |
+|-------|--------|-------------|
+| `scope` | `global`, `personal`, `treasury` | Selects the persona view. Defaults to `global`. |
+| `address` | cashaddr (`bchtest:q...` or `bitcoincash:q...`) | Pins the feed to a specific address and opens the address side panel. Implied by `scope=personal` when a wallet is connected. |
+| `vaultId` | logical vault id | Pins the feed to a single vault. Only meaningful when `scope=treasury`. |
+| `type` | `vesting`, `payments`, `airdrops`, `treasuries`, `bounties`, `rewards`, `grants` | Filters to a single product type. Omit for all. `bounties`, `rewards`, and `grants` are surfaced via cross-links into dedicated workspaces. |
+| `tokenType` | `BCH`, `CASHTOKENS`, `ALL` | Filters by asset type. CashTokens covers both fungible and NFT categories. |
+| `status` | `ACTIVE`, `PENDING`, `COMPLETED`, `EXECUTED`, `DEPLOYED`, `CREATED`, `CANCELLED` | Filters by lifecycle status. |
+| `from` | unix seconds or ISO-8601 | Lower bound on `created_at`. |
+| `to` | unix seconds or ISO-8601 | Upper bound on `created_at`. |
+| `limit` | 1-200 (default 25) | Page size for the activity table. Pagination uses `?page=` against this limit. |
+
+Mutually exclusive params:
+
+- `address` and `vaultId` cannot both be set. `address` wins if both appear.
+- `scope=personal` is incompatible with an explicit `vaultId`. Setting `vaultId` flips the scope to `treasury`.
+- `scope=treasury` with `type=airdrops` returns an empty feed by design - airdrops are not vault-scoped.
+
+## Deep links
+
+The URL fully describes the view, so the same path can be shared, bookmarked, or embedded.
+
+```bash
+# personal airdrops for the connected wallet
+/explorer?scope=personal&type=airdrops
+
+# all active streams on the global feed, BCH only
+/explorer?scope=global&type=vesting&status=ACTIVE&tokenType=BCH
+
+# a single treasury, only executed proposals
+/explorer?scope=treasury&vaultId=vault_01HXABCDEF&type=treasuries&status=EXECUTED
+
+# address-pinned view (opens the address side panel)
+/explorer?scope=global&address=bchtest:qq0123456789abcdef0123456789abcdef01234567
+
+# windowed search: last 30 days of payments
+/explorer?type=payments&from=1717027200&to=1719619200&limit=100
+```
+
+When `scope=personal` is requested without a connected wallet, the page renders an inline banner prompting wallet connection and keeps the rest of the filters intact for after sign-in.
+
+## Status endpoint
+
+For uptime checks, indexer lag, and chip tip height, use the public `/api/status` endpoint. It is documented under [Public endpoints](/api/public-endpoints) alongside the rest of the unauthenticated surface.
+
 ## Activity Feed
 
 ```http

@@ -89,3 +89,8 @@ Output indexing in this version is strict:
 ### `transfer(sig recipientSig, pubkey recipientPubkey, bytes20 newRecipientHash)`
 
 Recipient-only. Requires `FLAG_TRANSFERABLE` and `status == ACTIVE`. Updates `recipient_hash` in NFT state.
+
+## Recent hardening
+
+- 2000-sat fee cap on `claim`, `complete`, `pause`, `resume`, and `transfer`. BCH leaving the covenant beyond the recipient payout and continuation output must fall in `[0, 2000]`, so the reserve cannot be skimmed to miner fees.
+- `complete` additionally requires `vaultId` to be non-zero, locking the cleanup path to a real vault binding.

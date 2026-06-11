@@ -103,3 +103,8 @@ Permissionless. Marks proposal as `EXPIRED` if `tx.locktime >= voting_end_timest
 **State update**
 - Status is set to `EXPIRED`.
 - `tx.outputs[0]` must preserve locking bytecode/token category with updated commitment.
+
+## Recent hardening
+
+- `execute` now requires a signature from one of `signer1Hash`, `signer2Hash`, or `signer3Hash`. The previous permissionless path let any actor burn the proposal NFT without releasing funds, leaving the proposal marked `EXECUTED` in indexers while the vault stayed unspent.
+- 2000-sat fee cap on `execute`, `cancel`, and `expire`. BCH leaving the proposal UTXO beyond the payout (for `execute`) or continuation output (for `cancel` / `expire`) must fall in `[0, 2000]`.

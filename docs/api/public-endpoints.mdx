@@ -1,0 +1,281 @@
+---
+title: "Public Endpoints"
+description: "Unauthenticated, cacheable endpoints: BCH/USD price feed and system status."
+icon: "satellite-dish"
+---
+
+These endpoints are public. No Bearer token, no wallet signing, no `x-user-address` header. Safe to call from any client, including browser apps and on-chain tooling.
+
+Both endpoints set `Cache-Control: public` so intermediaries (CDNs, browser caches) can serve them. The backend also keeps an in-memory cache (around 60s for price, 10s for status) so bursty traffic does not hit upstream sources.
+
+## GET /api/price/bch-usd
+
+Latest BCH/USD reading from a Bitcoin Cash native price oracle, with a CoinGecko fallback.
+
+### Sources
+
+| Priority | Source | Notes |
+|----------|--------|-------|
+| 1 | General Protocols oracle relay at `oracles.generalprotocols.com` | Signed price messages, the USD/BCH pubkey is `02d09db08af1ff4e8453919cc866a4be427d7bfe18f2c05e5444c196fcf6fd2818`. |
+| 2 | CoinGecko `simple/price` | Free, no auth. Used only when the oracle path fails or times out. |
+
+Each source has a 6s timeout. Results are cached in memory for 60s, after which the next request refreshes from the oracle. When both sources fail, the cache is not poisoned, the endpoint returns `502 price_unavailable` and the next call retries.
+
+### Request
+
+```http
+GET /api/price/bch-usd
+```
+
+No query parameters. No headers required.
+
+### Response
+
+```json
+{
+  "usd": 423.18,
+  "source": "oracle",
+  "oraclePubkey": "02d09db08af1ff4e8453919cc866a4be427d7bfe18f2c05e5444c196fcf6fd2818",
+  "messageTimestamp": 1717900800,
+  "signedMessageHex": "00a4...",
+  "signatureHex": "3045...",
+  "updatedAt": 1717900800123,
+  "cachedFor": 59000
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `usd` | `number` | USD per 1 BCH. |
+| `source` | `"oracle" \| "coingecko"` | Which source produced this reading. |
+| `oraclePubkey` | `string` | Compressed secp256k1 pubkey of the price oracle. Present when `source === "oracle"`. |
+| `messageTimestamp` | `number` | Oracle message timestamp in unix seconds. Present when `source === "oracle"`. |
+| `signedMessageHex` | `string` | Hex-encoded oracle message. Present when `source === "oracle"`. |
+| `signatureHex` | `string` | Hex-encoded oracle signature over `signedMessageHex`. Present when `source === "oracle"`. |
+| `updatedAt` | `number` | Server unix milliseconds when this reading was fetched. |
+| `cachedFor` | `number` | Milliseconds until the in-memory cache expires. |
+
+When `source === "oracle"`, the response includes the signed message hex and signature, so integrators can re-verify the reading on chain (for example via `@generalprotocols/price-oracle`) instead of trusting the relay or the FlowGuard backend.
+
+The oracle message layout is little-endian, 32-bit fields:
+
+| Bytes | Field |
+|-------|-------|
+| `[0..4]` | `messageTimestamp` (unix seconds) |
+| `[4..8]` | `messageSequence` (monotonic per oracle) |
+| `[8..12]` | `priceSequence` (price-update counter) |
+| `[12..16]` | `priceValue` (price in cents, USD cents per BCH) |
+
+### Errors
+
+```json
+{
+  "error": "price_unavailable",
+  "message": "Could not retrieve a BCH/USD reading from any source. Please retry shortly."
+}
+```
+
+Returned as HTTP `502` when both the oracle relay and CoinGecko fail or time out.
+
+### Example
+
+```bash
+curl -s https://api.flowguard.cash/api/price/bch-usd | jq
+```
+
+## GET /api/status
+
+Component-health snapshot that drives the public Status page at [flowguard.cash/status](https://flowguard.cash/status). No process internals, no internal URLs, no raw row counts. Safe to expose to the open internet.
+
+The response is cached in memory for 10s and served with `Cache-Control: public, max-age=10`.
+
+### Request
+
+```http
+GET /api/status
+```
+
+No query parameters. No headers required.
+
+### Response
+
+```json
+{
+  "updatedAt": "2026-06-11T12:00:00.000Z",
+  "refreshIntervalSeconds": 30,
+  "overall": "operational",
+  "network": {
+    "name": "mainnet",
+    "isMainnet": true,
+    "displayName": "BCH Mainnet",
+    "testnetWarning": false
+  },
+  "chain": {
+    "height": 901234,
+    "ageSeconds": null,
+    "latencyMs": 312,
+    "recentHeights": [901223, 901224, 901225, 901226, 901227, 901228, 901229, 901230, 901231, 901232, 901233, 901234],
+    "error": null
+  },
+  "components": [
+    {
+      "id": "api",
+      "name": "API",
+      "group": "API",
+      "status": "operational",
+      "description": "api.flowguard.cash - backend REST surface",
+      "latencyMs": null,
+      "uptime90d": null,
+      "lastIncidentAt": null
+    }
+  ],
+  "summary": {
+    "operational": 9,
+    "degraded": 0,
+    "outage": 0
+  },
+  "incidents": []
+}
+```
+
+### Top-level fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `updatedAt` | `string` (ISO-8601) | When this snapshot was built. |
+| `refreshIntervalSeconds` | `number` | Suggested polling interval for clients. |
+| `overall` | `Health` | Roll-up health, see below. |
+| `network` | `object` | Which BCH network this deployment targets. |
+| `chain` | `object` | Chain tip probe via Electrum, plus a 12-block sparkline. |
+| `components` | `PublicComponent[]` | Per-component health, see below. |
+| `summary` | `object` | Counts of operational, degraded, and outage components. |
+| `incidents` | `array` | Recent incidents. Empty until the incidents store is wired up. |
+
+`overall` and per-component `status` use distinct vocabularies:
+
+| `overall` | When |
+|-----------|------|
+| `operational` | All components green. |
+| `degraded` | One or more components degraded, none in outage. |
+| `partial_outage` | Exactly one component in outage. |
+| `major_outage` | Two or more components in outage. |
+| `maintenance` | At least one component in maintenance, none worse. |
+| `unknown` | No components reported. |
+
+| Component `status` | Meaning |
+|--------------------|---------|
+| `operational` | Healthy. |
+| `degraded` | Reachable but unhealthy, or upstream reported `degraded` / `manual` / `unknown`. |
+| `outage` | Unreachable, HTTP 5xx, or upstream reported `critical` / `unreachable`. |
+| `maintenance` | Component is in a planned maintenance window. |
+| `unknown` | No probe yet, or upstream reported `not_configured`. |
+
+### Components
+
+The `components` array always includes these entries, in this order:
+
+| `id` | `group` | What is probed |
+|------|---------|----------------|
+| `api` | `API` | The backend REST surface itself. Reported `operational` if this response was served. |
+| `frontend_app` | `Frontend` | `HEAD https://app.flowguard.cash`. |
+| `docs` | `Docs` | `HEAD https://docs.flowguard.cash`. |
+| `explorer` | `Explorer` | `HEAD https://explorer.flowguard.cash`. |
+| `bch_network` | `BCH Network` | BCH chain tip via Electrum (`mainnet` or `chipnet`). |
+| `database` | `Database` | `SELECT 1` against the primary application database. |
+| `supabase_vault` | `Database` | Managed secret storage. Reported `unknown` until a server-side probe exists. |
+| `indexer` | `Workers` | Covenant address indexing worker, sanitized from `INDEXER_STATUS_URL`. |
+| `executor` | `Workers` | Scheduled transaction executor, sanitized from `EXECUTOR_STATUS_URL`. |
+| `blockchain_monitor` | `Workers` | In-process vault balance refresher. Reported `unknown` until liveness instrumentation lands. |
+| `transaction_monitor` | `Workers` | On-chain transaction confirmation watcher. Reported `unknown` until liveness instrumentation lands. |
+| `cycle_unlock_scheduler` | `Workers` | Governance cycle unlock scheduler. Reported `unknown` until liveness instrumentation lands. |
+
+Each `PublicComponent` has the shape:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | Stable identifier for the component. |
+| `name` | `string` | Display name. |
+| `group` | `"API" \| "Frontend" \| "Docs" \| "Explorer" \| "BCH Network" \| "Workers" \| "Database"` | UI grouping. |
+| `status` | `ComponentStatus` | Per-component health, see vocabulary above. |
+| `description` | `string` | Short, public-safe description. |
+| `latencyMs` | `number \| null` | Probe latency in milliseconds, when measurable. |
+| `uptime90d` | `number \| null` | 90-day uptime estimate. `null` until the component samples store exists. |
+| `lastIncidentAt` | `string \| null` | ISO timestamp of the most recent incident affecting this component. |
+
+Remote worker payloads (indexer, executor) are sanitized before re-emission. Only the upstream `service.status` field is mapped through `normalizeStatus`. Hostnames, queue depths, signing-key flags, and other internals are dropped.
+
+### Network and chain
+
+```json
+{
+  "network": {
+    "name": "chipnet",
+    "isMainnet": false,
+    "displayName": "BCH Chipnet",
+    "testnetWarning": true
+  },
+  "chain": {
+    "height": 234567,
+    "ageSeconds": null,
+    "latencyMs": 412,
+    "recentHeights": [234556, 234557, 234558, 234559, 234560, 234561, 234562, 234563, 234564, 234565, 234566, 234567],
+    "error": null
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `network.name` | `"mainnet" \| "chipnet"` | Which BCH network this deployment targets, resolved from `BCH_NETWORK` or `NETWORK`. |
+| `network.isMainnet` | `boolean` | Convenience flag. |
+| `network.displayName` | `string` | Human-readable name, for example `BCH Mainnet`. |
+| `network.testnetWarning` | `boolean` | `true` on chipnet. Surface a banner, chipnet is not for production traffic. |
+| `chain.height` | `number \| null` | Latest block height, or `null` if the Electrum probe failed. |
+| `chain.ageSeconds` | `number \| null` | Age of the tip in seconds. Reserved for a future per-block timestamp probe. |
+| `chain.latencyMs` | `number \| null` | Electrum probe latency. |
+| `chain.recentHeights` | `number[]` | Synthetic 12-point sparkline, newest last. Real per-block timestamps will move to `/api/status/network/bch` in a later phase. |
+| `chain.error` | `string \| null` | Probe error message, when applicable. |
+
+### Errors
+
+```json
+{
+  "updatedAt": "2026-06-11T12:00:00.000Z",
+  "refreshIntervalSeconds": 30,
+  "overall": "unknown",
+  "error": "Failed to build public status"
+}
+```
+
+Returned as HTTP `500` if the status snapshot cannot be built at all. Individual component failures are reflected as `outage` or `unknown` inside `components`, not as a top-level error.
+
+### Example
+
+```bash
+curl -s https://api.flowguard.cash/api/status | jq '.overall, .summary'
+```
+
+### Status page
+
+The marketing site renders this payload at [flowguard.cash/status](https://flowguard.cash/status). The page polls `/api/status` on the interval suggested by `refreshIntervalSeconds`.
+
+## GET /api/status/incidents
+
+Placeholder feed for the public Status page. Returns an empty list until the incidents store lands.
+
+### Request
+
+```http
+GET /api/status/incidents
+```
+
+### Response
+
+```json
+{
+  "incidents": [],
+  "note": "Incidents API not yet backed by a persistent store. Returns an empty list."
+}
+```
+
+Cached with `Cache-Control: public, max-age=60`.

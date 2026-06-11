@@ -121,4 +121,9 @@ feeDelta = inputs[0].value - outputs[0].value
 require(feeDelta >= 0 && feeDelta <= 2000)  // max 2000 satoshis fee
 ```
 
-Other functions do not define an explicit on-chain fee-delta cap in this contract. Operationally, keep miner fees and value transitions constrained in transaction builder policy.
+See "Recent hardening" below: the 2000-satoshi fee-delta cap is now enforced on every path, not only `unlockPeriod`.
+
+## Recent hardening
+
+- 2000-sat fee-delta cap is now enforced on every path: `unlockPeriod`, `spend` (over `inputs[0].value - payoutAmount - outputs[1].value`), `pause`, `resume`, and `emergencyLock`. The reserve cannot be skimmed to miner fees on any control or spend leg.
+- `spend` requires `payoutAmount > 0`. A zero-value payout previously let two colluding signers roll the spending window forward while recording no meaningful on-chain activity.

@@ -77,3 +77,8 @@ Sender-only. Resets `next_payment_timestamp = tx.locktime + intervalSeconds`. No
 Sender-only. Requires `FLAG_CANCELABLE`. Returns entire remaining pool to sender.
 
 For unlimited streams (`totalAmount == 0`), this contract path authorizes cancellation but does not enforce a specific sender-refund output shape.
+
+## Recent hardening
+
+- `pay` enforces a 2000-sat fee cap on `inputs[0].value - amountPerInterval - outputs[1].value`, so the BCH reserve cannot be drained to miner fees across many intervals.
+- `cancel` on uncapped streams (`totalAmount == 0`) now bounds the same delta to `[0, 2000]` instead of leaving the refund-shape unconstrained.

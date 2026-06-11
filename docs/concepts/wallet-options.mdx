@@ -1,0 +1,61 @@
+---
+title: "Wallet options"
+description: "Supported wallets: Paytaca (extension and mobile), Cashonize, WalletConnect, WizardConnect (beta)."
+icon: "wallet"
+---
+
+FlowGuard supports four wallet connectors. All of them must be able to sign CashScript transactions, including covenant inputs. The previous mainnet.cash testing-wallet path was removed because it cannot sign covenant inputs.
+
+## Paytaca
+
+Chrome extension and mobile wallet, connected over a native bridge (not WalletConnect).
+
+When the wallet picker modal opens, the app probes `window.paytaca` for 1.5 seconds:
+
+- If the extension is detected, the row shows a green **Detected** pill.
+- If nothing responds in 1.5 seconds, the row shows a yellow **Not installed** pill and the Connect button becomes an **Install** link to the Chrome Web Store.
+
+Paytaca covers both the desktop extension and the Paytaca mobile app.
+
+## Cashonize
+
+Browser wallet, connected over WalletConnect v2. No detection probe is needed - WalletConnect handles the handshake and the wallet selection happens inside the WalletConnect modal.
+
+## WalletConnect
+
+Generic WalletConnect v2 transport for Zapit and Selene mobile.
+
+<Note>
+Paytaca does NOT use WalletConnect. It has a native bridge through `window.paytaca`. Pick Paytaca from its own row, not from WalletConnect.
+</Note>
+
+WalletConnect requires a project ID at build time:
+
+```bash
+VITE_WALLETCONNECT_PROJECT_ID=your_project_id_here
+```
+
+The hardcoded demo fallback was removed. If `VITE_WALLETCONNECT_PROJECT_ID` is missing, the connector throws a clear error at connect time instead of silently using a shared demo project.
+
+## WizardConnect (beta)
+
+BCH-native Nostr relay transport, built on `@wizardconnect/dapp` and `@wizardconnect/core`. Currently supports Paytaca mobile only.
+
+Gated by an env flag at build time:
+
+```bash
+VITE_ENABLE_WIZARDCONNECT=true
+```
+
+<Warning>
+The WizardConnect protocol does NOT expose `bch_signMessage`. SIWX login will throw on this connector until the upstream relay lands `signMessage`. Use Paytaca, Cashonize, or WalletConnect if you need SIWX login.
+</Warning>
+
+## Which wallet for what
+
+| Wallet | SIWX login | Covenant signing | Mobile | Notes |
+| --- | --- | --- | --- | --- |
+| Paytaca | yes | yes | yes | native bridge, extension and mobile app |
+| Cashonize | yes | yes | no | browser wallet over WalletConnect v2 |
+| WalletConnect | yes | yes | yes | for Zapit and Selene mobile |
+| WizardConnect (beta) | no | yes | yes (Paytaca mobile only) | Nostr relay transport, no `bch_signMessage` yet |

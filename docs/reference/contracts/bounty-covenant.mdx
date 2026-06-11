@@ -78,3 +78,8 @@ Authority-only admin paths.
 - Computes `remainingPrizes = maxWinners - winnersCount`.
 - Computes `remainingPool = remainingPrizes * rewardPerWinner`.
 - `tx.outputs[0]` must pay authority in BCH or FT mode (flag bit2).
+
+## Recent hardening
+
+- Two-slot authority model: `authorityHash` (creator wallet) gates pause / resume / cancel and is the cancel-refund target, while `claimAuthorityHash` (backend co-signer) only authorises `claim`. A backend compromise cannot redirect the pool. Deploy with `claimAuthorityHash == authorityHash` to run without a backend.
+- LIFT-pattern fee cap of 2000 sats on `claim`, `pause`, `resume`, and `cancel`. BCH leaving the covenant beyond the winner payout and continuation output must fall in `[0, 2000]`.

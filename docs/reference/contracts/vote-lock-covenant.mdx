@@ -56,3 +56,8 @@ BCH has no cross-UTXO reads. The voter supplies `proposalFinalStatus` as a param
 <Note>
 `earlyReclaim()` also does not re-check `proposalId` from NFT commitment. The function trusts that the locked UTXO already belongs to the intended proposal context established at lock time.
 </Note>
+
+## Recent hardening
+
+- `earlyReclaim` has been removed. The previous entrypoint accepted a user-supplied `proposalFinalStatus` with no on-chain check against the actual proposal state, which let any voter bypass the lockup. Voters now reclaim via `reclaim` once `unlockTimestamp` passes.
+- A future revision can reintroduce early reclaim safely by binding the lock to a specific `ProposalCovenant` instance via a `proposalLockingBytecodeHash` constructor parameter and requiring an input from that proposal in `CANCELLED` or `EXPIRED` status.

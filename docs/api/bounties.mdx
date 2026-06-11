@@ -1,0 +1,336 @@
+---
+title: "Bounties API"
+description: "Endpoints for creating, funding, paying winners, pausing, and cancelling bounty contracts."
+icon: "trophy"
+---
+
+A bounty in FlowGuard is a fixed-reward, fixed-winners campaign deployed as a `BountyCovenant` on Bitcoin Cash. The creator funds a pool sized to `rewardPerWinner * maxWinners`, the backend co-signs each claim with a stored claim authority, and the creator can pause or cancel the campaign at any time. Bounties pay in BCH or in a single CashToken category.
+
+All mutating routes require `Authorization: Bearer <walletSession>` plus the canonical `x-user-address` header. The wallet session is verified by the `requireWalletAuth` middleware in `backend/src/api/bounties.ts`. Read routes (list and detail) are unauthenticated.
+
+## List bounties
+
+```http
+GET /api/bounties?creator={address}&showDeprecated={bool}
+```
+
+Returns bounties created by the supplied address, newest first. Pre-C-06 dead rows are hidden unless `showDeprecated=true`.
+
+| Param | In | Required | Description |
+| --- | --- | --- | --- |
+| `creator` | query | yes | cash address that owns the bounties |
+| `showDeprecated` | query | no | include legacy deprecated rows when set to `true` |
+
+```json
+{
+  "success": true,
+  "campaigns": [
+    {
+      "id": "5b4f...uuid",
+      "campaign_id": "#FG-BOUNTY-007",
+      "creator": "bchtest:qq...",
+      "title": "Bug bounty - covenant audit",
+      "token_type": "BCH",
+      "token_category": null,
+      "reward_per_winner": 50000,
+      "max_winners": 5,
+      "winners_count": 1,
+      "total_paid": 50000,
+      "status": "ACTIVE",
+      "contract_address": "bchtest:pq...",
+      "latest_event": {
+        "event_type": "claim",
+        "status": "ACTIVE",
+        "tx_hash": "abcd...",
+        "created_at": 1733900000
+      }
+    }
+  ],
+  "total": 1
+}
+```
+
+## Get a bounty
+
+```http
+GET /api/bounties/:id
+```
+
+Returns the bounty row, its winner claim history, and the last 200 activity events.
+
+| Param | In | Required | Description |
+| --- | --- | --- | --- |
+| `id` | path | yes | bounty UUID |
+
+```json
+{
+  "success": true,
+  "campaign": {
+    "id": "5b4f...uuid",
+    "campaign_id": "#FG-BOUNTY-007",
+    "status": "ACTIVE",
+    "contract_address": "bchtest:pq...",
+    "reward_per_winner": 50000,
+    "max_winners": 5,
+    "winners_count": 1,
+    "total_paid": 50000
+  },
+  "claims": [
+    {
+      "id": "claim-uuid",
+      "bounty_id": "5b4f...uuid",
+      "winner": "bchtest:qr...",
+      "amount": 50000,
+      "proof_hash": "f3a1...64chars",
+      "tx_hash": "abcd...",
+      "claimed_at": 1733900000
+    }
+  ],
+  "events": [
+    {
+      "event_type": "funded",
+      "status": "ACTIVE",
+      "tx_hash": "0xfund...",
+      "created_at": 1733800000
+    }
+  ]
+}
+```
+
+## Create bounty
+
+```http
+POST /api/bounties/create
+Authorization: Bearer <walletSession>
+```
+
+Deploys a new `BountyCovenant` and returns the funding instructions. Requires `requireWalletAuth`; the creator is taken from the verified wallet session, not from the body.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `title` | string | yes | bounty title |
+| `description` | string | no | free-form description |
+| `tokenType` | `"BCH"` \| `"FUNGIBLE_TOKEN"` \| `"CASHTOKENS"` | no | defaults to `BCH`; `CASHTOKENS` is normalised to `FUNGIBLE_TOKEN` |
+| `tokenCategory` | string | no | required when `tokenType` is `FUNGIBLE_TOKEN` |
+| `rewardPerWinner` | number | yes | display-unit amount paid to each winner |
+| `maxWinners` | integer | yes | positive integer, total winner slots |
+| `startDate` | number | no | unix seconds; defaults to now |
+| `endDate` | number | no | unix seconds; `null` for open-ended |
+| `vaultId` | string | no | bind to an existing vault; otherwise a standalone vault id is derived |
+
+```json
+{
+  "title": "Bug bounty - covenant audit",
+  "description": "Report a high-severity bug",
+  "tokenType": "BCH",
+  "rewardPerWinner": 50000,
+  "maxWinners": 5,
+  "startDate": 1733800000,
+  "endDate": 1736400000
+}
+```
+
+```json
+{
+  "success": true,
+  "message": "Bounty contract deployed - awaiting funding transaction",
+  "campaign": { "id": "5b4f...uuid", "status": "PENDING" },
+  "deployment": {
+    "contractAddress": "bchtest:pq...",
+    "campaignId": "#FG-BOUNTY-007",
+    "onChainCampaignId": "0x...",
+    "fundingRequired": {
+      "toAddress": "bchtest:pq...",
+      "amount": 250000,
+      "tokenType": "BCH",
+      "withNFT": { "commitment": "0x...", "capability": "mutable" }
+    },
+    "nftCommitment": "0x..."
+  }
+}
+```
+
+## Funding
+
+```http
+GET  /api/bounties/:id/funding-info
+POST /api/bounties/:id/confirm-funding
+Authorization: Bearer <walletSession>   # confirm-funding only
+```
+
+`GET /funding-info` builds an unsigned WalletConnect transaction the creator signs to seed the contract pool plus the covenant state NFT. If the creator's wallet needs a genesis-utxo consolidation first, the response returns `requiresPreparation: true` and a preparation transaction to sign before retrying.
+
+`POST /confirm-funding` records the funding tx hash and moves the campaign to `ACTIVE`. The backend verifies the tx is indexed on chipnet, consumes a UTXO from the caller's wallet (audit H-07), and produces the expected contract output with the mutable NFT commitment.
+
+| Field | In | Required | Description |
+| --- | --- | --- | --- |
+| `txHash` | body | yes | broadcast funding transaction hash |
+
+```json
+{
+  "success": true,
+  "fundingInfo": {
+    "contractAddress": "bchtest:pq...",
+    "totalPool": 250000,
+    "onChainAmount": 250000,
+    "tokenType": "BCH",
+    "inputs": [],
+    "outputs": [],
+    "fee": 1024
+  },
+  "wcTransaction": { "transaction": "...", "sourceOutputs": [] }
+}
+```
+
+```json
+{
+  "success": true,
+  "message": "Bounty funding confirmed",
+  "txHash": "abcd...",
+  "status": "ACTIVE",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+## Claim winner
+
+```http
+POST /api/bounties/:id/claim
+POST /api/bounties/:id/confirm-claim
+Authorization: Bearer <walletSession>
+```
+
+Two-step claim. The creator calls `/claim` to build a backend-co-signed WalletConnect transaction that pays the winner the fixed reward, then signs and broadcasts it, then calls `/confirm-claim` with the resulting tx hash. Only the bounty creator may authorise claims; the backend rejects requests whose verified signer does not match `campaign.creator`.
+
+### Build claim
+
+| Field | In | Required | Description |
+| --- | --- | --- | --- |
+| `winnerAddress` | body | yes | cash address that receives the reward (alias: `winner`) |
+| `proofHash` | body | yes | 32-byte hex string (64 chars) - off-chain proof commitment |
+| `signerAddress` | body | no | defaults to the verified wallet session address |
+
+```json
+{
+  "winnerAddress": "bchtest:qr...",
+  "proofHash": "f3a1c9...64chars",
+  "signerAddress": "bchtest:qq..."
+}
+```
+
+```json
+{
+  "success": true,
+  "claimAmount": 50000,
+  "wcTransaction": { "transaction": "...", "sourceOutputs": [] }
+}
+```
+
+### Confirm claim
+
+| Field | In | Required | Description |
+| --- | --- | --- | --- |
+| `winnerAddress` | body | yes | winner cash address used for output verification |
+| `amount` | body | yes | display-unit amount paid to the winner |
+| `proofHash` | body | no | recorded against the claim row |
+| `txHash` | body | yes | broadcast claim transaction hash |
+
+```json
+{
+  "success": true,
+  "message": "Claim confirmed",
+  "txHash": "abcd...",
+  "status": "ACTIVE",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+When `winners_count` reaches `max_winners`, the campaign transitions to `COMPLETED` and no further claims are accepted.
+
+## Pause
+
+```http
+POST /api/bounties/:id/pause
+POST /api/bounties/:id/confirm-pause
+Authorization: Bearer <walletSession>
+```
+
+`POST /pause` is creator-only and requires the campaign to be `ACTIVE`. It builds a covenant pause transaction that the creator signs and broadcasts, then `POST /confirm-pause` verifies the new covenant state output and moves the row to `PAUSED`.
+
+| Field | In | Required | Description |
+| --- | --- | --- | --- |
+| `txHash` | body | yes | broadcast pause transaction hash (confirm only) |
+
+```json
+{
+  "success": true,
+  "nextStatus": "PAUSED",
+  "wcTransaction": { "transaction": "...", "sourceOutputs": [] }
+}
+```
+
+```json
+{
+  "success": true,
+  "txHash": "abcd...",
+  "status": "PAUSED",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+## Cancel
+
+```http
+POST /api/bounties/:id/cancel
+POST /api/bounties/:id/confirm-cancel
+Authorization: Bearer <walletSession>
+```
+
+`POST /cancel` is creator-only and allowed from `ACTIVE` or `PAUSED`. The cancel refund is enforced on-chain to the `authorityHash` baked into the constructor params, so the response also returns the derived `authorityReturnAddress` and a `signerMatchesReturn` flag. If the signer's address does not match, the response includes a `warning` explaining that recovery requires redeploying with the correct creator authority.
+
+`POST /confirm-cancel` verifies the refund output paid back to `authorityReturnAddress` (with the original token category for CashToken bounties) and moves the row to `CANCELLED`.
+
+| Field | In | Required | Description |
+| --- | --- | --- | --- |
+| `txHash` | body | yes | broadcast cancel transaction hash (confirm only) |
+
+```json
+{
+  "success": true,
+  "nextStatus": "CANCELLED",
+  "cancelReturnAddress": "bchtest:qq...",
+  "authorityReturnAddress": "bchtest:qq...",
+  "signerMatchesReturn": true,
+  "remainingPool": "200000",
+  "wcTransaction": { "transaction": "...", "sourceOutputs": [] }
+}
+```
+
+```json
+{
+  "success": true,
+  "txHash": "abcd...",
+  "status": "CANCELLED",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+## Auth summary
+
+| Route | `requireWalletAuth` |
+| --- | --- |
+| `GET /api/bounties` | no |
+| `GET /api/bounties/:id` | no |
+| `GET /api/bounties/:id/funding-info` | no |
+| `POST /api/bounties/create` | yes |
+| `POST /api/bounties/:id/confirm-funding` | yes |
+| `POST /api/bounties/:id/claim` | yes |
+| `POST /api/bounties/:id/confirm-claim` | yes |
+| `POST /api/bounties/:id/pause` | yes |
+| `POST /api/bounties/:id/confirm-pause` | yes |
+| `POST /api/bounties/:id/cancel` | yes |
+| `POST /api/bounties/:id/confirm-cancel` | yes |

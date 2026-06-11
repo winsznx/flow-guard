@@ -16,13 +16,108 @@ In production this points to your Railway (or equivalent) backend deployment.
 
 ## Authentication
 
-The API does not require tokens or sessions. Wallet identity is asserted via a single HTTP header:
+Guarded routes use a SIWX (Sign-In With X) bearer flow. Wallets sign a CAIP-122 multi-line message via BIP-322 once per session, exchange the signature for a short-lived bearer token, then attach that token to subsequent requests.
+
+The legacy `x-user-address` header is still accepted during migration, but the bearer token is preferred. New integrations should use the bearer flow.
+
+### Flow
+
+<Steps>
+  <Step title="Request a nonce">
+    The frontend calls `POST /api/auth/nonce` with the wallet address. The backend returns a single-use nonce and the exact CAIP-122 message the wallet must sign.
+  </Step>
+  <Step title="Sign and verify">
+    The wallet signs the message using BIP-322 (chipnet or mainnet). The frontend posts the signature to `POST /api/auth/verify` and receives a bearer token. Tokens are HMAC-SHA256 signed and expire 30 minutes after issue.
+  </Step>
+  <Step title="Authorize requests">
+    Subsequent guarded calls send `Authorization: Bearer <token>`. On `401`, clients should refresh by repeating steps 1 and 2.
+  </Step>
+</Steps>
+
+### Nonce
 
 ```http
-x-user-address: bchtest:qr...
+POST /api/auth/nonce
+Content-Type: application/json
 ```
 
-Many protected routes (pause/cancel/approve/execute flows) require this header. Some create/build routes use explicit body fields instead, so always follow each endpoint's request spec.
+```json
+{
+  "address": "bchtest:qr..."
+}
+```
+
+Response:
+
+```json
+{
+  "nonce": "f3c1a9d8b27e4c0a",
+  "message": "flowguard.app wants you to sign in with your Bitcoin Cash account:\nbchtest:qr...\n\nURI: https://flowguard.app\nVersion: 1\nChain ID: bch:chipnet\nNonce: f3c1a9d8b27e4c0a\nIssued At: 2026-06-11T12:00:00.000Z",
+  "issuedAt": "2026-06-11T12:00:00.000Z"
+}
+```
+
+### Verify
+
+```http
+POST /api/auth/verify
+Content-Type: application/json
+```
+
+```json
+{
+  "address": "bchtest:qr...",
+  "message": "flowguard.app wants you to sign in with your Bitcoin Cash account:\nbchtest:qr...\n\nURI: https://flowguard.app\nVersion: 1\nChain ID: bch:chipnet\nNonce: f3c1a9d8b27e4c0a\nIssued At: 2026-06-11T12:00:00.000Z",
+  "signature": "IEx9...BIP322Base64..."
+}
+```
+
+Response:
+
+```json
+{
+  "token": "eyJhZGRyZXNzIjoiYmNodGVzdDpxci4uLiIsImV4cCI6MTc0OTY0NDgwMH0.9a1b...hmac",
+  "address": "bchtest:qr...",
+  "expiresAt": "2026-06-11T12:30:00.000Z"
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `token` | string | HMAC-SHA256 bearer, 30-minute TTL |
+| `address` | string | CashAddr the token is bound to |
+| `expiresAt` | string (ISO 8601) | Token expiry |
+
+### Authed request
+
+```http
+GET /api/streams/mine
+Authorization: Bearer eyJhZGRyZXNzIjoiYmNodGVzdDpxci4uLiIsImV4cCI6MTc0OTY0NDgwMH0.9a1b...hmac
+```
+
+Curl example:
+
+```bash
+curl https://api.flowguard.app/api/streams/mine \
+  -H "Authorization: Bearer $FLOWGUARD_TOKEN"
+```
+
+### Frontend SDK helper
+
+The frontend ships `authFetch` in `frontend/src/utils/auth.ts`. It wraps `fetch` and handles the SIWX round-trip transparently:
+
+- Caches the bearer in `sessionStorage` keyed by wallet address.
+- Reuses the cached token until it expires.
+- On `401`, drops the cached token, repeats nonce + verify, and retries the original request once.
+
+```ts
+import { authFetch } from "@/utils/auth";
+
+const res = await authFetch("/api/streams/mine");
+const streams = await res.json();
+```
+
+Some create/build routes still take the wallet address in the request body (for example `/api/streams/create`). Follow each endpoint's request spec.
 
 ## WalletConnect Transactions
 

@@ -1,0 +1,388 @@
+---
+title: "Rewards API"
+description: "Endpoints for variable-amount reward campaigns: create, fund, distribute, pause, cancel."
+icon: "gift"
+---
+
+A reward campaign distributes a pool of BCH or CashTokens to recipients in variable per-recipient amounts, bounded by a `maxRewardAmount` and capped by `totalPool`. Each campaign is tagged with a category - `ACHIEVEMENT`, `REFERRAL`, `LOYALTY`, or `CUSTOM` - so frontends can lane them under the right surface.
+
+The covenant runs on Bitcoin Cash (chipnet) and uses CashScript. Each distribution is co-signed by the backend claim authority before the creator's wallet broadcasts the transaction.
+
+All routes live under `/api`.
+
+## List campaigns
+
+```http
+GET /api/rewards?creator={address}
+```
+
+Returns reward campaigns created by the provided address.
+
+### Query parameters
+
+| Param             | Type    | Notes                                                  |
+| ----------------- | ------- | ------------------------------------------------------ |
+| `creator`         | string  | required, cash address of the creator                  |
+| `showDeprecated`  | boolean | optional, include soft-deleted campaigns when `true`   |
+
+### Response
+
+```json
+{
+  "success": true,
+  "campaigns": [
+    {
+      "id": "uuid",
+      "campaign_id": "#FG-REWARD-001",
+      "creator": "bchtest:q...",
+      "title": "Q2 contributor bonuses",
+      "reward_category": "ACHIEVEMENT",
+      "token_type": "BCH",
+      "total_pool": 10,
+      "max_reward_amount": 0.5,
+      "distributed_count": 3,
+      "distributed_total": 1.2,
+      "status": "ACTIVE",
+      "contract_address": "bchtest:p...",
+      "latest_event": { "event_type": "distribution", "actor": "bchtest:q...", "amount": 0.4 }
+    }
+  ],
+  "total": 1
+}
+```
+
+## Get campaign
+
+```http
+GET /api/rewards/:id
+```
+
+Returns the campaign record, its distribution history, and recent activity events.
+
+### Response
+
+```json
+{
+  "success": true,
+  "campaign": { "id": "uuid", "status": "ACTIVE", "total_pool": 10, "distributed_total": 1.2 },
+  "distributions": [
+    {
+      "id": "uuid",
+      "reward_id": "uuid",
+      "recipient": "bchtest:q...",
+      "amount": 0.4,
+      "tx_hash": "hex64",
+      "distributed_at": 1768000000
+    }
+  ],
+  "events": [
+    { "id": "uuid", "event_type": "funded", "actor": "bchtest:q...", "tx_hash": "hex64", "created_at": 1767000000 }
+  ]
+}
+```
+
+## Create campaign
+
+```http
+POST /api/rewards/create
+Authorization: Bearer <token>
+```
+
+Deploys the reward covenant and returns the funding transaction parameters. Requires Bearer auth - the creator address comes from the verified user, not the body.
+
+### Body
+
+```json
+{
+  "title": "Q2 contributor bonuses",
+  "description": "Per-PR rewards for core contributors",
+  "rewardCategory": "ACHIEVEMENT",
+  "tokenType": "BCH",
+  "tokenCategory": null,
+  "totalPool": 10,
+  "maxRewardAmount": 0.5,
+  "startDate": 1761955200,
+  "endDate": 1769817600,
+  "vaultId": "optional-vault-id"
+}
+```
+
+### Body fields
+
+| Field             | Type   | Notes                                                                  |
+| ----------------- | ------ | ---------------------------------------------------------------------- |
+| `title`           | string | required                                                               |
+| `description`     | string | optional                                                               |
+| `rewardCategory`  | string | one of `ACHIEVEMENT`, `REFERRAL`, `LOYALTY`, `CUSTOM`, defaults `CUSTOM` |
+| `tokenType`       | string | `BCH` or `FUNGIBLE_TOKEN` (alias `CASHTOKENS` accepted)                |
+| `tokenCategory`   | string | required when `tokenType` is `FUNGIBLE_TOKEN`                          |
+| `totalPool`       | number | required, total campaign pool in display units, must be greater than 0  |
+| `maxRewardAmount` | number | required, cap per recipient, must be less than or equal to `totalPool` |
+| `startDate`       | number | optional unix seconds, defaults to now                                 |
+| `endDate`         | number | optional unix seconds, `0` or omitted means open-ended                 |
+| `vaultId`         | string | optional, links the campaign to a treasury vault                        |
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Reward contract deployed - awaiting funding transaction",
+  "campaign": { "id": "uuid", "status": "PENDING" },
+  "deployment": {
+    "contractAddress": "bchtest:p...",
+    "campaignId": "#FG-REWARD-001",
+    "onChainCampaignId": "hex",
+    "fundingRequired": {
+      "toAddress": "bchtest:p...",
+      "amount": 10,
+      "tokenType": "BCH",
+      "withNFT": { "commitment": "hex", "capability": "mutable" }
+    },
+    "nftCommitment": "hex"
+  }
+}
+```
+
+## Funding info
+
+```http
+GET /api/rewards/:id/funding-info
+```
+
+Returns the wallet transaction the creator signs to fund the deployed covenant. When the creator's wallet does not have a usable genesis-style UTXO, the response signals a one-shot consolidation transaction the wallet must sign first.
+
+### Response (ready to fund)
+
+```json
+{
+  "success": true,
+  "fundingInfo": {
+    "contractAddress": "bchtest:p...",
+    "totalPool": 10,
+    "onChainAmount": 1000000000,
+    "tokenType": "BCH",
+    "inputs": [],
+    "outputs": [],
+    "fee": 0
+  },
+  "wcTransaction": {
+    "transaction": "0200...",
+    "sourceOutputs": [],
+    "broadcast": true,
+    "userPrompt": "Fund reward campaign"
+  }
+}
+```
+
+### Response (consolidation required)
+
+```json
+{
+  "success": false,
+  "requiresPreparation": true,
+  "preparationTransaction": { "transaction": "0200...", "broadcast": true },
+  "message": "Your wallet needs a consolidation transaction before funding. Please sign to proceed."
+}
+```
+
+## Confirm funding
+
+```http
+POST /api/rewards/:id/confirm-funding
+Authorization: Bearer <token>
+```
+
+Verifies that the broadcast funding transaction contains the expected covenant output and flips the campaign to `ACTIVE`. The backend also checks that one of the transaction inputs was spent from the caller's wallet (audit H-07).
+
+### Body
+
+```json
+{
+  "txHash": "hex64"
+}
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Reward funding confirmed",
+  "txHash": "hex64",
+  "status": "ACTIVE",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+When the transaction is not yet indexed by the chipnet provider, the route returns `409` with `state: "pending"` and `retryable: true` so the client can retry shortly.
+
+## Distribute
+
+```http
+POST /api/rewards/:id/distribute
+Authorization: Bearer <token>
+```
+
+Builds a variable-amount distribution transaction. The covenant is co-signed by the backend claim authority and returned as a `wcTransaction` for the creator's wallet to broadcast.
+
+### Body
+
+```json
+{
+  "recipientAddress": "bchtest:q...",
+  "amount": 0.4,
+  "signerAddress": "bchtest:q..."
+}
+```
+
+### Body fields
+
+| Field              | Type   | Notes                                                                  |
+| ------------------ | ------ | ---------------------------------------------------------------------- |
+| `recipientAddress` | string | required, recipient cash address (alias `recipient` accepted)          |
+| `amount`           | number | required, must be greater than 0 and less than or equal to `maxRewardAmount` (alias `rewardAmount` accepted) |
+| `signerAddress`    | string | optional, must match the campaign creator when provided                 |
+
+### Response
+
+```json
+{
+  "success": true,
+  "rewardAmount": 0.4,
+  "wcTransaction": {
+    "transaction": "0200...",
+    "sourceOutputs": [],
+    "broadcast": true,
+    "userPrompt": "Send reward"
+  }
+}
+```
+
+The route enforces three constraints before building:
+
+- campaign `status` must be `ACTIVE`
+- per-recipient `amount` must not exceed the campaign's `maxRewardAmount`
+- `distributed_total + amount` must not exceed `totalPool`
+
+## Confirm distribution
+
+```http
+POST /api/rewards/:id/confirm-distribute
+Authorization: Bearer <token>
+```
+
+Verifies the broadcast distribution transaction includes the expected recipient output, then records the distribution and increments `distributed_count` and `distributed_total`.
+
+### Body
+
+```json
+{
+  "recipientAddress": "bchtest:q...",
+  "amount": 0.4,
+  "txHash": "hex64"
+}
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Distribution confirmed",
+  "txHash": "hex64",
+  "status": "ACTIVE",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+## Pause
+
+```http
+POST /api/rewards/:id/pause
+Authorization: Bearer <token>
+```
+
+Creator-only. Builds an on-chain pause transaction that updates the covenant NFT commitment so the contract refuses further distributions until resumed.
+
+### Response
+
+```json
+{
+  "success": true,
+  "nextStatus": "PAUSED",
+  "wcTransaction": { "transaction": "0200...", "broadcast": true }
+}
+```
+
+## Confirm pause
+
+```http
+POST /api/rewards/:id/confirm-pause
+Authorization: Bearer <token>
+```
+
+### Body
+
+```json
+{
+  "txHash": "hex64"
+}
+```
+
+Verifies the broadcast transaction carries the expected covenant state output and sets the campaign `status` to `PAUSED`.
+
+## Cancel
+
+```http
+POST /api/rewards/:id/cancel
+Authorization: Bearer <token>
+```
+
+Creator-only. Builds an on-chain cancel transaction that refunds the remaining pool to the authority address baked into the contract constructor. Only campaigns in `ACTIVE` or `PAUSED` can be cancelled.
+
+### Response
+
+```json
+{
+  "success": true,
+  "nextStatus": "CANCELLED",
+  "cancelReturnAddress": "bchtest:q...",
+  "authorityReturnAddress": "bchtest:q...",
+  "signerMatchesReturn": true,
+  "remainingPool": "8800000000",
+  "wcTransaction": { "transaction": "0200...", "broadcast": true }
+}
+```
+
+When `signerMatchesReturn` is `false`, the response includes a `warning` field. The refund still goes to the constructor-bound `authorityReturnAddress`, not to the signer.
+
+## Confirm cancel
+
+```http
+POST /api/rewards/:id/confirm-cancel
+Authorization: Bearer <token>
+```
+
+### Body
+
+```json
+{
+  "txHash": "hex64"
+}
+```
+
+Verifies the broadcast transaction includes the expected authority refund output (with the campaign's token category for `FUNGIBLE_TOKEN` campaigns) and sets the campaign `status` to `CANCELLED`.
+
+## Control surface
+
+The creator-only control routes are:
+
+- `pause`
+- `confirm-pause`
+- `cancel`
+- `confirm-cancel`
+
+All four require Bearer auth, and the verified user must match the campaign creator. There is no resume route - paused campaigns are reactivated by cancelling and redeploying.

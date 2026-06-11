@@ -1,0 +1,402 @@
+---
+title: "Grants API"
+description: "Endpoints for milestone-based grant lifecycles: create, fund, release, pause, cancel, transfer."
+icon: "seedling"
+---
+
+A grant is a milestone-based payout from a creator to a recipient. The grant deploys its own `GrantCovenant` on-chain, the creator funds it once, and the contract releases one tranche per confirmed milestone. The covenant has two authority slots: the creator wallet (admin paths, cancel refund) and a backend-held claim authority (co-signs milestone releases). Grants support BCH and CashTokens, and optionally allow the recipient to transfer their right to a new address.
+
+All routes live under `/api`. Mutating routes require Bearer wallet auth and the `x-user-address` header.
+
+## Grant statuses
+
+- `PENDING` - contract deployed, awaiting funding
+- `ACTIVE` - funded, releasing milestones
+- `PAUSED` - creator paused; releases blocked
+- `CANCELLED` - creator cancelled; remaining balance refunded to authority address
+- `COMPLETED` - all milestones released
+
+## List grants
+
+```http
+GET /api/grants?creator={address}&showDeprecated={bool}
+```
+
+Returns grants created by `creator`, newest first. Deprecated grants are hidden unless `showDeprecated=true`.
+
+### Query parameters
+
+| Param             | Required | Meaning                                                  |
+| ----------------- | -------- | -------------------------------------------------------- |
+| `creator`         | yes      | Creator wallet address                                   |
+| `showDeprecated`  | no       | Include deprecated grants when `true`. Default `false`.  |
+
+### Response
+
+```json
+{
+  "success": true,
+  "grants": [
+    {
+      "id": "uuid",
+      "grant_number": "#FG-GRANT-001",
+      "creator": "bchtest:q...",
+      "recipient": "bchtest:q...",
+      "title": "Q1 contributor grant",
+      "token_type": "BCH",
+      "milestones_total": 4,
+      "milestones_completed": 1,
+      "total_amount": 12,
+      "total_released": 3,
+      "status": "ACTIVE",
+      "latest_event": { "event_type": "milestone_released", "created_at": 1764547200 }
+    }
+  ],
+  "total": 1
+}
+```
+
+## Get grant
+
+```http
+GET /api/grants/:id
+```
+
+Returns the grant, its ordered milestones, and up to 200 activity events.
+
+### Response
+
+```json
+{
+  "success": true,
+  "grant": { "id": "uuid", "status": "ACTIVE", "...": "..." },
+  "milestones": [
+    {
+      "id": "uuid",
+      "grant_id": "uuid",
+      "milestone_index": 1,
+      "title": "Spec delivered",
+      "status": "RELEASED",
+      "tx_hash": "hex64",
+      "released_at": 1764547200
+    }
+  ],
+  "events": [
+    { "event_type": "funded", "actor": "bchtest:q...", "tx_hash": "hex64", "created_at": 1764460800 }
+  ]
+}
+```
+
+## Create grant
+
+```http
+POST /api/grants/create
+Authorization: Bearer <token>
+x-user-address: bchtest:q...
+```
+
+Deploys a `GrantCovenant` on chipnet, generates a backend-held claim authority keypair (encrypted at rest), and returns funding instructions. Status is `PENDING` until funding confirms.
+
+### Body
+
+```json
+{
+  "title": "Q1 contributor grant",
+  "description": "Four-milestone delivery",
+  "vaultId": "optional-vault-id",
+  "recipient": "bchtest:qrecipient...",
+  "milestonesTotal": 4,
+  "amountPerMilestone": 3,
+  "totalAmount": 12,
+  "tokenType": "BCH",
+  "tokenCategory": null,
+  "cancelable": true,
+  "transferable": false,
+  "milestones": [
+    { "title": "Spec delivered", "description": "Approved spec doc" },
+    { "title": "Alpha build" },
+    { "title": "Beta build" },
+    { "title": "Final delivery" }
+  ]
+}
+```
+
+### Body fields
+
+| Field                | Required | Notes                                                                       |
+| -------------------- | -------- | --------------------------------------------------------------------------- |
+| `title`              | yes      | Human label                                                                 |
+| `description`        | no       |                                                                             |
+| `vaultId`            | no       | Link the grant to an existing vault                                         |
+| `recipient`          | yes      | CashAddress that receives every milestone payout                            |
+| `milestonesTotal`    | yes      | Integer in `[1, 255]`                                                       |
+| `amountPerMilestone` | yes      | Display amount per tranche, greater than 0                                  |
+| `totalAmount`        | yes      | Display total amount the contract holds                                     |
+| `tokenType`          | yes      | `BCH` or `FUNGIBLE_TOKEN` (`CASHTOKENS` is normalized to `FUNGIBLE_TOKEN`)  |
+| `tokenCategory`      | cond.    | Required when `tokenType` is `FUNGIBLE_TOKEN`                               |
+| `cancelable`         | no       | Default `true`                                                              |
+| `transferable`       | no       | Default `false`. When `true`, recipient may transfer the right              |
+| `milestones`         | yes      | Non-empty array; each entry may carry `title` and `description`             |
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Grant contract deployed - awaiting funding transaction",
+  "grant": { "id": "uuid", "status": "PENDING", "...": "..." },
+  "milestones": [ { "milestone_index": 1, "status": "PENDING" } ],
+  "deployment": {
+    "contractAddress": "bchtest:p...",
+    "grantNumber": "#FG-GRANT-001",
+    "onChainCampaignId": "hex...",
+    "nftCommitment": "hex...",
+    "fundingRequired": {
+      "toAddress": "bchtest:p...",
+      "amount": 12,
+      "tokenType": "BCH",
+      "withNFT": { "commitment": "hex...", "capability": "mutable" }
+    }
+  }
+}
+```
+
+## Funding info
+
+```http
+GET /api/grants/:id/funding-info
+```
+
+Returns the unsigned `wcTransaction` the creator wallet signs to fund the deployed contract with the required state NFT.
+
+If the wallet needs a consolidation transaction first (genesis UTXO at outpoint index 0), the response shape switches:
+
+```json
+{
+  "success": false,
+  "requiresPreparation": true,
+  "preparationTransaction": { "...": "..." },
+  "message": "Your wallet needs a consolidation transaction before funding. Please sign to proceed."
+}
+```
+
+### Standard response
+
+```json
+{
+  "success": true,
+  "fundingInfo": {
+    "contractAddress": "bchtest:p...",
+    "totalAmount": 12,
+    "onChainAmount": 1200000000,
+    "tokenType": "BCH",
+    "inputs": [ /* ... */ ],
+    "outputs": [ /* ... */ ],
+    "fee": 250
+  },
+  "wcTransaction": { "...": "..." }
+}
+```
+
+## Confirm funding
+
+```http
+POST /api/grants/:id/confirm-funding
+Authorization: Bearer <token>
+x-user-address: bchtest:q...
+```
+
+```json
+{ "txHash": "hex64" }
+```
+
+Verifies the on-chain funding transaction:
+
+- the tx is indexed on chipnet
+- one input belongs to the caller's wallet (audit H-07)
+- the contract output carries the expected satoshi/token amount and a mutable NFT with a 32+ byte commitment
+
+On success, status flips to `ACTIVE`.
+
+### Error responses
+
+| HTTP | `errorCode`              | Meaning                                              |
+| ---- | ------------------------ | ---------------------------------------------------- |
+| 409  | `TX_NOT_FOUND`           | Tx not yet indexed on chipnet. Retryable.            |
+| 403  | `TX_INPUT_NOT_FROM_FUNDER` | Caller wallet did not contribute an input.         |
+| 400  | -                        | Funding tx is missing the expected contract output.  |
+| 500  | `CONFIRM_FAILED`         | Server error during confirmation.                    |
+
+## Release a milestone
+
+Release is a two-call flow: build, then confirm.
+
+### Build release transaction
+
+```http
+POST /api/grants/:id/release
+Authorization: Bearer <token>
+x-user-address: bchtest:qcreator...
+```
+
+Creator-only. Builds the milestone release transaction, co-signed by the backend claim authority. The grant must be `ACTIVE` and have remaining milestones.
+
+```json
+{
+  "success": true,
+  "releaseAmount": 3,
+  "milestoneNumber": 2,
+  "wcTransaction": { "...": "..." }
+}
+```
+
+### Confirm release
+
+```http
+POST /api/grants/:id/confirm-release
+Authorization: Bearer <token>
+x-user-address: bchtest:qcreator...
+```
+
+```json
+{
+  "amount": 3,
+  "milestoneNumber": 2,
+  "txHash": "hex64"
+}
+```
+
+Verifies the recipient output, increments `milestones_completed`, adds to `total_released`, marks the milestone `RELEASED`, and flips the grant to `COMPLETED` when the last milestone lands.
+
+### Error responses
+
+| HTTP | `errorCode`        | Meaning                                                       |
+| ---- | ------------------ | ------------------------------------------------------------- |
+| 400  | -                  | Missing `amount`, `milestoneNumber`, or `txHash`.             |
+| 409  | `TX_NOT_FOUND`     | Tx not yet indexed on chipnet. Retryable.                     |
+| 400  | -                  | Release tx is missing the expected recipient output.          |
+| 500  | `CONFIRM_FAILED`   | Server error during confirmation.                             |
+
+## Pause
+
+```http
+POST /api/grants/:id/pause
+POST /api/grants/:id/confirm-pause
+Authorization: Bearer <token>
+x-user-address: bchtest:qcreator...
+```
+
+Creator-only. Pause builds an on-chain state transition that flips the covenant to `PAUSED`, blocking further releases until cancellation (the on-chain covenant does not currently expose resume).
+
+### Pause response
+
+```json
+{
+  "success": true,
+  "nextStatus": "PAUSED",
+  "wcTransaction": { "...": "..." }
+}
+```
+
+### Confirm pause body
+
+```json
+{ "txHash": "hex64" }
+```
+
+The confirm step requires the broadcast tx to carry the expected grant covenant state output (mutable NFT, commitment of at least 35 bytes). On success, status is set to `PAUSED`.
+
+## Cancel
+
+```http
+POST /api/grants/:id/cancel
+POST /api/grants/:id/confirm-cancel
+Authorization: Bearer <token>
+x-user-address: bchtest:qcreator...
+```
+
+Creator-only. Available from `ACTIVE` or `PAUSED`. The cancel transaction refunds the remaining balance to the authority address encoded in the contract constructor.
+
+### Cancel response
+
+```json
+{
+  "success": true,
+  "nextStatus": "CANCELLED",
+  "cancelReturnAddress": "bchtest:q...",
+  "authorityReturnAddress": "bchtest:q...",
+  "signerMatchesReturn": true,
+  "remainingAmount": "900000000",
+  "wcTransaction": { "...": "..." }
+}
+```
+
+If the signer address does not match the authority address baked into the constructor, the response includes a `warning` field. The refund still goes to the contract-encoded authority address regardless.
+
+### Confirm cancel body
+
+```json
+{ "txHash": "hex64" }
+```
+
+The confirm step checks that the refund output reaches the authority's P2PKH address (and, for CashTokens grants, includes a token output for the same category). On success, status is set to `CANCELLED`.
+
+## Transfer recipient rights
+
+```http
+POST /api/grants/:id/transfer
+POST /api/grants/:id/confirm-transfer
+Authorization: Bearer <token>
+x-user-address: bchtest:qrecipient...
+```
+
+Recipient-only, and only when the grant was created with `transferable: true` and is currently `ACTIVE`.
+
+### Transfer body
+
+```json
+{ "newRecipientAddress": "bchtest:qnewrecipient..." }
+```
+
+### Transfer response
+
+```json
+{
+  "success": true,
+  "newRecipientAddress": "bchtest:qnewrecipient...",
+  "newRecipientHash": "hex20",
+  "wcTransaction": { "...": "..." }
+}
+```
+
+### Confirm transfer body
+
+```json
+{
+  "txHash": "hex64",
+  "newRecipientAddress": "bchtest:qnewrecipient..."
+}
+```
+
+The confirm step verifies the new covenant state output is present, then updates the recipient on the grant record.
+
+```json
+{
+  "success": true,
+  "txHash": "hex64",
+  "previousRecipient": "bchtest:qold...",
+  "newRecipient": "bchtest:qnew...",
+  "state": "confirmed",
+  "retryable": false
+}
+```
+
+## Common error shape
+
+All confirm endpoints return a consistent shape on retryable and terminal failures:
+
+| Field        | Values                                |
+| ------------ | ------------------------------------- |
+| `state`      | `pending`, `confirmed`, `failed`      |
+| `retryable`  | `true` when the client should retry   |
+| `errorCode`  | `TX_NOT_FOUND`, `TX_INPUT_NOT_FROM_FUNDER`, `CONFIRM_FAILED` |

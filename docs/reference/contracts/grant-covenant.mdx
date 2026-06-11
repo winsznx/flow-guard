@@ -87,3 +87,8 @@ Recipient-only reassignment of future milestone payouts.
 
 **Output rule**
 - `tx.outputs[0]` must preserve covenant bytecode/token category and keep same state except new `recipient_hash`.
+
+## Recent hardening
+
+- Two-slot authority model: `authorityHash` (creator wallet) gates pause / resume / cancel / transfer and is the cancel-refund target, while `claimAuthorityHash` (backend co-signer) only authorises `releaseMilestone`. A backend compromise on the release key cannot redirect the pool or take over the grant.
+- LIFT-pattern fee cap of 2000 sats on `releaseMilestone`, `pause`, `resume`, `cancel`, and `transfer`. BCH leaving the covenant beyond the milestone payout and continuation output must fall in `[0, 2000]`.

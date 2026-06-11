@@ -77,3 +77,8 @@ Authority-only admin paths.
 - Requires status `ACTIVE` or `PAUSED`, plus cancelable flag bit0.
 - Computes `remainingPool = totalPool - totalDistributed`, requires `remainingPool > 0`.
 - `tx.outputs[0]` must pay authority with remaining BCH/FT.
+
+## Recent hardening
+
+- Two-slot authority model: `authorityHash` (creator wallet) gates pause / resume / cancel and is the cancel-refund target, while `claimAuthorityHash` (backend co-signer) only authorises `reward`. A backend compromise on the issuance key cannot pause, resume, cancel, or redirect the pool.
+- LIFT-pattern fee cap of 2000 sats on `reward`, `pause`, `resume`, and `cancel`. BCH leaving the covenant beyond the recipient payout and continuation output must fall in `[0, 2000]`.
