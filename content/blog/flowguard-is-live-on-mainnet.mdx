@@ -1,0 +1,78 @@
+---
+title: "FlowGuard is live on Bitcoin Cash mainnet"
+date: "2026-06-12"
+summary: "After months on chipnet, FlowGuard's covenant stack is live on BCH mainnet. Here's what shipped, what's still scoped, and what it actually does."
+tags: ["Launch", "Mainnet", "BCH"]
+status: "published"
+featured: true
+author: "FlowGuard Team"
+readingTime: 5
+---
+
+# FlowGuard is live on Bitcoin Cash mainnet
+
+After months on chipnet, the covenants are deployed to mainnet. The full surface is there: vaults, proposals, streams, payments, airdrops, bounties, grants. Self-custody by default. No subscription. No bridge. No custodial holding pen between you and your money.
+
+This post is what shipped, what was hardened in the last 72 hours before launch, and what's deliberately scoped to v1.1.
+
+## What you can actually do today
+
+The on-chain surface is twelve covenants. Each one does one job and stays out of the way:
+
+- **VaultCovenant** holds shared treasury funds. M-of-N spend, period caps, signer allowlists, pause and emergency-lock paths. The vault enforces every spending rule itself; the signers just witness.
+- **ProposalCovenant** tracks a single spend proposal through approve, execute, cancel, expire. The required-approvals threshold is committed at deploy time and can't drift.
+- **VestingCovenant / TrancheVestingCovenant / HybridVestingCovenant** handle linear, step, and hybrid (upfront + linear) vesting. Cliffs, pauses, transfers, cancels — all enforced at the script layer.
+- **RecurringPaymentCovenant** runs payroll-style fixed-interval payouts. Permissionless: anyone can fire the next payment once the interval elapses, the recipient gets paid, the schedule continues.
+- **AirdropCovenant** distributes a fixed amount per claim against a Merkle root. Backend cosigns to gate eligibility; the on-chain math handles the rest.
+- **BountyCovenant** pays the first N winners after off-chain proof verification.
+- **RewardCovenant** is variable-amount distribution for achievement and referral programs.
+- **GrantCovenant** releases a tranche per approved milestone.
+- **VoteLockCovenant** + **TallyCommitment_FixedMax** + **TallyCommitment_Attested** handle on-chain governance. Vote weight is the locked token amount; tallies commit to an immutable result NFT.
+
+All twelve are deployed on mainnet today and reproducible from source. If you want to verify the deployed bytecode matches what's in the repo, run `node scripts/verify-mainnet-deployment.ts` against a public Electrum endpoint. No trust required.
+
+## The hardening pass we ran before deploying
+
+A 2026-06-12 internal audit found three classes of bug that we fixed before any covenant touched mainnet. The full per-covenant change list is in `internal/COVENANT_HARDENING.md`; the short version:
+
+**1. FT-mode `tokenAmount` drain.** Every self-recreating covenant required `nftCommitment + tokenCategory + lockingBytecode` on its state UTXO but never pinned `tokenAmount`. CashTokens consensus conserves token amounts across outputs but doesn't pin which output gets the remainder. With no `tx.outputs.length` cap either, an attacker could recreate the state with zero FT balance and route the FT remainder to a third output. The worst case was `RecurringPaymentCovenant.pay` — permissionless, so anyone could drain the pool in a single transaction. Fixed: explicit `tokenAmount` conservation pin in every FT-mode branch, plus a strict output-count cap at the top of every function.
+
+**2. Dual locktime guard on time-gated paths.** Any function that gated on `tx.locktime >= X` without forcing OP_CLTV was bypassable by a miner colluding with a submitter using all-final `nSequence`. Fixed: every time-gated path now also requires `tx.time >= 0` (the CashScript surface for OP_CHECKLOCKTIMEVERIFY) and `tx.locktime < 500_000_000` (forces block-height semantics).
+
+**3. Missing fee cap on `ProposalCovenant.approve`.** `cancel` and `expire` had fee caps; `approve` didn't. A signer could skim the dust BCH on the proposal NFT per approval. Fixed.
+
+145 new `require()` statements added across 12 covenants. Every existing constraint preserved. Every new constraint is strictly strengthening: a transaction that passed before may now fail, but no transaction that failed before will pass now. The rebuilt artifacts are reproducible from source.
+
+## What runs alongside the covenants
+
+The covenants are the truth. The hosted services are an interface convenience:
+
+- **Backend API** on Railway, talks to Supabase Postgres. Handles SIWX auth (sign-in with BCH), reads and writes the user-facing product rows, broadcasts pre-signed transactions to mainnet.
+- **Indexer** on Railway, subscribes to a public Electrum endpoint (`electrum.imaginary.cash:50002`). When you deploy a covenant through the UI, the backend writes a row with the contract address; the indexer picks it up on its next 60-second registry refresh, subscribes to that address, and starts tracking the UTXO state and its spend history. The indexer rewrites a 905-line scaffolding file from earlier in the project into a 1,089-line working pipeline across six modules. Real block headers from `blockchain.headers.subscribe`, real `is_spent` flips from spending-input tracking, real `(txid, vout)` composite keys.
+- **Redis** for the SIWX nonce store so multi-replica auth survives horizontal scale-out. The nonce is reserved and consumed atomically via Redis `GETDEL`.
+- **Supabase Vault** holds the airdrop master encryption key. The backend reads it on boot; the env-var fallback path exists for local dev but production never uses it.
+
+If any of these services go down, your money is still under your wallet's control and the on-chain rules still apply. The hosted pieces are convenience, not custody.
+
+## What's deferred to v1.1
+
+We're shipping with three known limits, each scoped in its own internal doc:
+
+**The executor service** (auto-fires schedule unlocks for recurring payments and vesting tranches on behalf of users) is dormant. The on-chain contracts work fine without it — recipients click "claim" themselves. A proper executor rewrite is one or two focused days, scoped in `internal/EXECUTOR_STATE.md`. Until then: manual claims.
+
+**Six covenant families don't have shared state-shape decoders yet.** Airdrop, Bounty, Reward, Grant, Payment, and the three vesting variants each have unique 40-byte on-chain layouts that differ from the five shapes in the shared codec. The deployment services have correct local encoders, so on-chain bytes are right. The indexer stores raw `nft_commitment` hex when its decoder can't parse the structured fields, so the identity columns are populated correctly. Frontend can decode client-side if it needs structured views. Full unification is scoped in `internal/CODEC_STATE.md` as v1.1.
+
+**Chaingraph.** ParyonUSD runs a forked chaingraph indexer because they want generic GraphQL over the entire BCH chain. We don't, and chaingraph's ~$200 a month disk floor doesn't fit our budget today. The full deployment recipe (image source, env vars, Hasura migrations, cutover plan) is in `internal/CHAINGRAPH_DEPLOY.md` for the day budget allows or a use case requires it.
+
+## How to verify any of this
+
+- Source is on GitHub: `github.com/winsznx/flow-guard`.
+- The hardened covenant source lives in `contracts/core/`.
+- Reproduce the deployed bytecode with `cd contracts && pnpm run build` then `node scripts/verify-mainnet-deployment.ts`.
+- The on-chain explorer is at `explorer.flowguard.cash`.
+
+If something on the hosted services breaks, the on-chain layer is independent. You can always claim, cancel, spend, or close a covenant directly with a script call. The hosted services are how we keep that experience nice, not where the security lives.
+
+## Try it
+
+`flowguard.cash`. Connect a wallet that's already used Bitcoin Cash (Cashonize, Paytaca, Zapit all work via the WalletConnect bridge). Make a vault, deploy a stream, run a test airdrop. Tell us when something's broken.

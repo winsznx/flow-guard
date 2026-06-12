@@ -261,7 +261,7 @@ export function Footer() {
               </svg>
             </a>
             <a
-              href="https://warpcast.com/flowguard"
+              href="https://farcaster.xyz/flowguard"
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Farcaster"
