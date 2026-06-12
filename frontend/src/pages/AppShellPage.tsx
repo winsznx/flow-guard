@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Coins,
   FileText,
+  Inbox,
   Landmark,
   Layers3,
   Settings,
@@ -21,8 +22,9 @@ import { daoNavSections } from '../data/daoBeta';
 import { deriveDaoSummary, useDaoWorkspace } from '../stores/useDaoWorkspace';
 import { buildDaoBatchStreamState, buildDaoSingleStreamState } from '../utils/daoStreamLaunch';
 
-const daoIcons = {
+const daoIcons: Record<string, typeof Layers3> = {
   Overview: Layers3,
+  Streams: Inbox,
   Team: Users,
   Roles: ShieldCheck,
   Policy: Settings,
@@ -245,7 +247,7 @@ export const AppShellPage: React.FC = () => {
 
         <div className="grid gap-6 lg:grid-cols-2">
           {daoNavSections.map((section) => {
-            const Icon = daoIcons[section.label as keyof typeof daoIcons];
+            const Icon = daoIcons[section.label] ?? FileText;
 
             return (
               <Link
