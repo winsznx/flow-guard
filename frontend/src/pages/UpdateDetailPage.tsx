@@ -3,13 +3,13 @@ import {
   Calendar,
   Clock,
   ArrowLeft,
-  Twitter,
   MessageCircle,
   Send,
   MessageSquare,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { PageMeta } from '../components/seo/PageMeta';
+import { XIcon } from '../components/ui/XIcon';
 
 interface BlogPost {
   slug: string;
@@ -2889,7 +2889,7 @@ export default function UpdateDetailPage() {
               className="flex items-center gap-3 p-4 bg-surface border border-border rounded-xl hover:border-primary/50 transition-all group"
             >
               <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                <Twitter className="w-5 h-5 text-primary" />
+                <XIcon className="w-5 h-5 text-primary" />
               </div>
               <div>
                 <div className="font-semibold text-textPrimary">Discuss on X</div>

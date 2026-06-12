@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Twitter, Send, Youtube } from 'lucide-react';
+import { Send, Youtube } from 'lucide-react';
 import { APP_SITE_URL, BLOG_URL, DOCS_SITE_URL, EXPLORER_SITE_URL, MAIN_SITE_URL } from '../../utils/publicUrls';
 import { BchPriceTicker } from '../ui/BchPriceTicker';
 
@@ -253,10 +253,12 @@ export function Footer() {
               href="https://x.com/flowguard_"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="X (Twitter)"
+              aria-label="X"
               className="text-brand100 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm p-1"
             >
-              <Twitter className="w-5 h-5" />
+              <svg className="w-5 h-5" viewBox="0 0 1200 1227" fill="currentColor" aria-hidden="true">
+                <path d="M714.163 519.284 1160.89 0h-105.86L667.137 450.887 357.328 0H0l468.492 681.821L0 1226.37h105.866l409.625-476.152 327.181 476.152H1200L714.137 519.284h.026ZM569.165 687.828l-47.468-67.894-377.686-540.24h162.604l304.795 435.991 47.468 67.894 396.2 566.721H892.476L569.165 687.854v-.026Z" />
+              </svg>
             </a>
             <a
               href="https://warpcast.com/flowguard"

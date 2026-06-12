@@ -6,7 +6,6 @@ import {
   ChevronDown,
   Mail,
   Send,
-  Twitter,
   Github,
   Youtube,
   BookOpen,
@@ -19,6 +18,7 @@ import {
   LifeBuoy,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
+import { XIcon } from '../components/ui/XIcon';
 import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
 import { ResourcesDropdown } from '../components/ui/ResourcesDropdown';
 import { NoiseBackground } from '../components/ui/NoiseBackground';
@@ -32,7 +32,7 @@ const SECURITY_EMAIL = 'security@flowguard.cash';
 // these placeholder links should be updated by phase 3 if any url has changed.
 
 interface ChannelCard {
-  icon: typeof Mail;
+  icon: React.ComponentType<{ className?: string }>;
   title: string;
   detail: string;
   cta: { label: string; href: string };
@@ -65,8 +65,8 @@ const CHANNELS: ChannelCard[] = [
     responseTime: 'minutes during waking hours',
   },
   {
-    icon: Twitter,
-    title: 'x (twitter)',
+    icon: XIcon,
+    title: 'x',
     detail:
       'shipping updates, postmortems, and protocol news. dm is open but slower than email or telegram for triage.',
     cta: { label: '@flowguard_cash', href: 'https://x.com/flowguard_cash' },

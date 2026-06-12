@@ -23,6 +23,7 @@ import statusRouter from './api/status.js';
 import priceRouter from './api/price.js';
 import authRouter from './api/auth.js';
 import { initializeSchema } from './database/init.js';
+import { initializeMasterKey } from './utils/keyEncryption.js';
 import { startBlockchainMonitor, stopBlockchainMonitor } from './services/blockchain-monitor.js';
 import { startCycleUnlockScheduler, stopCycleUnlockScheduler } from './services/cycle-unlock-scheduler.js';
 import { startTransactionMonitor, stopTransactionMonitor } from './services/TransactionMonitor.js';
@@ -149,6 +150,9 @@ app.use(errorHandler);
 async function startServer() {
   console.log('[db] Initializing Postgres schema...');
   await initializeSchema();
+
+  console.log('[crypto] Loading master key...');
+  await initializeMasterKey();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 FlowGuard backend running on port ${PORT}`);

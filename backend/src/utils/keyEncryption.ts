@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { pool } from '../database/pg.js';
 
 /**
  * Per-record AES-256-GCM encryption for campaign authority keys.
@@ -35,16 +36,90 @@ const AUTH_TAG_LENGTH = 16;
 const SALT_LENGTH = 16;
 const VERSION_TAG_V2 = Buffer.from('v2', 'utf8'); // 2 bytes
 const DEFAULT_SCOPE = 'flowguard.authority-key.v2';
+const VAULT_SECRET_NAME = 'airdrop_master_key';
 
-function getMasterKey(): Buffer {
-  const keyHex = process.env.AIRDROP_CLAIM_KEY_ENCRYPTION_KEY;
-  if (!keyHex || keyHex.length !== 64) {
+let cachedMasterKey: Buffer | null = null;
+let cachedKeySource: 'vault' | 'env' | null = null;
+
+/**
+ * Read the master key from Supabase Vault, falling back to the env var if
+ * Vault is unavailable. Caches the result in memory for sync access by
+ * encrypt/decrypt later. MUST be awaited once at server boot; subsequent
+ * calls are no-ops.
+ *
+ * Order of precedence:
+ *   1. Supabase Vault (vault.decrypted_secrets WHERE name = 'airdrop_master_key')
+ *   2. AIRDROP_CLAIM_KEY_ENCRYPTION_KEY env var (legacy fallback)
+ *
+ * Throws if neither source yields a 64-char hex string. The thrown error
+ * surfaces inside startServer() and crashes the process, preventing the
+ * backend from serving traffic with a degraded crypto state.
+ */
+export async function initializeMasterKey(): Promise<void> {
+  if (cachedMasterKey) return;
+
+  let keyHex: string | null = null;
+
+  try {
+    const result = await pool.query<{ decrypted_secret: string }>(
+      "SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = $1 LIMIT 1",
+      [VAULT_SECRET_NAME],
+    );
+    const candidate = result.rows[0]?.decrypted_secret?.trim();
+    if (candidate && candidate.length === 64 && /^[0-9a-f]{64}$/i.test(candidate)) {
+      keyHex = candidate;
+      cachedKeySource = 'vault';
+      console.log('[crypto] master key loaded from Supabase Vault');
+    } else if (candidate) {
+      console.warn('[crypto] vault secret present but not a 64-char hex; falling through');
+    }
+  } catch (err) {
+    console.warn('[crypto] vault read failed, will try env fallback:', (err as Error).message);
+  }
+
+  if (!keyHex) {
+    const envKey = process.env.AIRDROP_CLAIM_KEY_ENCRYPTION_KEY?.trim();
+    if (envKey && envKey.length === 64 && /^[0-9a-f]{64}$/i.test(envKey)) {
+      keyHex = envKey;
+      cachedKeySource = 'env';
+      console.log('[crypto] master key loaded from env (fallback)');
+    }
+  }
+
+  if (!keyHex) {
     throw new Error(
-      'AIRDROP_CLAIM_KEY_ENCRYPTION_KEY must be a 64-char hex string (32 bytes). '
+      '[crypto] master key not available. Expected either:\n'
+      + "  1. A secret named 'airdrop_master_key' in Supabase Vault, or\n"
+      + '  2. AIRDROP_CLAIM_KEY_ENCRYPTION_KEY env var (64-char hex)\n'
       + 'Generate one with: openssl rand -hex 32',
     );
   }
-  return Buffer.from(keyHex, 'hex');
+
+  cachedMasterKey = Buffer.from(keyHex, 'hex');
+}
+
+function getMasterKey(): Buffer {
+  if (cachedMasterKey) return cachedMasterKey;
+
+  // Fallback path for code that imports this before initializeMasterKey() ran
+  // (e.g. one-shot scripts). Maintains the old sync behaviour by reading env
+  // directly. Production server always goes through initializeMasterKey first.
+  const keyHex = process.env.AIRDROP_CLAIM_KEY_ENCRYPTION_KEY;
+  if (!keyHex || keyHex.length !== 64) {
+    throw new Error(
+      'master key not initialised. Call initializeMasterKey() at boot, or set '
+      + 'AIRDROP_CLAIM_KEY_ENCRYPTION_KEY env var (64-char hex). '
+      + 'Generate one with: openssl rand -hex 32',
+    );
+  }
+  cachedMasterKey = Buffer.from(keyHex, 'hex');
+  cachedKeySource = 'env';
+  return cachedMasterKey;
+}
+
+/** Internal: read which source the cached key came from. For diagnostics only. */
+export function getMasterKeySource(): 'vault' | 'env' | null {
+  return cachedKeySource;
 }
 
 function deriveRecordKey(masterKey: Buffer, salt: Buffer, scope: string): Buffer {
