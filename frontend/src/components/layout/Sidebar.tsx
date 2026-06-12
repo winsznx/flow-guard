@@ -18,6 +18,7 @@ import {
   History,
 } from 'lucide-react';
 import { useAppMode } from '../../hooks/useAppMode';
+import { useNetwork } from '../../hooks/useNetwork';
 import { MAIN_SITE_URL } from '../../utils/publicUrls';
 
 interface SidebarProps {
@@ -43,6 +44,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const location = useLocation();
   const { mode, setMode, toggleMode } = useAppMode();
+  const network = useNetwork();
+  const networkLabel = network === 'mainnet' ? 'BCH Mainnet' : 'BCH Chipnet';
 
   // On mobile, if the menu is open, we treat it as "expanded" regardless of desktop preference
   const resolvedOpen = isOpen || isMobileOpen;
@@ -242,7 +245,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <p className="font-bold mb-1 text-textPrimary whitespace-nowrap">FlowGuard v1.0</p>
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
-              <p className="whitespace-nowrap">BCH Chipnet</p>
+              <p className="whitespace-nowrap">{networkLabel}</p>
             </div>
           </div>
         </div>
