@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -15,7 +15,7 @@ import {
   RefreshCw,
   FileQuestion,
   ShieldQuestion,
-  LifeBuoy,
+  Headphones,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { XIcon } from '../components/ui/XIcon';
@@ -27,9 +27,6 @@ import { APP_SITE_URL, DOCS_SITE_URL } from '../utils/publicUrls';
 
 const SUPPORT_EMAIL = 'support@flowguard.cash';
 const SECURITY_EMAIL = 'security@flowguard.cash';
-
-// TODO(product): confirm canonical handles for telegram, x, youtube, github before launch.
-// these placeholder links should be updated by phase 3 if any url has changed.
 
 interface ChannelCard {
   icon: React.ComponentType<{ className?: string }>;
@@ -222,32 +219,52 @@ const TROUBLESHOOTING: Troubleshoot[] = [
   },
 ];
 
-interface FaqShortItem {
-  q: string;
-  a: string;
+type StatusLevel = 'operational' | 'degraded' | 'down';
+
+interface StatusPayload {
+  overall?: StatusLevel;
 }
 
-const QUICK_QUESTIONS: FaqShortItem[] = [
-  {
-    q: 'is flowguard available on mainnet?',
-    a: 'see the banner at the top of the marketing site for the current network. when we flip to mainnet, every page will reflect it.',
+const STATUS_META: Record<StatusLevel, { label: string; dot: string; text: string; ring: string }> = {
+  operational: {
+    label: 'all systems operational',
+    dot: 'bg-emerald-400',
+    text: 'text-emerald-300',
+    ring: 'border-emerald-400/30 bg-emerald-400/10',
   },
-  {
-    q: 'do i need a flowguard account?',
-    a: 'no. your wallet is your account. you sign in with a wallet signature. there is no email/password.',
+  degraded: {
+    label: 'partial degradation',
+    dot: 'bg-amber-400',
+    text: 'text-amber-300',
+    ring: 'border-amber-400/30 bg-amber-400/10',
   },
-  {
-    q: 'i cannot find my workspace',
-    a: 'workspaces are bound to wallet addresses. connect with the wallet that created the workspace. if you suspect a wallet was switched, check the wallet address shown next to the workspace selector.',
+  down: {
+    label: 'major outage',
+    dot: 'bg-rose-500',
+    text: 'text-rose-300',
+    ring: 'border-rose-400/30 bg-rose-400/10',
   },
-  {
-    q: 'where do i see the audit report?',
-    a: 'see the security page for the audit summary and timeline. external audit pdfs and hashes are linked there as they land.',
-  },
-];
+};
 
 export default function HelpPage() {
   const [openTroubleshoot, setOpenTroubleshoot] = useState<number | null>(0);
+  const [statusLevel, setStatusLevel] = useState<StatusLevel | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/status', { signal: controller.signal })
+      .then((res) => (res.ok ? (res.json() as Promise<StatusPayload>) : null))
+      .then((data) => {
+        if (!data?.overall) return;
+        if (data.overall === 'operational' || data.overall === 'degraded' || data.overall === 'down') {
+          setStatusLevel(data.overall);
+        }
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
+  const status = statusLevel ? STATUS_META[statusLevel] : null;
 
   return (
     <main className="bg-background min-h-screen">
@@ -305,9 +322,32 @@ export default function HelpPage() {
             animate={{ opacity: 1, y: 0 }}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand300/10 border border-brand300/30 mb-6"
           >
-            <LifeBuoy className="w-4 h-4 text-brand300" />
-            <span className="text-sm font-medium text-brand300">help center</span>
+            <Headphones className="w-4 h-4 text-brand300" />
+            <span className="text-sm font-mono uppercase tracking-wider text-brand300">
+              SUPPORT + STATUS
+            </span>
           </motion.div>
+
+          {status && (
+            <motion.a
+              href="/status"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border mb-6 ml-3 ${status.ring}`}
+            >
+              <span className="relative flex h-2 w-2">
+                <span
+                  className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${status.dot}`}
+                />
+                <span className={`relative inline-flex h-2 w-2 rounded-full ${status.dot}`} />
+              </span>
+              <span className={`text-xs font-mono uppercase tracking-wider ${status.text}`}>
+                live
+              </span>
+              <span className={`text-xs font-medium ${status.text}`}>{status.label}</span>
+            </motion.a>
+          )}
 
           <motion.h1
             initial={{ opacity: 0, y: 20 }}
@@ -315,7 +355,7 @@ export default function HelpPage() {
             transition={{ delay: 0.1 }}
             className="font-display text-5xl md:text-7xl mb-6 text-textPrimary leading-tight"
           >
-            we are here when you need us
+            reach a human, fast
           </motion.h1>
 
           <motion.p
@@ -324,8 +364,8 @@ export default function HelpPage() {
             transition={{ delay: 0.2 }}
             className="text-xl text-textSecondary mb-10 max-w-3xl mx-auto leading-relaxed"
           >
-            a small team answers every message. start with the troubleshooting list below - most
-            issues resolve there. if it does not help, email support or jump into telegram.
+            a small team answers every message. pick a channel by urgency, or scan the
+            troubleshooting list, most issues resolve there in under a minute.
           </motion.p>
         </div>
       </section>
@@ -506,39 +546,6 @@ export default function HelpPage() {
                 </div>
               );
             })}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-20 px-6 lg:px-12 bg-surfaceAlt/30">
-        <div className="max-w-3xl mx-auto">
-          <div className="text-center mb-12">
-            <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-3">
-              quick answers
-            </p>
-            <h2 className="font-display text-3xl md:text-4xl text-textPrimary">
-              questions we get every week
-            </h2>
-          </div>
-          <div className="space-y-3">
-            {QUICK_QUESTIONS.map((q) => (
-              <div
-                key={q.q}
-                className="p-5 rounded-2xl border border-border bg-surface"
-              >
-                <p className="font-medium text-textPrimary mb-2">{q.q}</p>
-                <p className="text-sm text-textSecondary leading-relaxed">{q.a}</p>
-              </div>
-            ))}
-          </div>
-          <div className="text-center mt-8">
-            <Link
-              to="/faq"
-              className="inline-flex items-center gap-2 text-sm font-medium text-brand300 hover:text-brand300/80 transition-colors"
-            >
-              see all faq
-              <ArrowRight className="w-4 h-4" />
-            </Link>
           </div>
         </div>
       </section>

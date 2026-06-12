@@ -6,21 +6,14 @@ import {
   Home,
   Search,
   Compass,
-  BookOpen,
-  LifeBuoy,
-  ShieldCheck,
   Sparkles,
   Layers,
-  Wallet,
   Coins,
-  Vote,
-  Gift,
-  Activity,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { NoiseBackground } from '../components/ui/NoiseBackground';
 import { PageMeta } from '../components/seo/PageMeta';
-import { APP_SITE_URL, DOCS_SITE_URL, EXPLORER_SITE_URL } from '../utils/publicUrls';
+import { APP_SITE_URL } from '../utils/publicUrls';
 
 interface SuggestedLink {
   icon: typeof Home;
@@ -55,38 +48,6 @@ const TOP_DESTINATIONS: SuggestedLink[] = [
     detail: 'zero fees, written down.',
     to: '/pricing',
   },
-  {
-    icon: ShieldCheck,
-    label: 'security',
-    detail: 'audit summary, threat model, disclosure.',
-    to: '/security',
-  },
-  {
-    icon: LifeBuoy,
-    label: 'help center',
-    detail: 'support channels, troubleshooting, faq.',
-    to: '/help',
-  },
-  {
-    icon: BookOpen,
-    label: 'documentation',
-    detail: 'concepts, guides, and api reference.',
-    to: DOCS_SITE_URL,
-    external: true,
-  },
-  {
-    icon: Activity,
-    label: 'status',
-    detail: 'are payments processing? is the indexer caught up?',
-    to: '/status',
-  },
-];
-
-const PRODUCT_SHORTCUTS: SuggestedLink[] = [
-  { icon: Wallet, label: 'vaults', detail: 'treasury vaults with policy.', to: '/vesting' },
-  { icon: Coins, label: 'streams', detail: 'vesting and payroll.', to: '/payroll' },
-  { icon: Gift, label: 'airdrops', detail: 'mass distributions.', to: '/use-cases#cat-distribute' },
-  { icon: Vote, label: 'governance', detail: 'proposals and approvals.', to: '/governance-info' },
 ];
 
 export default function NotFoundPage() {
@@ -103,13 +64,7 @@ export default function NotFoundPage() {
     event.preventDefault();
     const trimmed = query.trim();
     if (!trimmed) return;
-    const isAddress = /^(bitcoincash:|bchtest:)?q[a-z0-9]{41}$/i.test(trimmed);
-    const isTxLike = /^[a-f0-9]{32,}$/i.test(trimmed);
-    if (isAddress || isTxLike) {
-      window.location.href = `${EXPLORER_SITE_URL}/search?q=${encodeURIComponent(trimmed)}`;
-      return;
-    }
-    navigate(`/use-cases?search=${encodeURIComponent(trimmed)}`);
+    navigate(`/explorer?q=${encodeURIComponent(trimmed)}&scope=global`);
   };
 
   return (
@@ -210,28 +165,32 @@ export default function NotFoundPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.35 }}
             onSubmit={handleSearchSubmit}
-            className="max-w-xl mx-auto mb-10"
+            className="max-w-2xl mx-auto mb-10"
           >
-            <div className="flex items-center gap-2 p-2 rounded-2xl border border-border bg-surface">
+            <div className="flex items-center gap-2 p-2 rounded-2xl border border-border bg-surface focus-within:border-brand300/60 transition-colors">
               <Search className="w-5 h-5 text-textMuted ml-3 flex-shrink-0" />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="search a tx id, address, or page name"
-                className="flex-1 bg-transparent text-sm text-textPrimary placeholder:text-textMuted focus:outline-none px-2 py-2"
-                aria-label="search flowguard"
+                placeholder="paste a transaction hash, address, or stream ID..."
+                className="flex-1 bg-transparent text-sm font-mono text-textPrimary placeholder:text-textMuted focus:outline-none px-2 py-2"
+                aria-label="look up a transaction, address, or stream"
+                autoFocus
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
               />
               <button
                 type="submit"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primaryHover transition-colors"
               >
-                Search
+                Look up
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
             <p className="text-xs text-textMuted mt-3 text-center font-mono">
-              addresses and transaction ids route to the explorer. everything else searches the site.
+              press enter to open the result in the explorer.
             </p>
           </motion.form>
 
@@ -296,37 +255,6 @@ export default function NotFoundPage() {
                   className="block p-4 rounded-2xl border border-border bg-surface hover:border-brand300/40 transition-colors"
                 >
                   {body}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-16 px-6 lg:px-12">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-10">
-            <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-3">
-              product shortcuts
-            </p>
-            <h2 className="font-display text-2xl sm:text-3xl text-textPrimary">
-              jump straight to a workflow
-            </h2>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {PRODUCT_SHORTCUTS.map((s) => {
-              const Icon = s.icon;
-              return (
-                <Link
-                  key={s.label}
-                  to={s.to}
-                  className="block p-4 rounded-2xl border border-border bg-surface hover:border-brand300/40 transition-colors"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-brand300/10 border border-brand300/30 flex items-center justify-center mb-3">
-                    <Icon className="w-5 h-5 text-brand300" />
-                  </div>
-                  <p className="font-medium text-textPrimary text-sm mb-1">{s.label}</p>
-                  <p className="text-xs text-textSecondary leading-relaxed">{s.detail}</p>
                 </Link>
               );
             })}

@@ -2,16 +2,17 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  ArrowRight,
   ChevronDown,
   HelpCircle,
   Wallet,
   Shield,
   Coins,
   FileText,
+  Search,
   Sparkles,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
+import { Input } from '../components/ui/Input';
 import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
 import { ResourcesDropdown } from '../components/ui/ResourcesDropdown';
 import { PageMeta } from '../components/seo/PageMeta';
@@ -266,16 +267,45 @@ const FAQ_CATEGORIES: FaqCategory[] = [
   },
 ];
 
+function answerText(a: string | string[]): string {
+  return Array.isArray(a) ? a.join(' ') : a;
+}
+
+function itemMatches(item: FaqItem, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (
+    item.q.toLowerCase().includes(needle) ||
+    answerText(item.a).toLowerCase().includes(needle)
+  );
+}
+
 export default function FaqPage() {
+  const [query, setQuery] = useState<string>('');
   const [activeCategory, setActiveCategory] = useState<string>(FAQ_CATEGORIES[0].id);
   const [openItems, setOpenItems] = useState<Record<string, number>>({
     [FAQ_CATEGORIES[0].id]: 0,
   });
 
-  const current = useMemo(
-    () => FAQ_CATEGORIES.find((c) => c.id === activeCategory) ?? FAQ_CATEGORIES[0],
-    [activeCategory],
+  const filteredCategories = useMemo(() => {
+    const trimmed = query.trim();
+    if (!trimmed) return FAQ_CATEGORIES;
+    return FAQ_CATEGORIES
+      .map((cat) => ({ ...cat, items: cat.items.filter((it) => itemMatches(it, trimmed)) }))
+      .filter((cat) => cat.items.length > 0);
+  }, [query]);
+
+  const totalMatches = useMemo(
+    () => filteredCategories.reduce((acc, c) => acc + c.items.length, 0),
+    [filteredCategories],
   );
+
+  const current = useMemo(() => {
+    if (filteredCategories.length === 0) return null;
+    return (
+      filteredCategories.find((c) => c.id === activeCategory) ?? filteredCategories[0]
+    );
+  }, [filteredCategories, activeCategory]);
 
   function toggle(categoryId: string, idx: number) {
     setOpenItems((prev) => ({
@@ -323,169 +353,165 @@ export default function FaqPage() {
         </div>
       </nav>
 
-      <section className="pt-32 pb-12 px-6 lg:px-12">
-        <div className="max-w-4xl mx-auto text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surfaceAlt/50 border border-border mb-6"
-          >
-            <HelpCircle className="w-4 h-4 text-brand300" />
-            <span className="text-xs font-mono uppercase tracking-wider text-textSecondary">
+      <section className="pt-28 pb-6 px-6 lg:px-12">
+        <div className="max-w-4xl mx-auto">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surfaceAlt/50 border border-border mb-4">
+            <HelpCircle className="w-3.5 h-3.5 text-brand300" />
+            <span className="text-[10px] font-mono uppercase tracking-wider text-textSecondary">
               help center
             </span>
-          </motion.div>
-          <motion.h1
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05 }}
-            className="font-display text-5xl md:text-7xl mb-6 text-textPrimary leading-tight"
-          >
+          </div>
+          <h1 className="font-display text-3xl md:text-4xl mb-3 text-textPrimary leading-tight">
             frequently asked questions
-          </motion.h1>
-          <motion.p
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="text-xl text-textSecondary max-w-3xl mx-auto"
-          >
+          </h1>
+          <p className="text-base text-textSecondary max-w-3xl">
             everything you might want to ask before locking real money into an onchain rule.
-            grouped by topic. if you cannot find what you need, the{' '}
-            <Link to="/help" className="text-brand300 hover:underline">
-              help page
-            </Link>{' '}
-            has every contact channel.
-          </motion.p>
+            search across every topic, or browse by category.
+          </p>
         </div>
       </section>
 
-      <section className="px-6 lg:px-12 pb-16">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-10">
-          <aside className="lg:sticky lg:top-28 lg:self-start">
-            <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-4">
-              categories
+      <div className="sticky top-20 z-40 bg-background/90 backdrop-blur-xl border-b border-border/40">
+        <div className="max-w-4xl mx-auto px-6 lg:px-12 py-4">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-textMuted pointer-events-none z-10" />
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="search every question and answer..."
+              aria-label="search faq"
+              className="pl-11"
+            />
+          </div>
+          {query.trim() && totalMatches > 0 && (
+            <p className="mt-2 text-xs font-mono text-textMuted">
+              {totalMatches} match{totalMatches === 1 ? '' : 'es'} across {filteredCategories.length} categor{filteredCategories.length === 1 ? 'y' : 'ies'}
             </p>
-            <nav className="flex lg:flex-col gap-2 overflow-x-auto lg:overflow-visible">
-              {FAQ_CATEGORIES.map((cat) => {
-                const Icon = cat.icon;
-                const active = cat.id === activeCategory;
-                return (
-                  <button
-                    key={cat.id}
-                    onClick={() => setActiveCategory(cat.id)}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left text-sm transition-colors whitespace-nowrap ${
-                      active
-                        ? 'border-brand300/60 bg-brand300/10 text-textPrimary'
-                        : 'border-border bg-surface text-textSecondary hover:text-textPrimary hover:border-brand300/30'
-                    }`}
-                  >
-                    <Icon
-                      className={`w-4 h-4 flex-shrink-0 ${active ? 'text-brand300' : 'text-textMuted'}`}
-                    />
-                    <span>{cat.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-          </aside>
+          )}
+        </div>
+      </div>
 
-          <div>
-            <motion.div
-              key={current.id}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-              className="mb-6"
-            >
-              <h2 className="font-display text-2xl sm:text-3xl text-textPrimary mb-2">{current.label}</h2>
-              <p className="text-textSecondary">{current.intro}</p>
-            </motion.div>
-
-            <div className="space-y-3">
-              {current.items.map((item, idx) => {
-                const isOpen = openItems[current.id] === idx;
-                return (
-                  <motion.div
-                    key={`${current.id}-${idx}`}
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.04 }}
-                    className={`bg-surface border rounded-2xl overflow-hidden transition-colors ${
-                      isOpen ? 'border-brand300/60' : 'border-border hover:border-brand300/30'
-                    }`}
-                  >
-                    <button
-                      onClick={() => toggle(current.id, idx)}
-                      className="w-full flex items-center justify-between gap-4 px-6 py-5 text-left"
-                    >
-                      <span
-                        className={`font-display text-lg transition-colors ${
-                          isOpen ? 'text-brand300' : 'text-textPrimary'
+      <section className="px-6 lg:px-12 pt-10 pb-20">
+        <div className="max-w-6xl mx-auto">
+          {current === null ? (
+            <div className="max-w-2xl mx-auto text-center border border-border rounded-2xl bg-surface px-8 py-16">
+              <Search className="w-8 h-8 text-textMuted mx-auto mb-4" />
+              <p className="font-display text-xl text-textPrimary mb-2">
+                no questions match "{query.trim()}"
+              </p>
+              <p className="text-sm text-textSecondary">
+                try a shorter keyword, or clear the search to browse by category.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-10">
+              <aside className="lg:sticky lg:top-44 lg:self-start">
+                <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-4">
+                  categories
+                </p>
+                <nav className="flex lg:flex-col gap-2 overflow-x-auto lg:overflow-visible">
+                  {filteredCategories.map((cat) => {
+                    const Icon = cat.icon;
+                    const active = cat.id === current.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        onClick={() => setActiveCategory(cat.id)}
+                        className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left text-sm transition-colors whitespace-nowrap ${
+                          active
+                            ? 'border-brand300/60 bg-brand300/10 text-textPrimary'
+                            : 'border-border bg-surface text-textSecondary hover:text-textPrimary hover:border-brand300/30'
                         }`}
                       >
-                        {item.q}
-                      </span>
-                      <motion.div
-                        animate={{ rotate: isOpen ? 180 : 0 }}
-                        transition={{ duration: 0.25 }}
-                        className="flex-shrink-0"
-                      >
-                        <ChevronDown
-                          className={`w-5 h-5 transition-colors ${
-                            isOpen ? 'text-brand300' : 'text-textMuted'
-                          }`}
+                        <Icon
+                          className={`w-4 h-4 shrink-0 ${active ? 'text-brand300' : 'text-textMuted'}`}
                         />
-                      </motion.div>
-                    </button>
-                    <AnimatePresence initial={false}>
-                      {isOpen && (
-                        <motion.div
-                          key="answer"
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.28, ease: 'easeInOut' }}
-                          className="overflow-hidden"
-                        >
-                          <div className="px-6 pb-6 space-y-3 text-textSecondary leading-relaxed">
-                            {Array.isArray(item.a) ? (
-                              item.a.map((p, pi) => <p key={pi}>{p}</p>)
-                            ) : (
-                              <p>{item.a}</p>
-                            )}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </motion.div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </section>
+                        <span className="flex-1">{cat.label}</span>
+                        <span className="text-[10px] font-mono text-textMuted">
+                          {cat.items.length}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </nav>
+              </aside>
 
-      <section className="py-16 px-6 lg:px-12 bg-surfaceAlt/30 border-t border-border">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="font-display text-2xl sm:text-3xl lg:text-4xl text-textPrimary mb-4">
-            still have a question?
-          </h2>
-          <p className="text-lg text-textSecondary mb-8">
-            the help page lists every channel - email, telegram, github, and the live status board.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link to="/help">
-              <button className="group bg-primary text-white px-8 py-4 rounded-full text-base font-semibold hover:bg-primaryHover transition-all shadow-2xl flex items-center gap-3">
-                visit help center
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </button>
-            </Link>
-            <a href={DOCS_SITE_URL} target="_blank" rel="noopener noreferrer">
-              <button className="border-2 border-border text-textPrimary px-8 py-4 rounded-full text-base font-semibold hover:border-primary hover:bg-surfaceAlt/30 transition-all">
-                read the docs
-              </button>
-            </a>
-          </div>
+              <div>
+                <motion.div
+                  key={current.id}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="mb-6"
+                >
+                  <h2 className="font-display text-2xl sm:text-3xl text-textPrimary mb-2">{current.label}</h2>
+                  <p className="text-textSecondary">{current.intro}</p>
+                </motion.div>
+
+                <div className="space-y-3">
+                  {current.items.map((item, idx) => {
+                    const isOpen = openItems[current.id] === idx;
+                    return (
+                      <motion.div
+                        key={`${current.id}-${idx}-${item.q}`}
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.04 }}
+                        className={`bg-surface border rounded-2xl overflow-hidden transition-colors ${
+                          isOpen ? 'border-brand300/60' : 'border-border hover:border-brand300/30'
+                        }`}
+                      >
+                        <button
+                          onClick={() => toggle(current.id, idx)}
+                          className="w-full flex items-center justify-between gap-4 px-6 py-5 text-left"
+                        >
+                          <span
+                            className={`font-display text-lg transition-colors ${
+                              isOpen ? 'text-brand300' : 'text-textPrimary'
+                            }`}
+                          >
+                            {item.q}
+                          </span>
+                          <motion.div
+                            animate={{ rotate: isOpen ? 180 : 0 }}
+                            transition={{ duration: 0.25 }}
+                            className="shrink-0"
+                          >
+                            <ChevronDown
+                              className={`w-5 h-5 transition-colors ${
+                                isOpen ? 'text-brand300' : 'text-textMuted'
+                              }`}
+                            />
+                          </motion.div>
+                        </button>
+                        <AnimatePresence initial={false}>
+                          {isOpen && (
+                            <motion.div
+                              key="answer"
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.28, ease: 'easeInOut' }}
+                              className="overflow-hidden"
+                            >
+                              <div className="px-6 pb-6 space-y-3 text-textSecondary leading-relaxed">
+                                {Array.isArray(item.a) ? (
+                                  item.a.map((p, pi) => <p key={pi}>{p}</p>)
+                                ) : (
+                                  <p>{item.a}</p>
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

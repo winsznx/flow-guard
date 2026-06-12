@@ -4,95 +4,51 @@ import { motion } from 'framer-motion';
 import {
   Wallet,
   Bell,
-  Download,
-  Trash2,
   LogOut,
-  ShieldAlert,
-  ShieldCheck,
-  Clock,
   Copy,
   Check,
-  Mail,
-  Webhook,
-  ExternalLink,
-  RefreshCw,
+  Info,
+  ShieldCheck,
+  Plug,
+  Globe,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { PageMeta } from '../components/seo/PageMeta';
-import { APP_SITE_URL, DOCS_SITE_URL } from '../utils/publicUrls';
+import { useWallet } from '../hooks/useWallet';
+import { useWalletModal } from '../hooks/useWalletModal';
+import { useNetwork } from '../hooks/useNetwork';
+import { APP_SITE_URL } from '../utils/publicUrls';
 
-// TODO(integration): wire the real wallet context, session bearer expiry, and
-// notification preference store before phase 3 ships. this page currently uses
-// placeholder values so the layout is reviewable independent of the wallet hooks.
-
-const PLACEHOLDER_WALLET = {
-  address: 'bitcoincash:qzh4...examplev9q',
-  shortAddress: 'qzh4...v9q',
-  network: 'chipnet',
-  connectedAt: '2026-06-09 14:22 utc',
-  walletProvider: 'paytaca',
-};
-
-const PLACEHOLDER_SESSION = {
-  issuedAt: '2026-06-09 14:22 utc',
-  expiresAt: '2026-06-16 14:22 utc',
-  scope: 'workspace:read workspace:write',
-};
-
-interface SettingsSectionProps {
-  title: string;
-  description: string;
-  icon: typeof Wallet;
-  children: React.ReactNode;
-  tone?: 'default' | 'danger';
+function truncateAddress(address: string): string {
+  if (address.length <= 16) return address;
+  const head = address.slice(0, 10);
+  const tail = address.slice(-6);
+  return `${head}...${tail}`;
 }
 
-function SettingsSection({
-  title,
-  description,
-  icon: Icon,
-  children,
-  tone = 'default',
-}: SettingsSectionProps) {
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-      className={`rounded-2xl border ${
-        tone === 'danger' ? 'border-red-200 bg-red-50/40' : 'border-border bg-surface'
-      } overflow-hidden`}
-    >
-      <header className="px-6 py-5 border-b border-border flex items-start gap-4">
-        <div
-          className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-            tone === 'danger'
-              ? 'bg-red-100 border border-red-200'
-              : 'bg-brand300/10 border border-brand300/30'
-          }`}
-        >
-          <Icon
-            className={`w-5 h-5 ${tone === 'danger' ? 'text-red-600' : 'text-brand300'}`}
-          />
-        </div>
-        <div className="flex-1">
-          <h2 className="font-display text-xl text-textPrimary leading-tight">{title}</h2>
-          <p className="text-sm text-textSecondary mt-1 leading-relaxed">{description}</p>
-        </div>
-      </header>
-      <div className="px-6 py-5 space-y-4">{children}</div>
-    </motion.section>
-  );
+function networkLabel(network: string): string {
+  if (network === 'mainnet') return 'BCH Mainnet';
+  if (network === 'chipnet') return 'BCH Chipnet';
+  if (network === 'testnet') return 'BCH Testnet';
+  return network;
 }
 
-interface KeyValueRowProps {
-  label: string;
+function walletProviderLabel(walletType: string | null): string {
+  if (!walletType) return 'unknown';
+  const normalized = walletType.toLowerCase();
+  if (normalized.includes('paytaca')) return 'Paytaca';
+  if (normalized.includes('cashonize')) return 'Cashonize';
+  if (normalized.includes('walletconnect')) return 'WalletConnect';
+  if (normalized.includes('wizardconnect')) return 'WizardConnect';
+  return walletType;
+}
+
+interface CopyButtonProps {
   value: string;
-  copyable?: boolean;
-  mono?: boolean;
+  label: string;
 }
 
-function KeyValueRow({ label, value, copyable = false, mono = false }: KeyValueRowProps) {
+function CopyButton({ value, label }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     void navigator.clipboard.writeText(value).then(() => {
@@ -101,93 +57,33 @@ function KeyValueRow({ label, value, copyable = false, mono = false }: KeyValueR
     });
   };
   return (
-    <div className="flex items-start justify-between gap-4 py-3 border-b border-border last:border-b-0">
-      <p className="text-xs font-mono uppercase tracking-wider text-textMuted pt-1">{label}</p>
-      <div className="flex items-center gap-2 max-w-[60%]">
-        <p
-          className={`text-sm text-textPrimary text-right break-all ${mono ? 'font-mono' : ''}`}
-        >
-          {value}
-        </p>
-        {copyable && (
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="p-1.5 rounded-md hover:bg-surfaceAlt/50 transition-colors text-textMuted hover:text-textPrimary"
-            aria-label={`copy ${label}`}
-          >
-            {copied ? <Check className="w-4 h-4 text-brand300" /> : <Copy className="w-4 h-4" />}
-          </button>
-        )}
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-surface hover:bg-surfaceAlt/50 transition-colors text-xs font-mono text-textSecondary hover:text-textPrimary"
+      aria-label={`copy ${label}`}
+    >
+      {copied ? (
+        <>
+          <Check className="w-3.5 h-3.5 text-brand300" />
+          copied
+        </>
+      ) : (
+        <>
+          <Copy className="w-3.5 h-3.5" />
+          copy
+        </>
+      )}
+    </button>
   );
 }
 
-interface NotificationToggleProps {
-  label: string;
-  description: string;
-  defaultChecked?: boolean;
-  icon: typeof Mail;
-  disabled?: boolean;
-}
-
-function NotificationToggle({
-  label,
-  description,
-  defaultChecked = false,
-  icon: Icon,
-  disabled = false,
-}: NotificationToggleProps) {
-  const [checked, setChecked] = useState(defaultChecked);
-  return (
-    <div className="flex items-start justify-between gap-4 py-3 border-b border-border last:border-b-0">
-      <div className="flex items-start gap-3 flex-1">
-        <div className="w-9 h-9 rounded-lg bg-surfaceAlt/40 border border-border flex items-center justify-center flex-shrink-0">
-          <Icon className="w-4 h-4 text-textSecondary" />
-        </div>
-        <div>
-          <p className="text-sm font-medium text-textPrimary">{label}</p>
-          <p className="text-xs text-textSecondary mt-1 leading-relaxed">{description}</p>
-        </div>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={() => !disabled && setChecked((v) => !v)}
-        className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors mt-1 ${
-          checked ? 'bg-brand300' : 'bg-surfaceAlt/80'
-        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-      >
-        <span
-          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-            checked ? 'translate-x-5' : 'translate-x-0'
-          }`}
-        />
-      </button>
-    </div>
-  );
-}
-
-export default function SettingsPage() {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const handleClearLocalState = () => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.clear();
-    window.sessionStorage.clear();
-    setConfirmDelete(false);
-    window.location.href = '/';
-  };
-
+function PageChrome({ children }: { children: React.ReactNode }) {
   return (
     <main className="bg-background min-h-screen">
       <PageMeta
-        title="Settings"
-        description="Manage your FlowGuard connected wallet, session, notification preferences, and local workspace state."
+        title="Account Settings"
+        description="Your FlowGuard wallet identity, network preferences, and session controls."
         path="/settings"
       />
 
@@ -219,230 +115,324 @@ export default function SettingsPage() {
         </div>
       </nav>
 
-      <section className="pt-32 pb-12 px-6 lg:px-12">
+      {children}
+
+      <Footer />
+    </main>
+  );
+}
+
+function EmptyState() {
+  const { openModal } = useWalletModal();
+  return (
+    <>
+      <section className="pt-32 pb-8 px-6 lg:px-12">
         <div className="max-w-3xl mx-auto">
           <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-2">
             account
           </p>
-          <h1 className="font-display text-4xl md:text-5xl text-textPrimary mb-3">settings</h1>
+          <h1 className="font-display text-3xl md:text-4xl text-textPrimary mb-3">
+            Account Settings
+          </h1>
           <p className="text-base text-textSecondary leading-relaxed max-w-2xl">
-            manage your wallet connection, session, notification preferences, and local
-            workspace state. flowguard stores no email or password - your wallet is your identity.
+            Your wallet is your identity on FlowGuard. Connect one to view and manage your account.
           </p>
         </div>
       </section>
 
-      <section className="py-8 px-6 lg:px-12">
-        <div className="max-w-3xl mx-auto space-y-6">
-          <SettingsSection
-            title="connected wallet"
-            description="this is the wallet flowguard uses to sign every action. switching the wallet means switching identities."
-            icon={Wallet}
+      <section className="pb-24 px-6 lg:px-12">
+        <div className="max-w-3xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="rounded-2xl border border-dashed border-border bg-surface px-8 py-14 flex flex-col items-center text-center"
           >
-            <KeyValueRow
-              label="address"
-              value={PLACEHOLDER_WALLET.address}
-              copyable
-              mono
-            />
-            <KeyValueRow label="short" value={PLACEHOLDER_WALLET.shortAddress} mono />
-            <KeyValueRow label="network" value={PLACEHOLDER_WALLET.network} />
-            <KeyValueRow label="wallet" value={PLACEHOLDER_WALLET.walletProvider} />
-            <KeyValueRow label="connected" value={PLACEHOLDER_WALLET.connectedAt} mono />
-            <div className="flex flex-col sm:flex-row gap-3 pt-4">
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-border text-sm font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Switch wallet
-              </button>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-border text-sm font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                Disconnect
-              </button>
+            <div className="w-14 h-14 rounded-2xl bg-brand300/10 border border-brand300/30 flex items-center justify-center mb-5">
+              <Plug className="w-6 h-6 text-brand300" />
             </div>
-          </SettingsSection>
-
-          <SettingsSection
-            title="session"
-            description="session tokens are signed by your wallet and expire on a fixed window. they cannot be replayed against another address."
-            icon={ShieldCheck}
-          >
-            <KeyValueRow label="issued" value={PLACEHOLDER_SESSION.issuedAt} mono />
-            <KeyValueRow label="expires" value={PLACEHOLDER_SESSION.expiresAt} mono />
-            <KeyValueRow label="scope" value={PLACEHOLDER_SESSION.scope} mono />
-            <div className="p-4 rounded-xl bg-surfaceAlt/40 border border-border flex items-start gap-3">
-              <Clock className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
-              <p className="text-xs text-textSecondary leading-relaxed">
-                if your session expires, you will be prompted to sign a new bearer message on
-                your next action. funds and covenants are not affected - only dashboard access.
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full bg-primary text-white text-sm font-medium hover:bg-primaryHover transition-colors"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Re-sign session
-              </button>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-border text-sm font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                Sign out
-              </button>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection
-            title="notifications"
-            description="choose how flowguard should alert you about claim windows, threshold breaches, and signer activity."
-            icon={Bell}
-          >
-            <NotificationToggle
-              label="email - stream claim ready"
-              description="send an email when a vesting tranche or payroll unlock is available to claim."
-              icon={Mail}
-              defaultChecked
-            />
-            <NotificationToggle
-              label="email - threshold breach"
-              description="alert when a budget plan, signer threshold, or rate limit is hit."
-              icon={Mail}
-              defaultChecked
-            />
-            <NotificationToggle
-              label="email - signer approval requested"
-              description="ping when another signer needs your approval on a co-signed action."
-              icon={Mail}
-            />
-            <NotificationToggle
-              label="webhook - workflow events"
-              description="post a json payload to your endpoint for every workflow state change. configure in the integrations panel."
-              icon={Webhook}
-              disabled
-            />
-            <div className="pt-3">
-              <p className="text-xs text-textMuted font-mono">
-                email destination defaults to none. add a verified email under integrations to
-                start receiving alerts.
-              </p>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection
-            title="data export"
-            description="export your workspace data. flowguard stores no personal info beyond what you opt in to share - wallet address, optional email, and audit history."
-            icon={Download}
-          >
-            <div className="p-4 rounded-xl bg-surfaceAlt/40 border border-border flex items-start gap-3">
-              <ShieldCheck className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
-              <p className="text-sm text-textSecondary leading-relaxed">
-                your covenants, streams, and receipts live on chain - you can always export them
-                from the explorer. the dashboard export covers our derived state: workspace
-                membership, signer aliases, notification preferences, and audit log.
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full bg-primary text-white text-sm font-medium hover:bg-primaryHover transition-colors"
-              >
-                <Download className="w-4 h-4" />
-                Download workspace json
-              </button>
-              <a
-                href={`${DOCS_SITE_URL}/legal/data-export`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-border text-sm font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
-              >
-                Request gdpr export
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection
-            title="danger zone"
-            description="clear local state and sign out. this removes nothing on chain - your covenants, receipts, and balances stay intact."
-            icon={ShieldAlert}
-            tone="danger"
-          >
-            <div className="p-4 rounded-xl bg-red-50/60 border border-red-200 flex items-start gap-3">
-              <ShieldAlert className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-medium text-red-700">what this actually does</p>
-                <ul className="mt-2 space-y-1 text-sm text-red-700/90">
-                  <li> -  clears your local browser storage for flowguard</li>
-                  <li> -  removes any cached workspace selection</li>
-                  <li> -  signs you out of the dashboard</li>
-                  <li> -  does not delete any on-chain covenant or receipt</li>
-                  <li> -  does not delete any notification email on file (use data export first)</li>
-                </ul>
-              </div>
-            </div>
-            {confirmDelete ? (
-              <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleClearLocalState}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Yes, clear and sign out
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-border text-sm font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(true)}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-red-300 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Clear local state
-                </button>
-              </div>
-            )}
-          </SettingsSection>
-        </div>
-      </section>
-
-      <section className="py-16 px-6 lg:px-12">
-        <div className="max-w-3xl mx-auto p-6 rounded-2xl border border-border bg-surfaceAlt/30 flex items-start gap-4">
-          <ShieldCheck className="w-6 h-6 text-brand300 mt-1 flex-shrink-0" />
-          <div>
-            <p className="font-semibold text-textPrimary mb-2">need to change something else?</p>
-            <p className="text-sm text-textSecondary leading-relaxed mb-3">
-              workspace-level changes - adding signers, rotating roles, changing approval
-              thresholds - live in the workspace settings inside the dashboard, not on this
-              account page.
+            <h2 className="font-display text-xl text-textPrimary mb-2">
+              Connect a wallet to view settings
+            </h2>
+            <p className="text-sm text-textSecondary max-w-md leading-relaxed mb-6">
+              FlowGuard stores no email or password. Your wallet signature is the only credential, so there is nothing to show until you connect one.
             </p>
-            <Link
-              to="/help"
-              className="inline-flex items-center gap-2 text-sm font-medium text-brand300 hover:text-brand300/80 transition-colors"
+            <button
+              type="button"
+              onClick={openModal}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-white text-sm font-medium hover:bg-primaryHover transition-colors"
             >
-              See the help center
-            </Link>
-          </div>
+              <Wallet className="w-4 h-4" />
+              Connect Wallet
+            </button>
+          </motion.div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+interface ConnectedViewProps {
+  address: string;
+  walletType: string | null;
+  network: string;
+  envNetwork: string;
+  onDisconnect: () => void;
+}
+
+function ConnectedView({
+  address,
+  walletType,
+  network,
+  envNetwork,
+  onDisconnect,
+}: ConnectedViewProps) {
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+
+  const truncated = truncateAddress(address);
+  const provider = walletProviderLabel(walletType);
+  const netLabel = networkLabel(network);
+  const envNetLabel = networkLabel(envNetwork);
+
+  return (
+    <>
+      <section className="pt-32 pb-8 px-6 lg:px-12">
+        <div className="max-w-3xl mx-auto">
+          <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-2">
+            account
+          </p>
+          <h1 className="font-display text-3xl md:text-4xl text-textPrimary mb-3">
+            Account Settings
+          </h1>
+          <p className="text-base text-textSecondary leading-relaxed max-w-2xl">
+            Signed in as <span className="font-mono text-textPrimary">{truncated}</span> on {netLabel}.
+          </p>
         </div>
       </section>
 
-      <Footer />
-    </main>
+      <section className="pb-8 px-6 lg:px-12">
+        <div className="max-w-3xl mx-auto space-y-6">
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="rounded-2xl border border-border bg-surface overflow-hidden"
+          >
+            <div className="px-6 pt-6 pb-5 border-b border-border">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand300/30 to-brand300/5 border border-brand300/30 flex items-center justify-center flex-shrink-0">
+                    <Wallet className="w-5 h-5 text-brand300" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-mono uppercase tracking-wider text-textMuted">
+                      connected wallet
+                    </p>
+                    <p className="font-mono text-lg text-textPrimary mt-1 break-all">
+                      {truncated}
+                    </p>
+                    <p className="text-xs text-textMuted mt-1">via {provider}</p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand300/10 border border-brand300/30 text-xs font-medium text-brand300 whitespace-nowrap">
+                  <span className="w-1.5 h-1.5 rounded-full bg-brand300 animate-pulse" />
+                  {netLabel}
+                </span>
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-surfaceAlt/30 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <p className="font-mono text-xs text-textSecondary break-all">{address}</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <CopyButton value={address} label="wallet address" />
+                <button
+                  type="button"
+                  onClick={onDisconnect}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-surface hover:bg-surfaceAlt/50 transition-colors text-xs font-medium text-textSecondary hover:text-textPrimary"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  disconnect
+                </button>
+              </div>
+            </div>
+          </motion.section>
+
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="rounded-2xl border border-border bg-surface overflow-hidden"
+          >
+            <header className="px-6 py-5 border-b border-border flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-brand300/10 border border-brand300/30 flex items-center justify-center flex-shrink-0">
+                <Globe className="w-5 h-5 text-brand300" />
+              </div>
+              <div className="flex-1">
+                <h2 className="font-display text-xl text-textPrimary leading-tight">
+                  Network Preferences
+                </h2>
+                <p className="text-sm text-textSecondary mt-1 leading-relaxed">
+                  FlowGuard is locked to one network per build. Your wallet must match.
+                </p>
+              </div>
+            </header>
+            <div className="px-6 py-5 space-y-4">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-1">
+                    active network
+                  </p>
+                  <p className="text-sm text-textPrimary font-medium">{envNetLabel}</p>
+                </div>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onMouseEnter={() => setTooltipOpen(true)}
+                    onMouseLeave={() => setTooltipOpen(false)}
+                    onFocus={() => setTooltipOpen(true)}
+                    onBlur={() => setTooltipOpen(false)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border text-xs font-medium text-textSecondary hover:text-textPrimary transition-colors"
+                    aria-describedby="network-tooltip"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                    how to change
+                  </button>
+                  {tooltipOpen && (
+                    <div
+                      id="network-tooltip"
+                      role="tooltip"
+                      className="absolute right-0 top-full mt-2 w-72 p-3 rounded-lg border border-border bg-surface shadow-lg z-10 text-xs text-textSecondary leading-relaxed"
+                    >
+                      Set the <span className="font-mono text-textPrimary">VITE_BCH_NETWORK</span> environment variable to <span className="font-mono text-textPrimary">mainnet</span> or <span className="font-mono text-textPrimary">chipnet</span> and redeploy. The network cannot be toggled at runtime.
+                    </div>
+                  )}
+                </div>
+              </div>
+              {network !== envNetwork && (
+                <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 flex items-start gap-2 text-xs text-amber-800 leading-relaxed">
+                  <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <p>
+                    Your wallet reports <span className="font-mono">{networkLabel(network)}</span> but this build expects <span className="font-mono">{envNetLabel}</span>. Switch network in your wallet to avoid signing against the wrong chain.
+                  </p>
+                </div>
+              )}
+            </div>
+          </motion.section>
+
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="rounded-2xl border border-border bg-surface overflow-hidden"
+          >
+            <header className="px-6 py-5 border-b border-border flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-surfaceAlt/60 border border-border flex items-center justify-center flex-shrink-0">
+                <Bell className="w-5 h-5 text-textSecondary" />
+              </div>
+              <div className="flex-1 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-xl text-textPrimary leading-tight">
+                    Notification Preferences
+                  </h2>
+                  <p className="text-sm text-textSecondary mt-1 leading-relaxed">
+                    Email and webhook alerts for claim windows, threshold breaches, and signer activity.
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surfaceAlt/60 border border-border text-[10px] font-mono uppercase tracking-wider text-textMuted whitespace-nowrap">
+                  Coming with v1.1
+                </span>
+              </div>
+            </header>
+            <div className="px-6 py-5">
+              <p className="text-sm text-textSecondary leading-relaxed">
+                Notification routing depends on the workspace identity service shipping in the next release. Until then, watch the in-app activity feed for state changes.
+              </p>
+            </div>
+          </motion.section>
+
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="rounded-2xl border border-border bg-surface overflow-hidden"
+          >
+            <header className="px-6 py-5 border-b border-border flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-brand300/10 border border-brand300/30 flex items-center justify-center flex-shrink-0">
+                <ShieldCheck className="w-5 h-5 text-brand300" />
+              </div>
+              <div className="flex-1">
+                <h2 className="font-display text-xl text-textPrimary leading-tight">
+                  Data and Privacy
+                </h2>
+                <p className="text-sm text-textSecondary mt-1 leading-relaxed">
+                  Sign out of this browser. Your covenants, streams, and receipts on chain are not affected.
+                </p>
+              </div>
+            </header>
+            <div className="px-6 py-5 space-y-4">
+              {confirmDisconnect ? (
+                <div className="p-4 rounded-xl border border-border bg-surfaceAlt/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <p className="text-sm text-textPrimary">
+                    Disconnect <span className="font-mono">{truncated}</span> from this browser?
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDisconnect(false)}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border text-xs font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onDisconnect}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary text-white text-xs font-medium hover:bg-primaryHover transition-colors"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Yes, disconnect
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDisconnect(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-border text-sm font-medium text-textPrimary hover:bg-surfaceAlt/40 transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign out / disconnect wallet
+                </button>
+              )}
+            </div>
+          </motion.section>
+        </div>
+      </section>
+    </>
+  );
+}
+
+export default function SettingsPage() {
+  const wallet = useWallet();
+  const envNetwork = useNetwork();
+
+  const handleDisconnect = () => {
+    void wallet.disconnect();
+  };
+
+  return (
+    <PageChrome>
+      {wallet.isConnected && wallet.address ? (
+        <ConnectedView
+          address={wallet.address}
+          walletType={wallet.walletType}
+          network={wallet.network}
+          envNetwork={envNetwork}
+          onDisconnect={handleDisconnect}
+        />
+      ) : (
+        <EmptyState />
+      )}
+    </PageChrome>
   );
 }

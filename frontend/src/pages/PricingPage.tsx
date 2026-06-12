@@ -3,14 +3,9 @@ import { motion } from 'framer-motion';
 import {
   ArrowRight,
   Check,
-  Coins,
   Server,
   CloudOff,
-  Wallet,
-  ScrollText,
-  Sparkles,
   Calculator,
-  ShieldCheck,
 } from 'lucide-react';
 import { Footer } from '../components/layout/Footer';
 import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
@@ -18,6 +13,26 @@ import { ResourcesDropdown } from '../components/ui/ResourcesDropdown';
 import { NoiseBackground } from '../components/ui/NoiseBackground';
 import { PageMeta } from '../components/seo/PageMeta';
 import { APP_SITE_URL, DOCS_SITE_URL } from '../utils/publicUrls';
+import { useBchPrice } from '../utils/usePrice';
+
+interface TxCostOp {
+  label: string;
+  sats: number;
+  hint: string;
+}
+
+const TX_COST_OPS: TxCostOp[] = [
+  { label: 'create stream', sats: 600, hint: 'one-shot covenant deploy' },
+  { label: 'claim airdrop', sats: 400, hint: 'recipient-driven, sponsorable' },
+  { label: 'cancel grant', sats: 150, hint: 'creator unwinds remainder' },
+];
+
+function formatUsd(sats: number, bchUsd: number | null): string {
+  if (bchUsd === null) return ' - ';
+  const usd = (sats / 1e8) * bchUsd;
+  if (usd < 0.01) return `$${usd.toFixed(5)}`;
+  return `$${usd.toFixed(4)}`;
+}
 
 interface FeeRow {
   flow: string;
@@ -143,29 +158,6 @@ const COMPARE_ROWS: CompareRow[] = [
   },
 ];
 
-const WHY_ZERO_FEES = [
-  {
-    icon: Coins,
-    title: 'no protocol take',
-    body: 'we do not charge a percentage of throughput, a basis point on streams, or a flat ticket per claim. there is no protocol contract that collects a cut.',
-  },
-  {
-    icon: Wallet,
-    title: 'aligned with bch values',
-    body: 'bitcoin cash exists to be cheap settlement money. layering a fee on top of cheap settlement would defeat the point of being on bch in the first place.',
-  },
-  {
-    icon: ScrollText,
-    title: 'open licensed contracts',
-    body: 'our covenants are open source. forking them and running your own deployment is not a violation of anything. we want self-hosting to be viable.',
-  },
-  {
-    icon: ShieldCheck,
-    title: 'fee-free survives us',
-    body: 'if a future flowguard changes its mind and adds fees, your existing covenants still work fee-free - the rules are on chain, not in our dashboard.',
-  },
-];
-
 const HOSTING_OPTIONS = [
   {
     icon: CloudOff,
@@ -219,6 +211,10 @@ const FAQ = [
 ];
 
 export default function PricingPage() {
+  const { price: bchUsd, source, isStale } = useBchPrice();
+  const priceLabel = bchUsd !== null ? `$${bchUsd.toFixed(2)}` : ' - ';
+  const sourceLabel = source === 'oracle' ? 'gp oracle' : source === 'coingecko' ? 'coingecko' : 'loading';
+
   return (
     <main className="bg-background min-h-screen">
       <PageMeta
@@ -269,87 +265,67 @@ export default function PricingPage() {
       </nav>
 
       <section className="pt-32 pb-16 px-6 lg:px-12">
-        <div className="max-w-4xl mx-auto text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand300/10 border border-brand300/30 mb-6"
-          >
-            <Coins className="w-4 h-4 text-brand300" />
-            <span className="text-sm font-medium text-brand300">pricing</span>
-          </motion.div>
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-10">
+            <div>
+              <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-3">
+                tx cost right now
+              </p>
+              <h1 className="font-display text-4xl md:text-6xl text-textPrimary leading-tight">
+                what you would pay
+                <br />
+                <span className="text-brand300">if you signed it this second.</span>
+              </h1>
+            </div>
+            <div className="flex items-center gap-3 text-sm font-mono text-textMuted">
+              <span className={`inline-block w-2 h-2 rounded-full ${isStale ? 'bg-textMuted' : 'bg-brand300'}`} />
+              <span>bch / usd</span>
+              <span className="text-brand300">{priceLabel}</span>
+              <span className="text-textMuted">via {sourceLabel}</span>
+            </div>
+          </div>
 
-          <motion.h1
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="font-display text-5xl md:text-7xl mb-6 text-textPrimary leading-tight"
-          >
-            zero protocol fees.
-            <br />
-            <span className="text-brand300">you pay bch miners, not us.</span>
-          </motion.h1>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {TX_COST_OPS.map((op, i) => (
+              <motion.div
+                key={op.label}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.06 }}
+                className="relative p-7 rounded-2xl border border-border bg-surface overflow-hidden"
+              >
+                <div className="flex items-baseline justify-between mb-5">
+                  <span className="text-xs font-mono uppercase tracking-wider text-textMuted">
+                    op {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <span className="text-xs font-mono text-textMuted">~ miner fee</span>
+                </div>
+                <p className="text-textPrimary font-medium text-lg mb-1">{op.label}</p>
+                <p className="text-xs text-textMuted mb-6">{op.hint}</p>
+                <div className="flex items-baseline gap-3 mb-1">
+                  <span className="font-display text-4xl text-brand300">{op.sats}</span>
+                  <span className="text-sm font-mono text-textMuted">sat</span>
+                </div>
+                <div className="flex items-baseline gap-2 font-mono text-sm text-textSecondary">
+                  <span>=</span>
+                  <span className="text-textPrimary">{formatUsd(op.sats, bchUsd)}</span>
+                </div>
+              </motion.div>
+            ))}
+          </div>
 
-          <motion.p
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="text-xl text-textSecondary mb-10 max-w-3xl mx-auto leading-relaxed"
-          >
-            flowguard does not charge a percentage, a flat fee, or a spread. every workflow you
-            create costs only the bitcoin cash transaction fee - typically a fraction of a cent.
-            the hosted app and the self-hosted stack are both free.
-          </motion.p>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="flex flex-col sm:flex-row gap-4 justify-center"
-          >
+          <div className="mt-8 flex flex-col sm:flex-row gap-4">
             <a href={APP_SITE_URL}>
-              <button className="group bg-primary text-white px-8 py-4 rounded-full text-base font-semibold hover:bg-primaryHover transition-all shadow-2xl hover:shadow-brand300/20 flex items-center gap-3">
+              <button className="group bg-primary text-white px-7 py-3.5 rounded-full text-sm font-semibold hover:bg-primaryHover transition-all shadow-xl flex items-center gap-2">
                 Launch App
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
             </a>
             <a href="#fees">
-              <button className="border-2 border-border text-textPrimary px-8 py-4 rounded-full text-base font-semibold hover:border-primary hover:bg-surfaceAlt/30 transition-all">
-                See typical costs
+              <button className="border border-border text-textPrimary px-7 py-3.5 rounded-full text-sm font-semibold hover:border-primary hover:bg-surfaceAlt/30 transition-all">
+                Full fee table
               </button>
             </a>
-          </motion.div>
-        </div>
-      </section>
-
-      <section className="py-16 px-6 lg:px-12 bg-surfaceAlt/30">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-12">
-            <p className="text-xs font-mono uppercase tracking-wider text-textMuted mb-3">
-              why zero fees
-            </p>
-            <h2 className="font-display text-3xl md:text-4xl text-textPrimary">
-              the reasoning, written down
-            </h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {WHY_ZERO_FEES.map((item) => {
-              const Icon = item.icon;
-              return (
-                <div
-                  key={item.title}
-                  className="p-6 rounded-2xl border border-border bg-surface"
-                >
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-brand300/10 border border-brand300/30 flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-brand300" />
-                    </div>
-                    <h3 className="font-semibold text-textPrimary text-lg">{item.title}</h3>
-                  </div>
-                  <p className="text-sm text-textSecondary leading-relaxed">{item.body}</p>
-                </div>
-              );
-            })}
           </div>
         </div>
       </section>
@@ -547,32 +523,6 @@ export default function PricingPage() {
                 <p className="text-sm text-textSecondary leading-relaxed">{item.a}</p>
               </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="relative overflow-hidden py-24 px-6 lg:px-12 bg-brand300/5">
-        <NoiseBackground />
-        <div className="relative z-10 max-w-4xl mx-auto text-center">
-          <Sparkles className="w-10 h-10 text-brand300 mx-auto mb-6" />
-          <h2 className="font-display text-4xl md:text-5xl mb-6 text-textPrimary">
-            no quotes, no calls, no negotiation
-          </h2>
-          <p className="text-xl text-textSecondary mb-10 leading-relaxed">
-            connect a wallet and start. the only cost is the miner fee for whatever you sign.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <a href={APP_SITE_URL}>
-              <button className="group bg-primary text-white px-12 py-6 rounded-full text-lg font-bold hover:bg-primaryHover transition-all shadow-2xl flex items-center gap-3 mx-auto">
-                Launch App
-                <ArrowRight className="w-6 h-6 group-hover:translate-x-2 transition-transform" />
-              </button>
-            </a>
-            <Link to="/how-it-works">
-              <button className="border-2 border-border text-textPrimary px-12 py-6 rounded-full text-lg font-bold hover:border-primary hover:bg-surfaceAlt/30 transition-all">
-                See how it works
-              </button>
-            </Link>
           </div>
         </div>
       </section>
