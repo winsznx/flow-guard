@@ -13,6 +13,7 @@ import {
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
 import { toUserFacingError } from '../utils/userError';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 import {
   ChevronLeft,
   Gift,
@@ -315,7 +316,7 @@ export default function AirdropDetailPage() {
       await refreshCampaign();
       setFeedback({
         tone: 'success',
-        title: `Claimed ${userEligibility.amount.toFixed(4)} BCH successfully.`,
+        title: `Claimed ${formatTokenAmount(userEligibility.amount, campaign?.token_type, campaign?.token_category)} successfully.`,
         description: 'The claim transaction was submitted and your campaign history has been refreshed.',
         txHash,
       });
@@ -414,7 +415,7 @@ export default function AirdropDetailPage() {
                   className="flex items-center gap-2"
                 >
                   <Download className="w-4 h-4" />
-                  {actionLoading === 'claim' ? 'Claiming...' : `Claim ${userEligibility.amount.toFixed(4)} BCH`}
+                  {actionLoading === 'claim' ? 'Claiming...' : `Claim ${formatTokenAmount(userEligibility.amount, campaign?.token_type, campaign?.token_category)}`}
                 </Button>
               )}
 
@@ -510,7 +511,7 @@ export default function AirdropDetailPage() {
                 <div>
                   <p className="text-sm font-mono text-textMuted uppercase mb-1">You're Eligible!</p>
                   <p className="text-2xl md:text-3xl font-display font-bold text-primary">
-                    {userEligibility.amount.toFixed(4)} BCH
+                    {formatTokenAmount(userEligibility.amount, campaign?.token_type, campaign?.token_category)}
                   </p>
                   <p className="text-sm font-mono text-textMuted mt-1">Click to claim your allocation</p>
                 </div>
@@ -567,7 +568,7 @@ export default function AirdropDetailPage() {
               <DollarSign className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {campaign.total_amount.toFixed(4)} <span className="text-lg text-textMuted">BCH</span>
+              {formatTokenAmount(campaign.total_amount, campaign.token_type, campaign.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
             </p>
           </Card>
 
@@ -577,7 +578,7 @@ export default function AirdropDetailPage() {
               <Gift className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {campaign.amount_per_claim.toFixed(4)} <span className="text-lg text-textMuted">BCH</span>
+              {formatTokenAmount(campaign.amount_per_claim, campaign.token_type, campaign.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
             </p>
           </Card>
 
@@ -587,7 +588,7 @@ export default function AirdropDetailPage() {
               <TrendingUp className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {(campaign.claimed_count * campaign.amount_per_claim).toFixed(4)} <span className="text-lg text-textMuted">BCH</span>
+              {formatTokenAmount(campaign.claimed_count * campaign.amount_per_claim, campaign.token_type, campaign.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
             </p>
           </Card>
 
@@ -739,7 +740,7 @@ export default function AirdropDetailPage() {
                         )}
                         {typeof event.amount === 'number' && (
                           <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {event.amount.toFixed(4)} BCH
+                            amount: {formatTokenAmount(event.amount, campaign?.token_type, campaign?.token_category)}
                           </p>
                         )}
                       </div>
@@ -792,7 +793,7 @@ export default function AirdropDetailPage() {
                         {claim.claimer.slice(0, 10)}...{claim.claimer.slice(-8)}
                       </td>
                       <td className="py-3 px-4 font-display font-bold text-sm text-textPrimary">
-                        {claim.amount.toFixed(4)} BCH
+                        {formatTokenAmount(claim.amount, campaign?.token_type, campaign?.token_category)}
                       </td>
                       <td className="py-3 px-4">
                         <a

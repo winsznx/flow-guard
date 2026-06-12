@@ -14,6 +14,7 @@ import {
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
 import { toUserFacingError } from '../utils/userError';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 import {
   ChevronLeft,
   Repeat,
@@ -325,7 +326,7 @@ export default function PaymentDetailPage() {
       await refreshPayment();
       setFeedback({
         tone: 'success',
-        title: `Claimed ${claimableAmount.toFixed(4)} BCH successfully.`,
+        title: `Claimed ${formatTokenAmount(claimableAmount, payment?.token_type, payment?.token_category)} successfully.`,
         description: 'The payment history and schedule state have been refreshed.',
         txHash,
       });
@@ -514,7 +515,7 @@ export default function PaymentDetailPage() {
               <div>
                 <p className="text-sm font-mono text-textMuted uppercase mb-1">Claimable Now</p>
                 <p className="text-2xl md:text-3xl font-display font-bold text-primary">
-                  {claimableAmount.toFixed(4)} BCH
+                  {formatTokenAmount(claimableAmount, payment?.token_type, payment?.token_category)}
                 </p>
                 <p className="text-sm font-mono text-textMuted mt-1">
                   1 payment interval ready
@@ -541,7 +542,7 @@ export default function PaymentDetailPage() {
               <DollarSign className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {payment.amount_per_period.toFixed(4)} <span className="text-lg text-textMuted">BCH</span>
+              {formatTokenAmount(payment.amount_per_period, payment.token_type, payment.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(payment.token_type, payment.token_category)}</span>
             </p>
           </Card>
 
@@ -551,7 +552,7 @@ export default function PaymentDetailPage() {
               <TrendingUp className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {payment.total_paid.toFixed(4)} <span className="text-lg text-textMuted">BCH</span>
+              {formatTokenAmount(payment.total_paid, payment.token_type, payment.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(payment.token_type, payment.token_category)}</span>
             </p>
             <p className="text-xs font-mono text-textMuted mt-1">{payment.payment_count} payments</p>
           </Card>
@@ -684,7 +685,7 @@ export default function PaymentDetailPage() {
                         )}
                         {typeof event.amount === 'number' && (
                           <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {event.amount.toFixed(4)} BCH
+                            amount: {formatTokenAmount(event.amount, payment?.token_type, payment?.token_category)}
                           </p>
                         )}
                       </div>
@@ -733,7 +734,7 @@ export default function PaymentDetailPage() {
                         {new Date(item.paid_at * 1000).toLocaleDateString()}
                       </td>
                       <td className="py-3 px-4 font-display font-bold text-sm text-textPrimary">
-                        {item.amount.toFixed(4)} BCH
+                        {formatTokenAmount(item.amount, payment?.token_type, payment?.token_category)}
                       </td>
                       <td className="py-3 px-4">
                         <a
