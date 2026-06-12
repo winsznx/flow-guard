@@ -31,6 +31,7 @@ import { StatsCard } from '../components/shared/StatsCard';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
 import { fetchRewards } from '../services/rewardApi';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 import type {
   RewardCategory,
   RewardRow,
@@ -238,8 +239,8 @@ export default function RewardsPage() {
             />
             <StatsCard
               label="Total Distributed"
-              value={`${totalDistributed.toFixed(4)} BCH`}
-              subtitle="Across all campaigns"
+              value={totalDistributed.toFixed(4)}
+              subtitle="Across all campaigns (mixed tokens)"
               icon={DollarSign}
               color="accent"
               progress={{
@@ -256,8 +257,8 @@ export default function RewardsPage() {
             />
             <StatsCard
               label="Total Pool"
-              value={`${totalPool.toFixed(4)} BCH`}
-              subtitle="All campaigns"
+              value={totalPool.toFixed(4)}
+              subtitle="All campaigns (mixed tokens)"
               icon={TrendingUp}
               color="muted"
             />
@@ -371,7 +372,7 @@ export default function RewardsPage() {
                           {row.status}
                         </span>
                         <span className="px-2.5 py-1 rounded-full border border-border text-xs font-mono text-textMuted">
-                          {row.token_type}
+                          {tokenSymbol(row.token_type, row.token_category)}
                         </span>
                       </div>
                       <h3 className="font-display font-bold text-xl md:text-2xl text-textPrimary truncate">
@@ -401,25 +402,25 @@ export default function RewardsPage() {
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Total Pool</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {(row.total_pool ?? 0).toFixed(4)} {row.token_type}
+                        {formatTokenAmount(row.total_pool ?? 0, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Max Reward</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {(row.max_reward_amount ?? 0).toFixed(4)} {row.token_type}
+                        {formatTokenAmount(row.max_reward_amount ?? 0, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Distributed</p>
                       <p className="font-display font-bold text-accent">
-                        {(row.distributed_total ?? 0).toFixed(4)} {row.token_type}
+                        {formatTokenAmount(row.distributed_total ?? 0, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Remaining</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {remaining.toFixed(4)} {row.token_type}
+                        {formatTokenAmount(remaining, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
                       </p>
                     </div>
                   </div>

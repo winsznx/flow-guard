@@ -55,6 +55,7 @@ import {
   type WalletInterface,
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { formatTokenAmount } from '../utils/tokenFormat';
 import { toUserFacingError } from '../utils/userError';
 import {
   fetchBounty,
@@ -63,7 +64,6 @@ import {
   type BountyClaim,
   type BountyRow,
   type BountyStatus,
-  type BountyTokenType,
 } from '../services/bountyApi';
 
 type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
@@ -98,11 +98,6 @@ interface ClaimWinnerInput {
 const TX_HASH_REGEX = /^[0-9a-fA-F]{64}$/;
 const PROOF_HASH_REGEX = /^[0-9a-fA-F]{64}$/;
 const NON_ZERO_PROOF_REGEX = /[1-9a-fA-F]/;
-
-function formatBountyAmount(amount: number, tokenType: BountyTokenType): string {
-  if (tokenType === 'BCH') return `${amount.toFixed(4)} BCH`;
-  return `${amount.toLocaleString()} tokens`;
-}
 
 function formatBountyEventLabel(eventType: string): string {
   switch (eventType) {
@@ -542,7 +537,7 @@ export default function BountyDetailPage() {
       setProofHash('');
       setFeedback({
         tone: 'success',
-        title: `Paid winner ${formatBountyAmount(bounty.reward_per_winner, bounty.token_type)}.`,
+        title: `Paid winner ${formatTokenAmount(bounty.reward_per_winner, bounty.token_type, bounty.token_category)}.`,
         description: 'The claim transaction was submitted and the bounty history is refreshed.',
         txHash,
       });
@@ -584,7 +579,7 @@ export default function BountyDetailPage() {
     if (!bounty) return;
     const remainingPool = bounty.reward_per_winner * remainingPrizes;
     const confirmation = window.confirm(
-      `Cancel this bounty?\n\nRemaining pool: ${formatBountyAmount(remainingPool, bounty.token_type)}\nThis amount will be refunded to your wallet.\n\nThis action cannot be undone.`,
+      `Cancel this bounty?\n\nRemaining pool: ${formatTokenAmount(remainingPool, bounty.token_type, bounty.token_category)}\nThis amount will be refunded to your wallet.\n\nThis action cannot be undone.`,
     );
     if (!confirmation) return;
     if (!wallet.isConnected) {
@@ -779,7 +774,7 @@ export default function BountyDetailPage() {
               <div className="flex-1">
                 <h3 className="text-xl font-display font-bold text-textPrimary mb-1">Pay a Winner</h3>
                 <p className="text-sm text-textMuted font-mono">
-                  Each winner receives {formatBountyAmount(bounty.reward_per_winner, bounty.token_type)}. Backend
+                  Each winner receives {formatTokenAmount(bounty.reward_per_winner, bounty.token_type, bounty.token_category)}. Backend
                   co-signs the claim path.
                 </p>
               </div>
@@ -804,7 +799,7 @@ export default function BountyDetailPage() {
               <Button type="submit" disabled={isClaimDisabled} className="w-full sm:w-auto">
                 {actionLoading === 'claim'
                   ? 'Paying winner...'
-                  : `Pay ${formatBountyAmount(bounty.reward_per_winner, bounty.token_type)}`}
+                  : `Pay ${formatTokenAmount(bounty.reward_per_winner, bounty.token_type, bounty.token_category)}`}
               </Button>
             </form>
           </Card>
@@ -847,7 +842,7 @@ export default function BountyDetailPage() {
               <DollarSign className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatBountyAmount(totalPool, bounty.token_type)}
+              {formatTokenAmount(totalPool, bounty.token_type, bounty.token_category)}
             </p>
           </Card>
 
@@ -857,7 +852,7 @@ export default function BountyDetailPage() {
               <Target className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatBountyAmount(bounty.reward_per_winner, bounty.token_type)}
+              {formatTokenAmount(bounty.reward_per_winner, bounty.token_type, bounty.token_category)}
             </p>
           </Card>
 
@@ -867,7 +862,7 @@ export default function BountyDetailPage() {
               <CheckCircle className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatBountyAmount(bounty.total_paid, bounty.token_type)}
+              {formatTokenAmount(bounty.total_paid, bounty.token_type, bounty.token_category)}
             </p>
           </Card>
 
@@ -998,7 +993,7 @@ export default function BountyDetailPage() {
                         )}
                         {typeof event.amount === 'number' && (
                           <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {formatBountyAmount(event.amount, bounty.token_type)}
+                            amount: {formatTokenAmount(event.amount, bounty.token_type, bounty.token_category)}
                           </p>
                         )}
                       </div>
@@ -1067,7 +1062,7 @@ export default function BountyDetailPage() {
                         {claim.winner_address.slice(0, 10)}...{claim.winner_address.slice(-8)}
                       </td>
                       <td className="py-3 px-4 font-display font-bold text-sm text-textPrimary">
-                        {formatBountyAmount(claim.amount, bounty.token_type)}
+                        {formatTokenAmount(claim.amount, bounty.token_type, bounty.token_category)}
                       </td>
                       <td className="py-3 px-4">
                         <a

@@ -11,6 +11,7 @@ import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
+import { formatTokenAmount } from '../utils/tokenFormat';
 
 type BatchScope = 'personal' | 'treasury' | 'context';
 type BatchStatusFilter = 'all' | 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
@@ -63,11 +64,15 @@ interface BatchRunEvent {
   created_at: number;
 }
 
-function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
-  return `${amount.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: tokenType === 'BCH' ? 8 : 0,
-  })} ${tokenType === 'BCH' ? 'BCH' : 'tokens'}`;
+function formatAssetAmount(
+  amount: number,
+  tokenType: 'BCH' | 'CASHTOKENS',
+  tokenCategory?: string | null,
+) {
+  return formatTokenAmount(amount, tokenType, tokenCategory, {
+    decimals: tokenType === 'BCH' ? 8 : 0,
+    separator: true,
+  });
 }
 
 function formatBatchEventLabel(eventType: string) {
@@ -269,7 +274,7 @@ export default function StreamBatchHistoryPage() {
       className: 'text-right',
       render: (row) => (
         <p className="font-display font-bold text-primary">
-          {formatAssetAmount(row.total_amount, row.token_type)}
+          {formatAssetAmount(row.total_amount, row.token_type, row.token_category)}
         </p>
       ),
     },
@@ -378,7 +383,7 @@ export default function StreamBatchHistoryPage() {
             />
             <StatsCard
               label="Value in view"
-              value={batches[0] ? formatAssetAmount(totalValueInView, batches[0].token_type) : '0 BCH'}
+              value={batches[0] ? formatAssetAmount(totalValueInView, batches[0].token_type, batches[0].token_category) : '0 BCH'}
               subtitle="Aggregate batch funding value"
               icon={Sparkles}
               color="secondary"
@@ -521,7 +526,7 @@ export default function StreamBatchHistoryPage() {
                     <div className="rounded-2xl border border-border bg-surface px-4 py-3">
                       <p className="text-[11px] uppercase tracking-[0.18em] text-textMuted font-mono mb-1">Batch Value</p>
                       <p className="font-display text-xl text-textPrimary">
-                        {formatAssetAmount(selectedBatch.total_amount, selectedBatch.token_type)}
+                        {formatAssetAmount(selectedBatch.total_amount, selectedBatch.token_type, selectedBatch.token_category)}
                       </p>
                     </div>
                     <div className="rounded-2xl border border-border bg-surface px-4 py-3">
@@ -585,7 +590,7 @@ export default function StreamBatchHistoryPage() {
                           </div>
                           <div className="text-right">
                             <p className="text-sm font-medium text-textPrimary">
-                              {formatAssetAmount(stream.total_amount, stream.token_type)}
+                              {formatAssetAmount(stream.total_amount, stream.token_type, selectedBatch?.token_category)}
                             </p>
                             <p className="text-xs text-textMuted mt-1">{stream.status}</p>
                           </div>
@@ -625,7 +630,7 @@ export default function StreamBatchHistoryPage() {
                             <div className="text-right">
                               {typeof event.amount === 'number' && (
                                 <p className="text-sm font-medium text-primary">
-                                  {formatAssetAmount(event.amount, selectedBatch.token_type)}
+                                  {formatAssetAmount(event.amount, selectedBatch.token_type, selectedBatch.token_category)}
                                 </p>
                               )}
                               {event.tx_hash && (

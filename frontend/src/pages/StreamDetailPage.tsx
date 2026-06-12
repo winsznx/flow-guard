@@ -23,6 +23,7 @@ import { SkeletonStats, SkeletonCard } from '../components/ui/Skeleton';
 import { CircularProgress } from '../components/streams/CircularProgress';
 import { StreamScheduleChart } from '../components/streams/StreamScheduleChart';
 import { formatLogicalId } from '../utils/display';
+import { tokenSymbol } from '../utils/tokenFormat';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
 import { toUserFacingError } from '../utils/userError';
@@ -136,11 +137,12 @@ interface FeedbackState {
 const FRESH_CREATE_TITLE = 'Stream created. Funding is the next step.';
 const FRESH_CREATE_DESCRIPTION = 'The stream exists on-chain. Fund this stream from here to activate vesting.';
 
-function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
-  return `${amount.toLocaleString(undefined, {
+function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS', tokenCategory?: string | null) {
+  const formatted = amount.toLocaleString(undefined, {
     minimumFractionDigits: 0,
     maximumFractionDigits: tokenType === 'BCH' ? 8 : 0,
-  })} ${tokenType === 'BCH' ? 'BCH' : 'tokens'}`;
+  });
+  return `${formatted} ${tokenSymbol(tokenType, tokenCategory)}`;
 }
 
 function formatIntervalLabel(intervalSeconds?: number) {
@@ -324,7 +326,7 @@ function buildScheduleRows(stream: Stream) {
           hour: '2-digit',
           minute: '2-digit',
         }),
-        note: `${formatAssetAmount(cliffUnlock, stream.token_type)} becomes claimable when the cliff lifts.`,
+        note: `${formatAssetAmount(cliffUnlock, stream.token_type, stream.token_category)} becomes claimable when the cliff lifts.`,
       });
     }
 
@@ -338,7 +340,7 @@ function buildScheduleRows(stream: Stream) {
           hour: '2-digit',
           minute: '2-digit',
         }),
-        note: formatAssetAmount(stream.total_amount, stream.token_type),
+        note: formatAssetAmount(stream.total_amount, stream.token_type, stream.token_category),
       });
     }
 
@@ -359,7 +361,7 @@ function buildScheduleRows(stream: Stream) {
           minute: '2-digit',
         }),
         note: stream.hybrid_upfront_amount !== undefined
-          ? formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type)
+          ? formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type, stream.token_category)
           : 'Configured upfront release',
       });
     }
@@ -377,7 +379,7 @@ function buildScheduleRows(stream: Stream) {
           hour: '2-digit',
           minute: '2-digit',
         }),
-        note: `${formatAssetAmount(remainder, stream.token_type)} finishes vesting by schedule end.`,
+        note: `${formatAssetAmount(remainder, stream.token_type, stream.token_category)} finishes vesting by schedule end.`,
       });
     }
 
@@ -404,7 +406,7 @@ function buildScheduleRows(stream: Stream) {
           minute: '2-digit',
         }),
         note: stream.amount_per_interval !== undefined
-          ? formatAssetAmount(stream.amount_per_interval, stream.token_type)
+          ? formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category)
           : 'Pending',
       });
     }
@@ -420,7 +422,7 @@ function buildScheduleRows(stream: Stream) {
           minute: '2-digit',
         }),
         note: stream.amount_per_interval !== undefined
-          ? formatAssetAmount(stream.amount_per_interval, stream.token_type)
+          ? formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category)
           : 'Pending',
       });
     }
@@ -438,7 +440,7 @@ function buildScheduleRows(stream: Stream) {
         hour: '2-digit',
         minute: '2-digit',
       }),
-      note: `${formatAssetAmount(tranche.amount, stream.token_type)} • cumulative ${formatAssetAmount(tranche.cumulative_amount, stream.token_type)}`,
+      note: `${formatAssetAmount(tranche.amount, stream.token_type, stream.token_category)} • cumulative ${formatAssetAmount(tranche.cumulative_amount, stream.token_type, stream.token_category)}`,
     }));
   }
 
@@ -462,7 +464,7 @@ function buildScheduleRows(stream: Stream) {
         hour: '2-digit',
         minute: '2-digit',
       }),
-      note: `${formatAssetAmount(Math.min(cliffCompletedSteps * stepAmount, stream.total_amount), stream.token_type)} across ${cliffCompletedSteps} milestone${cliffCompletedSteps === 1 ? '' : 's'}.`,
+      note: `${formatAssetAmount(Math.min(cliffCompletedSteps * stepAmount, stream.total_amount), stream.token_type, stream.token_category)} across ${cliffCompletedSteps} milestone${cliffCompletedSteps === 1 ? '' : 's'}.`,
     });
   }
 
@@ -479,7 +481,7 @@ function buildScheduleRows(stream: Stream) {
         hour: '2-digit',
         minute: '2-digit',
       }),
-      note: formatAssetAmount(milestoneIndex === scheduleCount ? finalAmount : stepAmount, stream.token_type),
+      note: formatAssetAmount(milestoneIndex === scheduleCount ? finalAmount : stepAmount, stream.token_type, stream.token_category),
     });
   }
 
@@ -493,7 +495,7 @@ function buildScheduleRows(stream: Stream) {
         hour: '2-digit',
         minute: '2-digit',
       }),
-      note: formatAssetAmount(finalAmount, stream.token_type),
+      note: formatAssetAmount(finalAmount, stream.token_type, stream.token_category),
     });
   }
 
@@ -636,7 +638,7 @@ export default function StreamDetailPage() {
 
       setFeedback({
         tone: 'success',
-        title: `Successfully claimed ${formatAssetAmount(claimEstimate, stream.token_type)}.`,
+        title: `Successfully claimed ${formatAssetAmount(claimEstimate, stream.token_type, stream.token_category)}.`,
         description: 'The stream balance and claim history have been refreshed.',
         txHash,
       });
@@ -661,8 +663,8 @@ export default function StreamDetailPage() {
 
     const confirmed = window.confirm(
       `Are you sure you want to cancel this stream?\n\n` +
-      `Recipient will keep all vested funds (${formatAssetAmount(stream.vested_amount, stream.token_type)}).\n` +
-      `Remaining funds (${formatAssetAmount(stream.total_amount - stream.vested_amount, stream.token_type)}) will be returned to the sender.`
+      `Recipient will keep all vested funds (${formatAssetAmount(stream.vested_amount, stream.token_type, stream.token_category)}).\n` +
+      `Remaining funds (${formatAssetAmount(stream.total_amount - stream.vested_amount, stream.token_type, stream.token_category)}) will be returned to the sender.`
     );
 
     if (!confirmed) return;
@@ -972,7 +974,7 @@ export default function StreamDetailPage() {
     : null;
   const trancheLabel = stream.stream_type === 'RECURRING'
     ? stream.amount_per_interval !== undefined
-      ? formatAssetAmount(stream.amount_per_interval, stream.token_type)
+      ? formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category)
       : 'Pending'
     : stream.stream_type === 'TRANCHE'
       ? stream.tranche_schedule?.length
@@ -980,11 +982,11 @@ export default function StreamDetailPage() {
         : 'Pending'
     : stream.stream_type === 'HYBRID'
       ? stream.hybrid_upfront_amount !== undefined
-        ? `${formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type)} upfront`
+        ? `${formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type, stream.token_category)} upfront`
         : 'Pending'
     : stream.stream_type === 'STEP'
       ? stream.step_amount !== undefined
-        ? formatAssetAmount(stream.step_amount, stream.token_type)
+        ? formatAssetAmount(stream.step_amount, stream.token_type, stream.token_category)
         : 'Pending'
       : 'Continuously vested';
   const scheduleRows = buildScheduleRows(stream);
@@ -1151,7 +1153,7 @@ export default function StreamDetailPage() {
                 <div>
                   <p className="text-sm text-textMuted mb-1">Total Amount</p>
                   <p className="text-lg md:text-xl lg:text-2xl font-bold text-textPrimary">
-                    {formatAssetAmount(stream.total_amount, stream.token_type)}
+                    {formatAssetAmount(stream.total_amount, stream.token_type, stream.token_category)}
                   </p>
                   {stream.stream_type === 'RECURRING' && stream.refillable && (
                     <p className="text-xs font-mono text-textMuted mt-1">Current funded runway</p>
@@ -1160,19 +1162,19 @@ export default function StreamDetailPage() {
                 <div>
                   <p className="text-sm text-textMuted mb-1">Vested</p>
                   <p className="text-lg md:text-xl lg:text-2xl font-bold text-primary">
-                    {formatAssetAmount(stream.vested_amount, stream.token_type)}
+                    {formatAssetAmount(stream.vested_amount, stream.token_type, stream.token_category)}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-textMuted mb-1">Withdrawn</p>
                   <p className="text-lg md:text-xl lg:text-2xl font-bold text-textSecondary">
-                    {formatAssetAmount(stream.withdrawn_amount, stream.token_type)}
+                    {formatAssetAmount(stream.withdrawn_amount, stream.token_type, stream.token_category)}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-textMuted mb-1">Claimable Now</p>
                   <p className="text-lg md:text-xl lg:text-2xl font-bold text-green-600">
-                    {formatAssetAmount(stream.claimable_amount, stream.token_type)}
+                    {formatAssetAmount(stream.claimable_amount, stream.token_type, stream.token_category)}
                   </p>
                 </div>
               </div>
@@ -1204,7 +1206,7 @@ export default function StreamDetailPage() {
                   className="flex-1"
                 >
                   <Download className="w-5 h-5 mr-2" />
-                  {claiming ? 'Claiming...' : `Claim ${formatAssetAmount(stream.claimable_amount, stream.token_type)}`}
+                  {claiming ? 'Claiming...' : `Claim ${formatAssetAmount(stream.claimable_amount, stream.token_type, stream.token_category)}`}
                 </Button>
               )}
 
@@ -1485,17 +1487,17 @@ export default function StreamDetailPage() {
                           {typeof event.amount === 'number'
                             && (cancelDetails?.unvestedAmount === null || cancelDetails?.unvestedAmount === undefined) && (
                             <p className="text-xs font-mono text-textMuted mt-1">
-                              amount: {formatAssetAmount(event.amount, stream.token_type)}
+                              amount: {formatAssetAmount(event.amount, stream.token_type, stream.token_category)}
                             </p>
                             )}
                           {typeof cancelDetails?.vestedAmount === 'number' && (
                             <p className="text-xs font-mono text-textMuted mt-1 break-words">
-                              recipient received: {formatAssetAmount(cancelDetails.vestedAmount, stream.token_type)}
+                              recipient received: {formatAssetAmount(cancelDetails.vestedAmount, stream.token_type, stream.token_category)}
                             </p>
                           )}
                           {typeof cancelDetails?.unvestedAmount === 'number' && (
                             <p className="text-xs font-mono text-textMuted mt-1 break-words">
-                              sender refunded: {formatAssetAmount(cancelDetails.unvestedAmount, stream.token_type)}
+                              sender refunded: {formatAssetAmount(cancelDetails.unvestedAmount, stream.token_type, stream.token_category)}
                             </p>
                           )}
                           {cancelDetails?.cancelReturnAddress && (
@@ -1608,7 +1610,7 @@ export default function StreamDetailPage() {
                   >
                     <div>
                       <p className="font-semibold text-textPrimary">
-                        {formatAssetAmount(claim.amount, stream.token_type)}
+                        {formatAssetAmount(claim.amount, stream.token_type, stream.token_category)}
                       </p>
                       <p className="text-sm text-textMuted">
                         {formatDate(claim.claimed_at)}
@@ -1716,7 +1718,7 @@ export default function StreamDetailPage() {
                 <div className="flex justify-between">
                   <p className="text-xs text-textMuted">Upfront Amount</p>
                   <p className="text-sm font-medium text-textPrimary">
-                    {formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type)}
+                    {formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type, stream.token_category)}
                   </p>
                 </div>
               )}
@@ -1734,7 +1736,7 @@ export default function StreamDetailPage() {
                 <div className="flex justify-between">
                   <p className="text-xs text-textMuted">Per Release</p>
                   <p className="text-sm font-medium text-textPrimary">
-                    {formatAssetAmount(stream.amount_per_interval, stream.token_type)}
+                    {formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category)}
                   </p>
                 </div>
               )}
@@ -1752,7 +1754,7 @@ export default function StreamDetailPage() {
                 <div className="flex justify-between">
                   <p className="text-xs text-textMuted">Per Milestone</p>
                   <p className="text-sm font-medium text-textPrimary">
-                    {formatAssetAmount(stream.step_amount, stream.token_type)}
+                    {formatAssetAmount(stream.step_amount, stream.token_type, stream.token_category)}
                   </p>
                 </div>
               )}
@@ -1812,7 +1814,7 @@ export default function StreamDetailPage() {
                 <div>
                   <h3 className="text-lg font-semibold text-textPrimary">Refill Runway</h3>
                   <p className="text-sm text-textMuted mt-1">
-                    Extend this open-ended recurring stream by adding more {stream.token_type === 'BCH' ? 'BCH' : 'tokens'} to the existing state UTXO.
+                    Extend this open-ended recurring stream by adding more {tokenSymbol(stream.token_type, stream.token_category)} to the existing state UTXO.
                   </p>
                 </div>
                 <span className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-mono text-accent">
@@ -1822,7 +1824,7 @@ export default function StreamDetailPage() {
 
               <div className="space-y-4">
                 <Input
-                  label={`Refill amount (${stream.token_type === 'BCH' ? 'BCH' : 'tokens'})`}
+                  label={`Refill amount (${tokenSymbol(stream.token_type, stream.token_category)})`}
                   type="number"
                   min="0"
                   step={stream.token_type === 'BCH' ? '0.00000001' : '1'}
@@ -1898,13 +1900,13 @@ export default function StreamDetailPage() {
               <div className="flex justify-between items-center">
                 <span className="text-xs text-textMuted">Unclaimed</span>
                 <span className="text-sm font-bold text-green-600">
-                  {formatAssetAmount(stream.vested_amount - stream.withdrawn_amount, stream.token_type)}
+                  {formatAssetAmount(stream.vested_amount - stream.withdrawn_amount, stream.token_type, stream.token_category)}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-textMuted">Remaining</span>
                 <span className="text-sm font-bold text-textSecondary">
-                  {formatAssetAmount(stream.total_amount - stream.vested_amount, stream.token_type)}
+                  {formatAssetAmount(stream.total_amount - stream.vested_amount, stream.token_type, stream.token_category)}
                 </span>
               </div>
             </div>

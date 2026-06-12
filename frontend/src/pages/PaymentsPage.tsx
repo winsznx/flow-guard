@@ -14,6 +14,7 @@ import { DataTable, Column } from '../components/shared/DataTable';
 import { StatsCard } from '../components/shared/StatsCard';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 
 type PaymentStatus = 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
 type PaymentInterval = 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'YEARLY';
@@ -25,6 +26,7 @@ interface RecurringPayment {
   recipient: string;
   recipient_name?: string;
   token_type: 'BCH' | 'CASHTOKENS';
+  token_category?: string | null;
   amount_per_period: number;
   interval: PaymentInterval;
   start_date: number;
@@ -106,24 +108,69 @@ export default function PaymentsPage() {
 
   // Calculate stats
   const activePayments = payments.filter((p) => p.status === 'ACTIVE');
-  const totalPaid = payments.reduce((sum, p) => sum + p.total_paid, 0);
-  const avgPaymentAmount =
-    payments.length > 0
-      ? payments.reduce((sum, p) => sum + p.amount_per_period, 0) / payments.length
-      : 0;
 
-  // Calculate monthly equivalent outflow
-  const totalMonthlyOutflow = activePayments
-    .filter((p) => viewMode === 'sent')
-    .reduce((sum, p) => {
-      const multiplier =
-        p.interval === 'DAILY' ? 30 :
-        p.interval === 'WEEKLY' ? 4.33 :
-        p.interval === 'BIWEEKLY' ? 2.17 :
-        p.interval === 'MONTHLY' ? 1 :
-        p.interval === 'YEARLY' ? 0.083 : 1;
-      return sum + p.amount_per_period * multiplier;
-    }, 0);
+  type TokenKey = string;
+  const tokenKey = (p: Pick<RecurringPayment, 'token_type' | 'token_category'>): TokenKey =>
+    `${p.token_type}::${p.token_category ?? ''}`;
+
+  const bucketsToString = (
+    buckets: Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null }>,
+  ): string => {
+    const entries = Array.from(buckets.values()).filter((b) => b.amount > 0);
+    if (entries.length === 0) return '—';
+    return entries
+      .map((b) => `${formatTokenAmount(b.amount, b.tokenType, b.tokenCategory, { noSuffix: true })} ${tokenSymbol(b.tokenType, b.tokenCategory)}`)
+      .join(' + ');
+  };
+
+  const totalPaidBuckets = new Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null }>();
+  for (const p of payments) {
+    const key = tokenKey(p);
+    const existing = totalPaidBuckets.get(key);
+    if (existing) existing.amount += p.total_paid;
+    else totalPaidBuckets.set(key, { amount: p.total_paid, tokenType: p.token_type, tokenCategory: p.token_category });
+  }
+  const totalPaidDisplay = bucketsToString(totalPaidBuckets);
+  const totalPaidNumeric = payments.reduce((sum, p) => sum + p.total_paid, 0);
+
+  const avgBuckets = new Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null; count: number }>();
+  for (const p of payments) {
+    const key = tokenKey(p);
+    const existing = avgBuckets.get(key);
+    if (existing) {
+      existing.amount += p.amount_per_period;
+      existing.count += 1;
+    } else {
+      avgBuckets.set(key, { amount: p.amount_per_period, tokenType: p.token_type, tokenCategory: p.token_category, count: 1 });
+    }
+  }
+  const avgPaymentDisplay = (() => {
+    const entries = Array.from(avgBuckets.values()).filter((b) => b.count > 0);
+    if (entries.length === 0) return '—';
+    return entries
+      .map((b) => {
+        const avg = b.amount / b.count;
+        return `${formatTokenAmount(avg, b.tokenType, b.tokenCategory, { noSuffix: true })} ${tokenSymbol(b.tokenType, b.tokenCategory)}`;
+      })
+      .join(' + ');
+  })();
+
+  // Calculate monthly equivalent outflow, bucketed per token
+  const monthlyOutflowBuckets = new Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null }>();
+  for (const p of activePayments.filter((p) => viewMode === 'sent')) {
+    const multiplier =
+      p.interval === 'DAILY' ? 30 :
+      p.interval === 'WEEKLY' ? 4.33 :
+      p.interval === 'BIWEEKLY' ? 2.17 :
+      p.interval === 'MONTHLY' ? 1 :
+      p.interval === 'YEARLY' ? 0.083 : 1;
+    const key = tokenKey(p);
+    const existing = monthlyOutflowBuckets.get(key);
+    const contribution = p.amount_per_period * multiplier;
+    if (existing) existing.amount += contribution;
+    else monthlyOutflowBuckets.set(key, { amount: contribution, tokenType: p.token_type, tokenCategory: p.token_category });
+  }
+  const totalMonthlyOutflowDisplay = bucketsToString(monthlyOutflowBuckets);
 
   // Filter payments
   const filteredPayments = payments.filter((payment) => {
@@ -167,7 +214,7 @@ export default function PaymentsPage() {
       render: (row) => (
         <div className="text-right">
           <p className="font-display font-bold text-primary">
-            {row.amount_per_period.toFixed(4)} {row.token_type}
+            {formatTokenAmount(row.amount_per_period, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
           </p>
           <p className="text-xs text-textMuted font-mono">{row.interval}</p>
         </div>
@@ -181,7 +228,7 @@ export default function PaymentsPage() {
       render: (row) => (
         <div className="text-right">
           <p className="font-display font-bold text-accent">
-            {row.total_paid.toFixed(4)} {row.token_type}
+            {formatTokenAmount(row.total_paid, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
           </p>
           <p className="text-xs text-textMuted font-mono">{row.payment_count} payments</p>
         </div>
@@ -324,25 +371,25 @@ export default function PaymentsPage() {
             />
             <StatsCard
               label="Total Paid"
-              value={`${totalPaid.toFixed(4)} BCH`}
+              value={totalPaidDisplay}
               subtitle="All time"
               icon={DollarSign}
               color="accent"
               progress={{
-                percentage: Math.min(100, (totalPaid / 100) * 100),
+                percentage: Math.min(100, (totalPaidNumeric / 100) * 100),
                 label: 'Paid',
               }}
             />
             <StatsCard
               label="Monthly Outflow"
-              value={`${totalMonthlyOutflow.toFixed(4)} BCH`}
+              value={totalMonthlyOutflowDisplay}
               subtitle="Active payments"
               icon={TrendingUp}
               color="secondary"
             />
             <StatsCard
               label="Avg Payment"
-              value={`${avgPaymentAmount.toFixed(4)} BCH`}
+              value={avgPaymentDisplay}
               subtitle="Per period"
               icon={Zap}
               color="muted"

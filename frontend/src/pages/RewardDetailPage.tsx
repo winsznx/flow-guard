@@ -50,6 +50,7 @@ import {
   pauseRewardOnChain,
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 import { toUserFacingError } from '../utils/userError';
 import { fetchReward } from '../services/rewardApi';
 import type {
@@ -311,9 +312,11 @@ export default function RewardDetailPage() {
   const handleCancel = async () => {
     if (!id || !requireWallet() || !campaign) return;
     const confirmed = window.confirm(
-      `Cancel this reward campaign?\n\nRemaining pool (${remainingPool.toFixed(
-        4,
-      )} ${campaign.token_type}) will be refunded to the original authority address. This action is irreversible.`,
+      `Cancel this reward campaign?\n\nRemaining pool (${formatTokenAmount(
+        remainingPool,
+        campaign.token_type,
+        campaign.token_category,
+      )}) will be refunded to the original authority address. This action is irreversible.`,
     );
     if (!confirmed) return;
 
@@ -358,13 +361,13 @@ export default function RewardDetailPage() {
     }
     if (amount > campaign.max_reward_amount) {
       setDistributeError(
-        `Amount cannot exceed the max reward (${campaign.max_reward_amount.toFixed(4)} ${campaign.token_type}).`,
+        `Amount cannot exceed the max reward (${formatTokenAmount(campaign.max_reward_amount, campaign.token_type, campaign.token_category)}).`,
       );
       return;
     }
     if (amount > remainingPool) {
       setDistributeError(
-        `Amount exceeds remaining pool (${remainingPool.toFixed(4)} ${campaign.token_type}).`,
+        `Amount exceeds remaining pool (${formatTokenAmount(remainingPool, campaign.token_type, campaign.token_category)}).`,
       );
       return;
     }
@@ -376,7 +379,7 @@ export default function RewardDetailPage() {
       await refreshCampaign();
       setFeedback({
         tone: 'success',
-        title: `Distributed ${amount.toFixed(4)} ${campaign.token_type}.`,
+        title: `Distributed ${formatTokenAmount(amount, campaign.token_type, campaign.token_category)}.`,
         description: `Reward sent to ${recipient.slice(0, 14)}…${recipient.slice(-10)}.`,
         txHash,
       });
@@ -573,10 +576,10 @@ export default function RewardDetailPage() {
           </div>
           <div className="flex justify-between text-sm font-mono text-textMuted">
             <span>
-              {(campaign.distributed_total ?? 0).toFixed(4)} {campaign.token_type} distributed
+              {formatTokenAmount(campaign.distributed_total ?? 0, campaign.token_type, campaign.token_category)} distributed
             </span>
             <span>
-              {remainingPool.toFixed(4)} {campaign.token_type} remaining
+              {formatTokenAmount(remainingPool, campaign.token_type, campaign.token_category)} remaining
             </span>
           </div>
         </Card>
@@ -589,8 +592,8 @@ export default function RewardDetailPage() {
               <DollarSign className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {(campaign.total_pool ?? 0).toFixed(4)}{' '}
-              <span className="text-lg text-textMuted">{campaign.token_type}</span>
+              {formatTokenAmount(campaign.total_pool ?? 0, campaign.token_type, campaign.token_category, { noSuffix: true })}{' '}
+              <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
             </p>
           </Card>
 
@@ -600,8 +603,8 @@ export default function RewardDetailPage() {
               <Trophy className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {(campaign.max_reward_amount ?? 0).toFixed(4)}{' '}
-              <span className="text-lg text-textMuted">{campaign.token_type}</span>
+              {formatTokenAmount(campaign.max_reward_amount ?? 0, campaign.token_type, campaign.token_category, { noSuffix: true })}{' '}
+              <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
             </p>
           </Card>
 
@@ -611,8 +614,8 @@ export default function RewardDetailPage() {
               <Coins className="w-5 h-5 text-textMuted" />
             </div>
             <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {(campaign.distributed_total ?? 0).toFixed(4)}{' '}
-              <span className="text-lg text-textMuted">{campaign.token_type}</span>
+              {formatTokenAmount(campaign.distributed_total ?? 0, campaign.token_type, campaign.token_category, { noSuffix: true })}{' '}
+              <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
             </p>
           </Card>
 
@@ -657,7 +660,7 @@ export default function RewardDetailPage() {
               />
 
               <Input
-                label={`Reward Amount (${campaign.token_type})`}
+                label={`Reward Amount (${tokenSymbol(campaign.token_type, campaign.token_category)})`}
                 type="number"
                 step={campaign.token_type === 'BCH' ? '0.00000001' : '1'}
                 min="0"
@@ -666,7 +669,7 @@ export default function RewardDetailPage() {
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
                   setDistributeAmount(e.target.value)
                 }
-                helpText={`Remaining pool: ${remainingPool.toFixed(4)} ${campaign.token_type}`}
+                helpText={`Remaining pool: ${formatTokenAmount(remainingPool, campaign.token_type, campaign.token_category)}`}
                 required
               />
 
@@ -702,7 +705,7 @@ export default function RewardDetailPage() {
               </div>
               <div>
                 <span className="block text-xs font-mono text-textMuted uppercase mb-1">Asset</span>
-                <p className="text-sm font-mono text-textPrimary">{campaign.token_type}</p>
+                <p className="text-sm font-mono text-textPrimary">{tokenSymbol(campaign.token_type, campaign.token_category)}</p>
               </div>
               {campaign.token_category && (
                 <div>
@@ -823,7 +826,7 @@ export default function RewardDetailPage() {
                         )}
                         {typeof event.amount === 'number' && (
                           <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {event.amount.toFixed(4)} {campaign.token_type}
+                            amount: {formatTokenAmount(event.amount, campaign.token_type, campaign.token_category)}
                           </p>
                         )}
                       </div>
@@ -901,7 +904,7 @@ export default function RewardDetailPage() {
                         {row.recipient.slice(0, 10)}…{row.recipient.slice(-8)}
                       </td>
                       <td className="py-3 px-4 font-display font-bold text-sm text-textPrimary">
-                        {row.amount.toFixed(4)} {campaign.token_type}
+                        {formatTokenAmount(row.amount, campaign.token_type, campaign.token_category)}
                       </td>
                       <td className="py-3 px-4">
                         <a

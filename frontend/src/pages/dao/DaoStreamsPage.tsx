@@ -11,6 +11,7 @@ import { DaoSectionNav } from '../../components/dao/DaoSectionNav';
 import { getExplorerTxUrl } from '../../utils/blockchain';
 import { formatLogicalId } from '../../utils/display';
 import { getStreamScheduleTemplateLabel } from '../../utils/streamShapes';
+import { formatTokenAmount } from '../../utils/tokenFormat';
 
 type DateRangePreset = 'all' | '24h' | '7d' | '30d' | '90d';
 type EventTypeFilter = 'all' | 'created' | 'funded' | 'claim' | 'paused' | 'resumed' | 'refilled' | 'cancelled';
@@ -30,6 +31,7 @@ interface TreasuryStream {
   sender: string;
   recipient: string;
   token_type: 'BCH' | 'CASHTOKENS';
+  token_category?: string | null;
   total_amount: number;
   withdrawn_amount: number;
   vested_amount: number;
@@ -64,11 +66,15 @@ interface StreamActivityEvent {
   };
 }
 
-function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
-  return `${amount.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: tokenType === 'BCH' ? 8 : 0,
-  })} ${tokenType === 'BCH' ? 'BCH' : 'tokens'}`;
+function formatAssetAmount(
+  amount: number,
+  tokenType: 'BCH' | 'CASHTOKENS',
+  tokenCategory?: string | null,
+) {
+  return formatTokenAmount(amount, tokenType, tokenCategory, {
+    decimals: tokenType === 'BCH' ? 8 : 0,
+    separator: true,
+  });
 }
 
 function formatEventLabel(eventType: string) {
@@ -187,8 +193,14 @@ export const DaoStreamsPage: React.FC = () => {
     setActivityPage(1);
   }, [statusFilter, contextFilter, eventType, dateRange]);
 
-  const totalClaimable = useMemo(
-    () => streams.reduce((sum, stream) => sum + Number(stream.claimable_amount || 0), 0),
+  const totalClaimableBch = useMemo(
+    () => streams
+      .filter((stream) => stream.token_type === 'BCH')
+      .reduce((sum, stream) => sum + Number(stream.claimable_amount || 0), 0),
+    [streams],
+  );
+  const tokenStreamCount = useMemo(
+    () => streams.filter((stream) => stream.token_type !== 'BCH').length,
     [streams],
   );
   const activeCount = useMemo(
@@ -240,7 +252,7 @@ export const DaoStreamsPage: React.FC = () => {
       className: 'text-right',
       render: (row) => (
         <p className="font-display font-bold text-textPrimary">
-          {formatAssetAmount(row.total_amount, row.token_type)}
+          {formatAssetAmount(row.total_amount, row.token_type, row.token_category)}
         </p>
       ),
     },
@@ -251,7 +263,7 @@ export const DaoStreamsPage: React.FC = () => {
       className: 'text-right',
       render: (row) => (
         <p className="font-display font-bold text-primary">
-          {formatAssetAmount(row.claimable_amount, row.token_type)}
+          {formatAssetAmount(row.claimable_amount, row.token_type, row.token_category)}
         </p>
       ),
     },
@@ -349,8 +361,12 @@ export const DaoStreamsPage: React.FC = () => {
         />
         <StatsCard
           label="Claimable balance"
-          value={`${totalClaimable.toFixed(4)} BCH`}
-          subtitle="Sum of currently claimable treasury streams"
+          value={formatTokenAmount(totalClaimableBch, 'BCH', null, { decimals: 4 })}
+          subtitle={
+            tokenStreamCount > 0
+              ? `BCH only • ${tokenStreamCount} CashToken stream${tokenStreamCount === 1 ? '' : 's'} excluded`
+              : 'Sum of currently claimable treasury streams'
+          }
           icon={Sparkles}
           color="accent"
         />

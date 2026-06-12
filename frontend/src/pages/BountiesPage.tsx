@@ -36,6 +36,7 @@ import { useWallet } from '../hooks/useWallet';
 import { useWalletModal } from '../hooks/useWalletModal';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { formatTokenAmount } from '../utils/tokenFormat';
 import { fetchBounties, type BountyRow, type BountyStatus } from '../services/bountyApi';
 
 type StatusFilter = 'all' | BountyStatus;
@@ -57,11 +58,12 @@ function formatShortAddress(value: string): string {
   return `${value.slice(0, 14)}...${value.slice(-10)}`;
 }
 
-function formatBountyAmount(amount: number, tokenType: BountyRow['token_type']): string {
-  if (tokenType === 'BCH') {
-    return `${amount.toFixed(4)} BCH`;
-  }
-  return `${amount.toLocaleString()} tokens`;
+function formatBountyAmount(
+  amount: number,
+  tokenType: BountyRow['token_type'],
+  tokenCategory?: string | null,
+): string {
+  return formatTokenAmount(amount, tokenType, tokenCategory);
 }
 
 function getStatusClasses(status: BountyStatus): string {
@@ -383,19 +385,19 @@ export default function BountiesPage() {
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Reward</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {formatBountyAmount(bounty.reward_per_winner, bounty.token_type)}
+                        {formatBountyAmount(bounty.reward_per_winner, bounty.token_type, bounty.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Total Pool</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {formatBountyAmount(totalPool, bounty.token_type)}
+                        {formatBountyAmount(totalPool, bounty.token_type, bounty.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Paid</p>
                       <p className="font-display font-bold text-accent">
-                        {formatBountyAmount(bounty.total_paid, bounty.token_type)}
+                        {formatBountyAmount(bounty.total_paid, bounty.token_type, bounty.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">

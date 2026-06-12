@@ -17,6 +17,7 @@ import { Card } from '../components/ui/Card';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
 import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
+import { formatTokenAmount } from '../utils/tokenFormat';
 
 type RoleView = 'recipient' | 'sender' | 'all';
 
@@ -85,11 +86,15 @@ interface StreamActivityEvent {
   };
 }
 
-function formatAssetAmount(amount: number, tokenType: 'BCH' | 'CASHTOKENS') {
-  return `${amount.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: tokenType === 'BCH' ? 8 : 0,
-  })} ${tokenType === 'BCH' ? 'BCH' : 'tokens'}`;
+function formatAssetAmount(
+  amount: number,
+  tokenType: 'BCH' | 'CASHTOKENS',
+  tokenCategory?: string,
+) {
+  return formatTokenAmount(amount, tokenType, tokenCategory, {
+    decimals: tokenType === 'BCH' ? 8 : 0,
+    separator: true,
+  });
 }
 
 function formatScheduleMeta(stream: Stream) {
@@ -108,7 +113,7 @@ function formatScheduleMeta(stream: Stream) {
   const intervalDays = stream.interval_seconds ? Math.round(stream.interval_seconds / 86400) : null;
   if (stream.stream_type === 'RECURRING') {
     return intervalDays && stream.amount_per_interval !== undefined
-      ? `${formatAssetAmount(stream.amount_per_interval, stream.token_type)} every ${intervalDays}d${stream.refillable ? ' • refillable' : ''}`
+      ? `${formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category)} every ${intervalDays}d${stream.refillable ? ' • refillable' : ''}`
       : 'Fixed recurring payouts';
   }
 
@@ -119,7 +124,7 @@ function formatScheduleMeta(stream: Stream) {
   }
 
   return intervalDays && stream.step_amount !== undefined
-    ? `${formatAssetAmount(stream.step_amount, stream.token_type)} every ${intervalDays}d`
+    ? `${formatAssetAmount(stream.step_amount, stream.token_type, stream.token_category)} every ${intervalDays}d`
     : 'Milestone unlocks';
 }
 
@@ -299,7 +304,7 @@ export default function StreamsPage() {
       className: 'text-right',
       render: (row) => (
         <p className="font-display font-bold text-primary">
-          {formatAssetAmount(row.total_amount, row.token_type)}
+          {formatAssetAmount(row.total_amount, row.token_type, row.token_category)}
         </p>
       ),
     },
@@ -329,7 +334,7 @@ export default function StreamsPage() {
       className: 'text-right',
       render: (row) => (
         <p className="font-display font-bold text-accent">
-          {formatAssetAmount(row.claimable_amount, row.token_type)}
+          {formatAssetAmount(row.claimable_amount, row.token_type, row.token_category)}
         </p>
       ),
     },

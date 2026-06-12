@@ -28,6 +28,7 @@ import { SkeletonTable } from '../components/ui/Skeleton';
 import { StatsCard } from '../components/shared/StatsCard';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 
 type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'EXPIRED';
 type CampaignType = 'AIRDROP' | 'BOUNTY' | 'REWARD' | 'GRANT';
@@ -412,19 +413,19 @@ export default function AirdropsPage() {
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Total Pool</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {campaign.total_amount.toFixed(4)} {campaign.token_type}
+                        {formatTokenAmount(campaign.total_amount, campaign.token_type, campaign.token_category, { noSuffix: true })} {tokenSymbol(campaign.token_type, campaign.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Per Claim</p>
                       <p className="font-display font-bold text-textPrimary">
-                        {campaign.amount_per_claim.toFixed(4)} {campaign.token_type}
+                        {formatTokenAmount(campaign.amount_per_claim, campaign.token_type, campaign.token_category, { noSuffix: true })} {tokenSymbol(campaign.token_type, campaign.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">
                       <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Claimed</p>
                       <p className="font-display font-bold text-accent">
-                        {distributed.toFixed(4)} {campaign.token_type}
+                        {formatTokenAmount(distributed, campaign.token_type, campaign.token_category, { noSuffix: true })} {tokenSymbol(campaign.token_type, campaign.token_category)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border bg-surfaceAlt p-3">

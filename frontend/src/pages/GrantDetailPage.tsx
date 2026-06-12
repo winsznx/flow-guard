@@ -52,6 +52,7 @@ import {
   transferGrantOnChain,
 } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
+import { formatTokenAmount } from '../utils/tokenFormat';
 import { toUserFacingError } from '../utils/userError';
 import {
   fetchGrant,
@@ -59,7 +60,6 @@ import {
   type GrantDetailResponse,
   type GrantMilestoneRow,
   type GrantRow,
-  type GrantTokenType,
 } from '../services/grantApi';
 
 type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
@@ -80,11 +80,6 @@ const FEEDBACK_TONE_CLASSES: Record<FeedbackTone, string> = {
   error: 'border-primary/40 bg-primary/5 text-primary',
   info: 'border-border bg-surfaceAlt text-textPrimary',
 };
-
-function formatGrantAmount(amount: number, tokenType: GrantTokenType): string {
-  if (tokenType === 'BCH') return `${amount.toFixed(4)} BCH`;
-  return `${amount.toLocaleString()} tokens`;
-}
 
 function formatTimestamp(timestamp: number | null | undefined): string {
   if (!timestamp) return ' - ';
@@ -328,7 +323,7 @@ export default function GrantDetailPage() {
       setFeedback({
         tone: 'success',
         title: `Released milestone ${result.milestoneNumber}.`,
-        description: `Paid ${formatGrantAmount(result.releaseAmount, grant.token_type)} to the recipient.`,
+        description: `Paid ${formatTokenAmount(result.releaseAmount, grant.token_type, grant.token_category)} to the recipient.`,
         txHash: result.txHash,
       });
     } catch (error: unknown) {
@@ -363,7 +358,7 @@ export default function GrantDetailPage() {
     if (!grant || !ensureWalletConnected()) return;
     const remaining = Math.max(0, grant.total_amount - grant.total_released);
     const confirmed = window.confirm(
-      `Cancel this grant?\n\nRemaining ${formatGrantAmount(remaining, grant.token_type)} will be refunded to the authority address derived from the contract. This action cannot be undone.`,
+      `Cancel this grant?\n\nRemaining ${formatTokenAmount(remaining, grant.token_type, grant.token_category)} will be refunded to the authority address derived from the contract. This action cannot be undone.`,
     );
     if (!confirmed) return;
 
@@ -596,16 +591,16 @@ export default function GrantDetailPage() {
             <div className="h-full bg-primary transition-all duration-500" style={{ width: `${milestoneProgress}%` }} />
           </div>
           <div className="flex justify-between text-sm font-mono text-textMuted">
-            <span>{formatGrantAmount(grant.total_released, grant.token_type)} released</span>
-            <span>{formatGrantAmount(grant.total_amount, grant.token_type)} total</span>
+            <span>{formatTokenAmount(grant.total_released, grant.token_type, grant.token_category)} released</span>
+            <span>{formatTokenAmount(grant.total_amount, grant.token_type, grant.token_category)} total</span>
           </div>
         </Card>
 
         {/* Stats */}
         <div className="grid md:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-          <SimpleStat label="Per Milestone" value={formatGrantAmount(grant.amount_per_milestone, grant.token_type)} icon={Target} />
-          <SimpleStat label="Total Locked" value={formatGrantAmount(grant.total_amount, grant.token_type)} icon={DollarSign} />
-          <SimpleStat label="Released" value={formatGrantAmount(grant.total_released, grant.token_type)} icon={CheckCircle2} />
+          <SimpleStat label="Per Milestone" value={formatTokenAmount(grant.amount_per_milestone, grant.token_type, grant.token_category)} icon={Target} />
+          <SimpleStat label="Total Locked" value={formatTokenAmount(grant.total_amount, grant.token_type, grant.token_category)} icon={DollarSign} />
+          <SimpleStat label="Released" value={formatTokenAmount(grant.total_released, grant.token_type, grant.token_category)} icon={CheckCircle2} />
           <SimpleStat label="Milestones" value={`${grant.milestones_completed} / ${grant.milestones_total}`} icon={ListChecks} />
         </div>
 
@@ -725,7 +720,7 @@ export default function GrantDetailPage() {
                         )}
                         {typeof event.amount === 'number' && (
                           <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {formatGrantAmount(event.amount, grant.token_type)}
+                            amount: {formatTokenAmount(event.amount, grant.token_type, grant.token_category)}
                           </p>
                         )}
                       </div>

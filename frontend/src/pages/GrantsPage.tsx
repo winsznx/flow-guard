@@ -42,7 +42,8 @@ import { useWallet } from '../hooks/useWallet';
 import { useWalletModal } from '../hooks/useWalletModal';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
-import { fetchGrants, type GrantRow, type GrantStatus, type GrantTokenType } from '../services/grantApi';
+import { formatTokenAmount } from '../utils/tokenFormat';
+import { fetchGrants, type GrantRow, type GrantStatus } from '../services/grantApi';
 
 type StatusFilter = 'all' | GrantStatus;
 type ViewMode = 'created' | 'receiving';
@@ -61,13 +62,6 @@ function formatShortAddress(value: string): string {
   if (!value) return '';
   if (value.length <= 26) return value;
   return `${value.slice(0, 14)}...${value.slice(-10)}`;
-}
-
-function formatGrantAmount(amount: number, tokenType: GrantTokenType): string {
-  if (tokenType === 'BCH') {
-    return `${amount.toFixed(4)} BCH`;
-  }
-  return `${amount.toLocaleString()} tokens`;
 }
 
 function getStatusClasses(status: GrantStatus): string {
@@ -394,9 +388,9 @@ function GrantCard({ grant, network, onOpen }: GrantCardProps) {
       {grant.description && <p className="text-sm font-sans text-textMuted line-clamp-2 mb-4">{grant.description}</p>}
 
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <Stat label="Per Milestone" value={formatGrantAmount(grant.amount_per_milestone, grant.token_type)} />
-        <Stat label="Total Locked" value={formatGrantAmount(grant.total_amount, grant.token_type)} />
-        <Stat label="Released" value={formatGrantAmount(grant.total_released, grant.token_type)} tone="accent" />
+        <Stat label="Per Milestone" value={formatTokenAmount(grant.amount_per_milestone, grant.token_type, grant.token_category)} />
+        <Stat label="Total Locked" value={formatTokenAmount(grant.total_amount, grant.token_type, grant.token_category)} />
+        <Stat label="Released" value={formatTokenAmount(grant.total_released, grant.token_type, grant.token_category)} tone="accent" />
         <Stat label="Milestones" value={`${completed} / ${total}`} />
       </div>
 
