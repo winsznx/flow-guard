@@ -26,7 +26,7 @@ function trimOrUndefined(v: unknown): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
-router.post('/auth/nonce', (req: Request, res: Response) => {
+router.post('/auth/nonce', async (req: Request, res: Response) => {
   const address = String(req.body?.address || '').trim();
   if (!address) {
     return res.status(400).json({ error: 'address is required' });
@@ -37,7 +37,7 @@ router.post('/auth/nonce', (req: Request, res: Response) => {
     chainId: trimOrUndefined(req.body?.chainId),
   };
   try {
-    const nonce = issueAuthNonce(address, context);
+    const nonce = await issueAuthNonce(address, context);
     return res.json({
       success: true,
       nonceId: nonce.id,
@@ -62,7 +62,7 @@ router.post('/auth/nonce', (req: Request, res: Response) => {
  * On signature failure this returns 401 — same shape as `requireWalletAuth`
  * — so the client can present a unified "auth failed" path.
  */
-router.post('/auth/verify', (req: Request, res: Response) => {
+router.post('/auth/verify', async (req: Request, res: Response) => {
   const address = String(req.body?.address || '').trim();
   const signature = String(req.body?.signature || '').trim();
   const nonceId = String(req.body?.nonceId || '').trim();
@@ -73,7 +73,7 @@ router.post('/auth/verify', (req: Request, res: Response) => {
   }
 
   try {
-    const user = verifyWalletOwnership({ address, signature, nonceId, signerPubkeyHex });
+    const user = await verifyWalletOwnership({ address, signature, nonceId, signerPubkeyHex });
     const bearer = issueBearer(user);
     return res.json({
       success: true,

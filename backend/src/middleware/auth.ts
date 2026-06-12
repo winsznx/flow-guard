@@ -36,11 +36,8 @@
  *   x-nonce-id           the nonce id returned by /api/auth/nonce
  *   x-signer-public-key  compressed secp256k1 pubkey (legacy path only)
  *
- * Storage
- * -------
- * Nonces live in-memory with a 5-minute TTL and periodic sweep. Sufficient
- * for a single backend replica; swap for a Redis-backed store on horizontal
- * scale-out.
+ * Nonces are stored via INonceStore. Backed by Redis when REDIS_URL is set
+ * (multi-replica), otherwise an in-memory map (single-replica dev).
  */
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -52,6 +49,8 @@ import {
   secp256k1,
   utf8ToBin,
 } from '@bitauth/libauth';
+import type { Redis } from 'ioredis';
+import { getRedis } from '../utils/redis.js';
 
 const NONCE_TTL_MS = 5 * 60 * 1000;
 const NONCE_BYTES = 24;
@@ -109,31 +108,25 @@ interface NonceRecord {
   expiresAt: number;
 }
 
-class NonceStore {
+interface INonceStore {
+  put(record: NonceRecord): Promise<void>;
+  consume(id: string, address: string): Promise<NonceRecord | null>;
+}
+
+class InMemoryNonceStore implements INonceStore {
   private readonly nonces = new Map<string, NonceRecord>();
   private sweepTimer?: NodeJS.Timeout;
 
   constructor() {
     this.sweepTimer = setInterval(() => this.sweep(), SWEEP_INTERVAL_MS);
-    // Don't keep the event loop alive solely for the sweeper.
     this.sweepTimer.unref?.();
   }
 
-  issue(address: string, message: string): NonceRecord {
-    const id = randomBytes(NONCE_BYTES).toString('base64url');
-    const now = Date.now();
-    const record: NonceRecord = {
-      id,
-      address,
-      message,
-      issuedAt: now,
-      expiresAt: now + NONCE_TTL_MS,
-    };
-    this.nonces.set(id, record);
-    return record;
+  async put(record: NonceRecord): Promise<void> {
+    this.nonces.set(record.id, record);
   }
 
-  consume(id: string, address: string): NonceRecord | null {
+  async consume(id: string, address: string): Promise<NonceRecord | null> {
     const record = this.nonces.get(id);
     if (!record) return null;
     if (record.expiresAt < Date.now()) {
@@ -153,7 +146,50 @@ class NonceStore {
   }
 }
 
-const nonceStore = new NonceStore();
+class RedisNonceStore implements INonceStore {
+  constructor(private readonly client: Redis) {}
+
+  private key(id: string): string {
+    return `flowguard:nonce:${id}`;
+  }
+
+  async put(record: NonceRecord): Promise<void> {
+    const ttlSec = Math.max(1, Math.ceil((record.expiresAt - Date.now()) / 1000));
+    await this.client.set(this.key(record.id), JSON.stringify(record), 'EX', ttlSec, 'NX');
+  }
+
+  async consume(id: string, address: string): Promise<NonceRecord | null> {
+    // GETDEL is atomic: returns the value and deletes the key in one round
+    // trip. Prevents two replicas burning the same nonce concurrently.
+    const raw = (await this.client.call('GETDEL', this.key(id))) as string | null;
+    if (!raw) return null;
+    let record: NonceRecord;
+    try {
+      record = JSON.parse(raw) as NonceRecord;
+    } catch {
+      return null;
+    }
+    if (record.expiresAt < Date.now()) return null;
+    if (record.address.toLowerCase() !== address.toLowerCase()) return null;
+    return record;
+  }
+}
+
+function createNonceStore(): INonceStore {
+  const redis = getRedis();
+  if (redis) {
+    console.log('[auth] nonce store: redis');
+    return new RedisNonceStore(redis);
+  }
+  console.log('[auth] nonce store: in-memory (single replica)');
+  return new InMemoryNonceStore();
+}
+
+const nonceStore: INonceStore = createNonceStore();
+
+export function getNonceStoreBackend(): 'redis' | 'in-memory' {
+  return nonceStore instanceof RedisNonceStore ? 'redis' : 'in-memory';
+}
 
 /**
  * Build a CAIP-122 multi-line login message. Wallets render this directly so
@@ -186,10 +222,10 @@ export function buildCaip122Message(opts: {
   ].join('\n');
 }
 
-export function issueAuthNonce(
+export async function issueAuthNonce(
   address: string,
   context?: NonceContext,
-): { id: string; message: string; expiresAt: number } {
+): Promise<{ id: string; message: string; expiresAt: number }> {
   if (!isProbablyP2pkhAddress(address)) {
     throw new Error('Address must be a P2PKH cash address (bitcoincash: / bchtest: / bchreg:)');
   }
@@ -212,9 +248,7 @@ export function issueAuthNonce(
     issuedAt: issuedAt.getTime(),
     expiresAt: expiresAt.getTime(),
   };
-  // Manually seed the in-memory store with the pre-built id so the message
-  // matches what we just signed below the line.
-  (nonceStore as unknown as { nonces: Map<string, NonceRecord> }).nonces.set(id, record);
+  await nonceStore.put(record);
   return { id, message, expiresAt: expiresAt.getTime() };
 }
 
@@ -376,12 +410,12 @@ function recoverPubkey(rs: Uint8Array, recoveryId: 0 | 1 | 2 | 3, digest: Uint8A
  *      the returned user object includes `legacySiwxFormat: true` so the audit
  *      pipeline can track residual usage.
  */
-export function verifyWalletOwnership(params: {
+export async function verifyWalletOwnership(params: {
   address: string;
   signature: string;
   nonceId: string;
   signerPubkeyHex?: string;
-}): AuthenticatedUser & { legacySiwxFormat: boolean } {
+}): Promise<AuthenticatedUser & { legacySiwxFormat: boolean }> {
   const { address, signature, nonceId, signerPubkeyHex } = params;
 
   if (!address || !signature || !nonceId) {
@@ -391,7 +425,7 @@ export function verifyWalletOwnership(params: {
   const expectedHash = pubkeyHashFromAddress(address);
   if (!expectedHash) throw new Error('Address is not a supported P2PKH cash address');
 
-  const record = nonceStore.consume(nonceId, address);
+  const record = await nonceStore.consume(nonceId, address);
   if (!record) throw new Error('Nonce expired or already consumed');
 
   // -- Path 1: BIP-322 base64 65-byte recoverable signature ------------------
@@ -568,7 +602,11 @@ function extractBearerToken(req: Request): string | null {
  * Usage:
  *   router.post('/streams/:id/cancel', requireWalletAuth, handler);
  */
-export function requireWalletAuth(req: Request, res: Response, next: NextFunction): void {
+export async function requireWalletAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   // Path 1: Bearer token.
   const bearer = extractBearerToken(req);
   if (bearer) {
@@ -589,7 +627,7 @@ export function requireWalletAuth(req: Request, res: Response, next: NextFunctio
     const nonceId = String(req.headers['x-nonce-id'] || '').trim();
     const signerPubkeyHex = String(req.headers['x-signer-public-key'] || '').trim() || undefined;
 
-    const user = verifyWalletOwnership({ address, signature, nonceId, signerPubkeyHex });
+    const user = await verifyWalletOwnership({ address, signature, nonceId, signerPubkeyHex });
     req.verifiedUser = user;
     next();
   } catch (error) {

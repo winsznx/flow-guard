@@ -124,12 +124,11 @@ function mockRes(): MockRes {
   return res;
 }
 
-function runMiddleware(headers: Record<string, string>): { req: MockReq; res: MockRes; nextCalled: boolean } {
+async function runMiddleware(headers: Record<string, string>): Promise<{ req: MockReq; res: MockRes; nextCalled: boolean }> {
   const req = mockReq(headers);
   const res = mockRes();
   let nextCalled = false;
-  // requireWalletAuth signature is (req, res, next).
-  (requireWalletAuth as unknown as (r: MockReq, s: MockRes, n: () => void) => void)(
+  await (requireWalletAuth as unknown as (r: MockReq, s: MockRes, n: () => void) => Promise<void>)(
     req,
     res,
     () => {
@@ -150,7 +149,7 @@ async function main(): Promise<void> {
   const address = cashAddressForPubkey(pubKey);
 
   // ===== 1. Nonce issuance + CAIP-122 message shape =====
-  const nonce = issueAuthNonce(address, { domain: 'flowguard.test', uri: 'https://flowguard.test' });
+  const nonce = await issueAuthNonce(address, { domain: 'flowguard.test', uri: 'https://flowguard.test' });
   check('nonce/has-id', typeof nonce.id === 'string' && nonce.id.length >= 16);
   check('nonce/has-message', typeof nonce.message === 'string' && nonce.message.length > 50);
   check('nonce/has-expiry', typeof nonce.expiresAt === 'number' && nonce.expiresAt > Date.now());
@@ -165,7 +164,7 @@ async function main(): Promise<void> {
   check('sign/base64-shape', /^[A-Za-z0-9+/]+=*$/.test(signature) && Buffer.from(signature, 'base64').length === 65);
 
   // ===== 3. Verify accepts the proof =====
-  const verified = verifyWalletOwnership({ address, nonceId: nonce.id, signature });
+  const verified = await verifyWalletOwnership({ address, nonceId: nonce.id, signature });
   check('verify/address-match', verified.address === address);
   check('verify/bip322-path', verified.legacySiwxFormat === false);
   check('verify/pubkey-recovered', verified.pubkeyHex.length === 66);
@@ -173,7 +172,7 @@ async function main(): Promise<void> {
   // ===== 4. Replay rejected (one-shot) =====
   let replayThrew = false;
   try {
-    verifyWalletOwnership({ address, nonceId: nonce.id, signature });
+    await verifyWalletOwnership({ address, nonceId: nonce.id, signature });
   } catch {
     replayThrew = true;
   }
@@ -205,16 +204,16 @@ async function main(): Promise<void> {
 
   // ===== 7. Middleware: Authorization: Bearer accepted =====
   {
-    const result = runMiddleware({ authorization: `Bearer ${bearer.token}` });
+    const result = await runMiddleware({ authorization: `Bearer ${bearer.token}` });
     check('middleware/bearer-accepted', result.nextCalled);
     check('middleware/bearer-verified-user', result.req.verifiedUser?.address === address);
   }
 
   // ===== 8. Middleware: SIWX 4-header path (fresh nonce) =====
   {
-    const nonce2 = issueAuthNonce(address);
+    const nonce2 = await issueAuthNonce(address);
     const sig2 = bip322Sign(nonce2.message, privKey);
-    const result = runMiddleware({
+    const result = await runMiddleware({
       'x-user-address': address,
       'x-signed-nonce': sig2,
       'x-nonce-id': nonce2.id,
@@ -225,13 +224,13 @@ async function main(): Promise<void> {
 
   // ===== 9. Middleware: no auth rejected =====
   {
-    const result = runMiddleware({});
+    const result = await runMiddleware({});
     check('middleware/no-auth-rejected', !result.nextCalled && result.res.statusCode === 401);
   }
 
   // ===== 10. Middleware: bad bearer fallthrough rejected =====
   {
-    const result = runMiddleware({ authorization: 'Bearer garbage.AAAA' });
+    const result = await runMiddleware({ authorization: 'Bearer garbage.AAAA' });
     check('middleware/bad-bearer-rejected', !result.nextCalled && result.res.statusCode === 401);
   }
 

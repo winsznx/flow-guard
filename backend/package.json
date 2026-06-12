@@ -29,6 +29,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.21.2",
     "express-rate-limit": "^7.4.0",
+    "ioredis": "^5.11.1",
     "mainnet-js": "^2.7.31",
     "pg": "^8.20.0"
   },
