@@ -37,6 +37,7 @@ const TABLE_SPECS: TableSpec[] = [
   { table: 'bounties',          family: 'BOUNTY' },
   { table: 'grants',            family: 'GRANT' },
   { table: 'governance_votes',  family: 'VOTE_LOCK' },
+  { table: 'governance_proposals', family: 'GOVERNANCE_PROPOSAL' },
 ];
 
 interface RegistryRow {

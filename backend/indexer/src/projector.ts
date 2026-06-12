@@ -316,12 +316,16 @@ export async function startProjector(opts: ProjectorOpts): Promise<() => Promise
     const commitment = commitmentBuffer(unspent);
     if (!commitment) return;
 
-    let decoded: Record<string, unknown>;
+    let decoded: Record<string, unknown> | { decode_pending: string };
     try {
       decoded = handler.decode(commitment);
     } catch (err) {
-      log('decode failed', { address: entry.address, family: entry.family, err: String(err) });
-      return;
+      decoded = { decode_pending: String(err) };
+      log('decode pending, will store raw commitment', {
+        address: entry.address,
+        family: entry.family,
+        err: String(err),
+      });
     }
 
     const confirmationsForUtxo = unspent.height > 0 ? Math.max(0, tip.height - unspent.height + 1) : 0;

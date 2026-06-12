@@ -46,6 +46,7 @@ function assertNetwork(value: string): 'mainnet' | 'chipnet' {
 const COVENANT_TABLES = [
   'vaults', 'proposals', 'streams', 'payments', 'budget_plans',
   'airdrops', 'rewards', 'bounties', 'grants', 'governance_votes',
+  'governance_proposals',
 ] as const;
 
 let schemaInitialized = false;
