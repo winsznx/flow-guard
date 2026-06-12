@@ -50,6 +50,15 @@ const COVENANT_TABLES = [
 
 let schemaInitialized = false;
 
+export async function runMigrations(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await ensureSchema(client);
+  } finally {
+    client.release();
+  }
+}
+
 async function ensureSchema(client: PoolClient): Promise<void> {
   if (schemaInitialized) return;
   await client.query(`

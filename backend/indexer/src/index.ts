@@ -5,7 +5,7 @@ import { Pool } from 'pg';
 import { ElectrumClient, type ElectrumServerSpec } from './electrum-client.js';
 import { startProjector } from './projector.js';
 import { loadRegistry, type RegistryEntry } from './registry.js';
-import { getSyncState, type SyncState } from './sync-state.js';
+import { getSyncState, runMigrations, type SyncState } from './sync-state.js';
 
 dotenv.config();
 
@@ -94,6 +94,9 @@ async function main(): Promise<void> {
   const pool = new Pool({ connectionString: env.databaseUrl });
   await pool.query('SELECT 1');
   console.log(`[indexer] database connected (network=${env.network})`);
+
+  await runMigrations(pool);
+  console.log('[indexer] schema migrations applied');
 
   const electrum = new ElectrumClient();
   await electrum.connect(env.servers);
