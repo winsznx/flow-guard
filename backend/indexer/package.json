@@ -8,9 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "watch": "tsc --watch",
-    "db:migrate": "psql $DATABASE_URL -f schema.sql",
-    "db:reset": "psql $DATABASE_URL -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' && npm run db:migrate"
+    "watch": "tsc --watch"
   },
   "dependencies": {
     "@bitauth/libauth": "3.0.0",

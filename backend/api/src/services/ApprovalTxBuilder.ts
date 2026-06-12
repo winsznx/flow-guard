@@ -31,6 +31,7 @@ import {
   ProposalStatus,
   ProposalUTXO,
 } from '@flowguard/shared/types/covenant-types';
+import { encodeProposalState } from '@flowguard/shared/utils';
 
 /**
  * ApprovalTxBuilder Configuration
@@ -133,7 +134,7 @@ export class ApprovalTxBuilder {
     });
 
     // 4. Encode new ProposalState commitment
-    const newCommitment = this.encodeProposalState(newState);
+    const newCommitment = encodeProposalState(newState);
 
     // 5. Construct transaction
     const tx: UnsignedTransaction = {
@@ -261,50 +262,6 @@ export class ApprovalTxBuilder {
     return true;
   }
 
-  // ==================== STATE ENCODING FUNCTIONS ====================
-
-  /**
-   * Encode ProposalState into NFT commitment (64 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeProposalState()
-   */
-  private encodeProposalState(state: ProposalState): Buffer {
-    const commitment = Buffer.alloc(64);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: status
-    commitment.writeUInt8(state.status, 4);
-
-    // [5-7]: approval_count (uint24, 3 bytes big-endian)
-    commitment.writeUInt8((state.approvalCount >> 16) & 0xff, 5);
-    commitment.writeUInt8((state.approvalCount >> 8) & 0xff, 6);
-    commitment.writeUInt8(state.approvalCount & 0xff, 7);
-
-    // [8-11]: required_approvals
-    commitment.writeUInt32BE(state.requiredApprovals, 8);
-
-    // [12-19]: voting_end_timestamp
-    commitment.writeBigUInt64BE(state.votingEndTimestamp, 12);
-
-    // [20-27]: execution_timelock
-    commitment.writeBigUInt64BE(state.executionTimelock, 20);
-
-    // [28-35]: payout_total
-    commitment.writeBigUInt64BE(state.payoutTotal, 28);
-
-    // [36-63]: payout_hash (28 bytes)
-    state.payoutHash.copy(commitment, 36, 0, 28);
-
-    return commitment;
-  }
-
-  /**
-   * Compute signerSetHash (SHA256 of concatenated pubkeys)
-   *
-   * Mirrors: VaultCovenant constructor validation
-   */
   private computeSignerSetHash(pubkeys: Buffer[]): Buffer {
     const concatenated = Buffer.concat(pubkeys);
     return crypto.createHash('sha256').update(concatenated).digest();

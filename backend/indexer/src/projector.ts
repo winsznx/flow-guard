@@ -10,7 +10,7 @@ import {
 } from './state-decoders.js';
 
 import { ElectrumClient, type ElectrumHistoryEntry, type ElectrumUnspent } from './electrum-client.js';
-import type { Family, RegistryEntry } from './registry.js';
+import { loadRegistry, type Family, type RegistryEntry } from './registry.js';
 import {
   advanceSafe,
   findReorgPoint,
@@ -27,7 +27,10 @@ export interface ProjectorOpts {
   registry: RegistryEntry[];
   confirmations: number;
   network: 'mainnet' | 'chipnet';
+  registryRefreshMs?: number;
 }
+
+const DEFAULT_REGISTRY_REFRESH_MS = 60_000;
 
 interface Tip {
   height: number;
@@ -118,13 +121,70 @@ export async function startProjector(opts: ProjectorOpts): Promise<() => Promise
     });
   });
 
-  for (const [sh, entry] of addressBySh) {
+  async function subscribeOne(sh: string, entry: RegistryEntry): Promise<void> {
     await electrum.subscribeScripthash(sh, (_status) => {
       if (stopping) return;
       schedule(sh, entry);
     });
     schedule(sh, entry);
   }
+
+  for (const [sh, entry] of addressBySh) {
+    await subscribeOne(sh, entry);
+  }
+
+  async function refreshRegistry(): Promise<void> {
+    if (stopping) return;
+    let fresh: RegistryEntry[];
+    try {
+      fresh = await loadRegistry(pool);
+    } catch (err) {
+      log('registry refresh failed', { err: String(err) });
+      return;
+    }
+
+    const freshBySh = new Map<string, RegistryEntry>();
+    for (const entry of fresh) {
+      try {
+        freshBySh.set(electrum.addressToScripthash(entry.address), entry);
+      } catch (err) {
+        log('failed to derive scripthash on refresh, skipping', { address: entry.address, err: String(err) });
+      }
+    }
+
+    const added: Array<[string, RegistryEntry]> = [];
+    for (const [sh, entry] of freshBySh) {
+      if (!addressBySh.has(sh)) added.push([sh, entry]);
+    }
+    const removed: string[] = [];
+    for (const sh of addressBySh.keys()) {
+      if (!freshBySh.has(sh)) removed.push(sh);
+    }
+
+    for (const sh of removed) {
+      try {
+        await electrum.unsubscribeScripthash(sh);
+      } catch (err) {
+        log('unsubscribe failed on refresh', { sh, err: String(err) });
+      }
+      addressBySh.delete(sh);
+    }
+
+    for (const [sh, entry] of added) {
+      addressBySh.set(sh, entry);
+      await subscribeOne(sh, entry);
+    }
+
+    if (added.length > 0 || removed.length > 0) {
+      log('registry refreshed', { added: added.length, removed: removed.length, total: addressBySh.size });
+    }
+  }
+
+  const refreshMs = opts.registryRefreshMs ?? DEFAULT_REGISTRY_REFRESH_MS;
+  const refreshTimer: NodeJS.Timeout | null = refreshMs > 0
+    ? setInterval(() => { void refreshRegistry(); }, refreshMs)
+    : null;
+  refreshTimer?.unref?.();
 
   function schedule(sh: string, entry: RegistryEntry): void {
     const prev = pending.get(sh) ?? Promise.resolve();
@@ -379,6 +439,7 @@ export async function startProjector(opts: ProjectorOpts): Promise<() => Promise
 
   return async function stop(): Promise<void> {
     stopping = true;
+    if (refreshTimer) clearInterval(refreshTimer);
     for (const sh of addressBySh.keys()) {
       try {
         await electrum.unsubscribeScripthash(sh);

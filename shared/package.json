@@ -17,6 +17,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./types": "./dist/types/index.js",
-    "./constants": "./dist/constants/covenant-params.js"
+    "./constants": "./dist/constants/covenant-params.js",
+    "./utils": "./dist/utils/index.js"
   }
 }

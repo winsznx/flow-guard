@@ -17,7 +17,8 @@
   },
   "include": [
     "types/**/*",
-    "constants/**/*"
+    "constants/**/*",
+    "utils/**/*"
   ],
   "exclude": [
     "node_modules",

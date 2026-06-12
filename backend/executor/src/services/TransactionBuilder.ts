@@ -27,6 +27,11 @@ import {
   ScheduleType,
   VaultStatus,
 } from '@flowguard/shared/types';
+import {
+  encodeScheduleState,
+  encodeVaultState,
+  encodeProposalState,
+} from '@flowguard/shared/utils';
 
 /**
  * Transaction Builder Configuration
@@ -121,9 +126,15 @@ export class TransactionBuilder {
     // 4. Compute new schedule state
     const interval = Number(currentState.intervalSeconds);
     const newState: ScheduleState = {
-      ...currentState,
-      nextUnlockTimestamp: currentState.nextUnlockTimestamp + BigInt(interval),
+      status: currentState.status,
+      flags: currentState.flags,
+      cancelable: currentState.cancelable,
+      transferable: currentState.transferable,
+      usesTokens: currentState.usesTokens,
       totalReleased: currentState.totalReleased + BigInt(payoutAmount),
+      scheduleCursor: Number(currentState.nextUnlockTimestamp + BigInt(interval)),
+      pauseStart: currentState.pauseStart,
+      recipientHash: currentState.recipientHash,
     };
 
     // 5. Compute executor fee (bounded)
@@ -165,7 +176,7 @@ export class TransactionBuilder {
                 category: schedule.token?.category,
                 nft: {
                   capability: 'none' as const,
-                  commitment: this.encodeScheduleState(newState),
+                  commitment: encodeScheduleState(newState),
                 },
               },
             },
@@ -404,7 +415,7 @@ export class TransactionBuilder {
             category: vault.token?.category,
             nft: {
               capability: 'none' as const,
-              commitment: this.encodeVaultState(newVaultState),
+              commitment: encodeVaultState(newVaultState),
             },
           },
         },
@@ -421,7 +432,7 @@ export class TransactionBuilder {
             category: proposal.token?.category,
             nft: {
               capability: 'none' as const,
-              commitment: this.encodeProposalState({
+              commitment: encodeProposalState({
                 ...proposal.state,
                 status: ProposalStatus.EXECUTED,
               }),
@@ -446,106 +457,6 @@ export class TransactionBuilder {
     });
 
     return tx;
-  }
-
-  /**
-   * Encode ScheduleState into NFT commitment (48 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeScheduleState()
-   */
-  private encodeScheduleState(state: ScheduleState): Buffer {
-    const commitment = Buffer.alloc(48);
-
-    // [0-3]: version (uint32 big-endian)
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: schedule_type (uint8)
-    commitment.writeUInt8(state.scheduleType, 4);
-
-    // [5-7]: reserved (zeros)
-
-    // [8-15]: interval_seconds (uint64 big-endian)
-    commitment.writeBigUInt64BE(state.intervalSeconds, 8);
-
-    // [16-23]: next_unlock_timestamp
-    commitment.writeBigUInt64BE(state.nextUnlockTimestamp, 16);
-
-    // [24-31]: amount_per_interval
-    commitment.writeBigUInt64BE(state.amountPerInterval, 24);
-
-    // [32-39]: total_released
-    commitment.writeBigUInt64BE(state.totalReleased, 32);
-
-    // [40-47]: cliff_timestamp
-    commitment.writeBigUInt64BE(state.cliffTimestamp, 40);
-
-    return commitment;
-  }
-
-  /**
-   * Encode VaultState into NFT commitment (32 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeVaultState()
-   */
-  private encodeVaultState(state: VaultState): Buffer {
-    const commitment = Buffer.alloc(32);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: status
-    commitment.writeUInt8(state.status, 4);
-
-    // [5-7]: rolesMask (3 bytes)
-    state.rolesMask.copy(commitment, 5, 0, 3);
-
-    // [8-15]: current_period_id
-    commitment.writeBigUInt64BE(state.currentPeriodId, 8);
-
-    // [16-23]: spent_this_period
-    commitment.writeBigUInt64BE(state.spentThisPeriod, 16);
-
-    // [24-31]: last_update_timestamp
-    commitment.writeBigUInt64BE(state.lastUpdateTimestamp, 24);
-
-    return commitment;
-  }
-
-  /**
-   * Encode ProposalState into NFT commitment (64 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeProposalState()
-   */
-  private encodeProposalState(state: ProposalState): Buffer {
-    const commitment = Buffer.alloc(64);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: status
-    commitment.writeUInt8(state.status, 4);
-
-    // [5-7]: approval_count (uint24, 3 bytes big-endian)
-    commitment.writeUInt8((state.approvalCount >> 16) & 0xff, 5);
-    commitment.writeUInt8((state.approvalCount >> 8) & 0xff, 6);
-    commitment.writeUInt8(state.approvalCount & 0xff, 7);
-
-    // [8-11]: required_approvals
-    commitment.writeUInt32BE(state.requiredApprovals, 8);
-
-    // [12-19]: voting_end_timestamp
-    commitment.writeBigUInt64BE(state.votingEndTimestamp, 12);
-
-    // [20-27]: execution_timelock
-    commitment.writeBigUInt64BE(state.executionTimelock, 20);
-
-    // [28-35]: payout_total
-    commitment.writeBigUInt64BE(state.payoutTotal, 28);
-
-    // [36-63]: payout_hash (28 bytes)
-    state.payoutHash.copy(commitment, 36, 0, 28);
-
-    return commitment;
   }
 
   /**

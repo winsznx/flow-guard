@@ -24,14 +24,17 @@ import crypto from 'crypto';
 import {
   VaultState,
   ProposalState,
-  ScheduleState,
   VoteState,
-  TallyState,
   VaultStatus,
   ProposalStatus,
   ScheduleType,
   VoteChoice,
 } from '@flowguard/shared/types/covenant-types';
+import {
+  encodeVaultState,
+  encodeProposalState,
+  encodeVoteState,
+} from '@flowguard/shared/utils';
 
 /**
  * NFT Minter Configuration
@@ -188,7 +191,7 @@ export class NFTMinter {
       lastUpdateTimestamp: BigInt(Math.floor(Date.now() / 1000)),
     };
 
-    const vaultCommitment = this.encodeVaultState(initialState);
+    const vaultCommitment = encodeVaultState(initialState);
 
     // 3. Compute NFT category (hash of first input outpoint)
     // Category = hash(txid || vout) per CashTokens spec
@@ -282,26 +285,22 @@ export class NFTMinter {
   async buildSubmitProposalTx(input: SubmitProposalInput): Promise<UnsignedTransaction> {
     console.log('[NFTMinter] Building SubmitProposal transaction...');
 
-    // 1. Compute payout hash (SHA256 of payout data)
-    const payoutHash = this.computePayoutHash(input.payouts);
+    const payoutHash = this.computePayoutHash20(input.payouts);
 
-    // 2. Compute payout total
     const payoutTotal = input.payouts.reduce((sum, p) => sum + p.amount, BigInt(0));
 
-    // 3. Encode initial ProposalState commitment
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    const currentTime = Math.floor(Date.now() / 1000);
     const initialState: ProposalState = {
       version: 1,
-      status: ProposalStatus.SUBMITTED,
+      status: ProposalStatus.PENDING,
       approvalCount: 0,
       requiredApprovals: input.requiredApprovals,
-      votingEndTimestamp: currentTime + BigInt(input.votingDuration),
-      executionTimelock: currentTime + BigInt(input.executionDelay),
-      payoutTotal,
-      payoutHash: payoutHash.slice(0, 28), // First 28 bytes
+      votingEndTimestamp: currentTime + input.votingDuration,
+      executionTimelock: currentTime + input.executionDelay,
+      payoutHash,
     };
 
-    const proposalCommitment = this.encodeProposalState(initialState);
+    const proposalCommitment = encodeProposalState(initialState);
 
     // 4. Compute NFT category (hash of first input outpoint)
     const genesisOutpoint = Buffer.concat([
@@ -375,81 +374,17 @@ export class NFTMinter {
   async buildCreateScheduleTx(input: CreateScheduleInput): Promise<UnsignedTransaction> {
     console.log('[NFTMinter] Building CreateSchedule transaction...');
 
-    // 1. Compute initial unlock timestamp (now + interval)
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const nextUnlock = currentTime + input.intervalSeconds;
-
-    // 2. Encode initial ScheduleState commitment
-    const initialState: ScheduleState = {
-      version: 1,
-      scheduleType: input.scheduleType,
-      intervalSeconds: input.intervalSeconds,
-      nextUnlockTimestamp: nextUnlock,
-      amountPerInterval: input.amountPerInterval,
-      totalReleased: BigInt(0),
-      cliffTimestamp: input.cliffTimestamp,
-    };
-
-    const scheduleCommitment = this.encodeScheduleState(initialState);
-
-    // 3. Compute NFT category (hash of first input outpoint)
-    const genesisOutpoint = Buffer.concat([
-      Buffer.from(input.fundingUTXOs[0].txid, 'hex').reverse(),
-      Buffer.alloc(4),
-    ]);
-    genesisOutpoint.writeUInt32LE(input.fundingUTXOs[0].vout, 32);
-    const nftCategory = crypto.createHash('sha256').update(genesisOutpoint).digest('hex');
-
-    console.log('[NFTMinter]   NFT Category:', nftCategory);
-    console.log('[NFTMinter]   Schedule Type:', ScheduleType[initialState.scheduleType]);
-    console.log('[NFTMinter]   Next Unlock:', new Date(Number(nextUnlock) * 1000).toISOString());
-
-    const totalInputValue = input.fundingUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis,
-      BigInt(0),
+    // TODO_REVIEW: CreateScheduleInput does not carry the fields required by the
+    // current ScheduleState shape (status/flags/recipientHash/scheduleCursor/pauseStart).
+    // Inputs only provide scheduleType, intervalSeconds, amountPerInterval, cliffTimestamp
+    // and a beneficiaryAddress string. The caller needs to be updated to pass the
+    // covenant-aligned fields (recipientHash20, cancelable/transferable/usesTokens flags,
+    // initial scheduleCursor) before this path can be wired to the shared codec.
+    throw new Error(
+      'buildCreateScheduleTx: ScheduleState shape mismatch. Input must provide ' +
+        'recipientHash (20 bytes), flag bits (cancelable/transferable/usesTokens), ' +
+        'and initial scheduleCursor before encoding. See TODO_REVIEW above.',
     );
-
-    const changeAmount = totalInputValue - input.totalAmount - BigInt(1000); // 1000 sat tx fee
-
-    const tx: UnsignedTransaction = {
-      hex: '',
-      inputs: input.fundingUTXOs.map((utxo) => ({
-        txid: utxo.txid,
-        vout: utxo.vout,
-        satoshis: utxo.satoshis,
-      })),
-      outputs: [
-        // Output 0: ScheduleUTXO with minted ScheduleNFT
-        {
-          satoshis: input.totalAmount,
-          token: {
-            category: nftCategory,
-            nft: {
-              capability: 'none' as const,
-              commitment: scheduleCommitment,
-            },
-          },
-        },
-        // Output 1: Change (if any)
-        ...(changeAmount > BigInt(546)
-          ? [
-              {
-                satoshis: changeAmount,
-              },
-            ]
-          : []),
-      ],
-      nftCategory,
-    };
-
-    console.log('[NFTMinter]   ✓ CreateSchedule tx built:', {
-      inputCount: tx.inputs.length,
-      outputCount: tx.outputs.length,
-      totalAmount: input.totalAmount.toString(),
-      nftCategory,
-    });
-
-    return tx;
   }
 
   /**
@@ -469,19 +404,18 @@ export class NFTMinter {
   async buildCastVoteTx(input: CastVoteInput): Promise<UnsignedTransaction> {
     console.log('[NFTMinter] Building CastVote transaction...');
 
-    // 1. Encode VoteState commitment
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const proposalIdPrefix = Buffer.from(input.proposalId.slice(0, 8), 'hex'); // First 4 bytes
+    const currentTime = Math.floor(Date.now() / 1000);
+    const proposalIdPrefix = Buffer.from(input.proposalId.slice(0, 8), 'hex');
 
     const initialState: VoteState = {
       version: 1,
       proposalIdPrefix,
       voteChoice: input.voteChoice,
       lockTimestamp: currentTime,
-      unlockTimestamp: input.unlockTimestamp,
+      unlockTimestamp: Number(input.unlockTimestamp),
     };
 
-    const voteCommitment = this.encodeVoteState(initialState);
+    const voteCommitment = encodeVoteState(initialState);
 
     // 2. Compute total token amount
     const totalTokens = input.governanceTokenUTXOs.reduce(
@@ -531,217 +465,33 @@ export class NFTMinter {
     return tx;
   }
 
-  // ==================== STATE ENCODING FUNCTIONS ====================
-
-  /**
-   * Encode VaultState into NFT commitment (32 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeVaultState()
-   */
-  private encodeVaultState(state: VaultState): Buffer {
-    const commitment = Buffer.alloc(32);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: status
-    commitment.writeUInt8(state.status, 4);
-
-    // [5-7]: rolesMask (3 bytes)
-    state.rolesMask.copy(commitment, 5, 0, 3);
-
-    // [8-15]: current_period_id
-    commitment.writeBigUInt64BE(state.currentPeriodId, 8);
-
-    // [16-23]: spent_this_period
-    commitment.writeBigUInt64BE(state.spentThisPeriod, 16);
-
-    // [24-31]: last_update_timestamp
-    commitment.writeBigUInt64BE(state.lastUpdateTimestamp, 24);
-
-    return commitment;
-  }
-
-  /**
-   * Encode ProposalState into NFT commitment (64 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeProposalState()
-   */
-  private encodeProposalState(state: ProposalState): Buffer {
-    const commitment = Buffer.alloc(64);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: status
-    commitment.writeUInt8(state.status, 4);
-
-    // [5-7]: approval_count (uint24, 3 bytes big-endian)
-    commitment.writeUInt8((state.approvalCount >> 16) & 0xff, 5);
-    commitment.writeUInt8((state.approvalCount >> 8) & 0xff, 6);
-    commitment.writeUInt8(state.approvalCount & 0xff, 7);
-
-    // [8-11]: required_approvals
-    commitment.writeUInt32BE(state.requiredApprovals, 8);
-
-    // [12-19]: voting_end_timestamp
-    commitment.writeBigUInt64BE(state.votingEndTimestamp, 12);
-
-    // [20-27]: execution_timelock
-    commitment.writeBigUInt64BE(state.executionTimelock, 20);
-
-    // [28-35]: payout_total
-    commitment.writeBigUInt64BE(state.payoutTotal, 28);
-
-    // [36-63]: payout_hash (28 bytes)
-    state.payoutHash.copy(commitment, 36, 0, 28);
-
-    return commitment;
-  }
-
-  /**
-   * Encode ScheduleState into NFT commitment (48 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeScheduleState()
-   */
-  private encodeScheduleState(state: ScheduleState): Buffer {
-    const commitment = Buffer.alloc(48);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4]: schedule_type
-    commitment.writeUInt8(state.scheduleType, 4);
-
-    // [5-7]: reserved (zeros)
-
-    // [8-15]: interval_seconds
-    commitment.writeBigUInt64BE(state.intervalSeconds, 8);
-
-    // [16-23]: next_unlock_timestamp
-    commitment.writeBigUInt64BE(state.nextUnlockTimestamp, 16);
-
-    // [24-31]: amount_per_interval
-    commitment.writeBigUInt64BE(state.amountPerInterval, 24);
-
-    // [32-39]: total_released
-    commitment.writeBigUInt64BE(state.totalReleased, 32);
-
-    // [40-47]: cliff_timestamp
-    commitment.writeBigUInt64BE(state.cliffTimestamp, 40);
-
-    return commitment;
-  }
-
-  /**
-   * Encode VoteState into NFT commitment (32 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeVoteState()
-   */
-  private encodeVoteState(state: VoteState): Buffer {
-    const commitment = Buffer.alloc(32);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4-7]: proposal_id (first 4 bytes)
-    state.proposalIdPrefix.copy(commitment, 4, 0, 4);
-
-    // [8]: vote_choice
-    commitment.writeUInt8(state.voteChoice, 8);
-
-    // [9-15]: reserved (zeros)
-
-    // [16-23]: lock_timestamp
-    commitment.writeBigUInt64BE(state.lockTimestamp, 16);
-
-    // [24-31]: unlock_timestamp
-    commitment.writeBigUInt64BE(state.unlockTimestamp, 24);
-
-    return commitment;
-  }
-
-  /**
-   * Encode TallyState into NFT commitment (48 bytes)
-   *
-   * Mirrors: contracts/lib/StateEncoding.cash :: encodeTallyState()
-   */
-  private encodeTallyState(state: TallyState): Buffer {
-    const commitment = Buffer.alloc(48);
-
-    // [0-3]: version
-    commitment.writeUInt32BE(state.version, 0);
-
-    // [4-7]: proposal_id (first 4 bytes)
-    state.proposalIdPrefix.copy(commitment, 4, 0, 4);
-
-    // [8-15]: total_votes_for
-    commitment.writeBigUInt64BE(state.votesFor, 8);
-
-    // [16-23]: total_votes_against
-    commitment.writeBigUInt64BE(state.votesAgainst, 16);
-
-    // [24-31]: total_votes_abstain
-    commitment.writeBigUInt64BE(state.votesAbstain, 24);
-
-    // [32-39]: quorum_threshold
-    commitment.writeBigUInt64BE(state.quorumThreshold, 32);
-
-    // [40-47]: tally_timestamp
-    commitment.writeBigUInt64BE(state.tallyTimestamp, 40);
-
-    return commitment;
-  }
-
-  // ==================== UTILITY FUNCTIONS ====================
-
-  /**
-   * Compute signerSetHash (SHA256 of concatenated pubkeys)
-   *
-   * Mirrors: VaultCovenant constructor validation
-   */
   private computeSignerSetHash(pubkeys: Buffer[]): Buffer {
     const concatenated = Buffer.concat(pubkeys);
     return crypto.createHash('sha256').update(concatenated).digest();
   }
 
-  /**
-   * Compute payout hash (SHA256 of payout data)
-   *
-   * Mirrors: VaultCovenant.cash payout hash computation
-   *
-   * Format: SHA256(recipient1 + amount1 + recipient2 + amount2 + ...)
-   */
-  private computePayoutHash(
+  private computePayoutHash20(
     payouts: Array<{ address: string; amount: bigint; category?: string }>,
   ): Buffer {
-    // Convert addresses to hash160 (20 bytes)
-    // Extract from P2PKH addresses
     const buffers: Buffer[] = [];
 
     for (const payout of payouts) {
-      // Decode CashAddr to get hash160
-      // NOTE: In production, use proper CashAddr decoding library
-      const recipientHash = Buffer.alloc(20); // Placeholder
+      const recipientHash = this.addressToHash160(payout.address);
       buffers.push(recipientHash);
 
-      // Add amount (8 bytes big-endian)
       const amountBuf = Buffer.alloc(8);
-      amountBuf.writeBigUInt64BE(payout.amount, 0);
+      amountBuf.writeBigUInt64LE(payout.amount, 0);
       buffers.push(amountBuf);
     }
 
     const combined = Buffer.concat(buffers);
-    return crypto.createHash('sha256').update(combined).digest();
+    const sha = crypto.createHash('sha256').update(combined).digest();
+    return crypto.createHash('ripemd160').update(sha).digest();
   }
 
-  /**
-   * Convert BCH address to hash160
-   *
-   * TODO: Implement proper CashAddr decoding
-   */
-  private addressToHash160(address: string): Buffer {
-    // Placeholder - use cashaddr library in production
+  // TODO_REVIEW: replace with proper CashAddr decoding (e.g. @bitauth/libauth
+  // decodeCashAddress) so the payoutHash matches the covenant's hash160 expectation.
+  private addressToHash160(_address: string): Buffer {
     return Buffer.alloc(20);
   }
 }
