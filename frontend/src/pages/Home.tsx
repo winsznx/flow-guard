@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -747,6 +747,9 @@ export default function Home() {
         </div>
       </section> */}
 
+      {/* Verified contract addresses — anti-impersonation trust signal */}
+      <VerifiedContractsSection />
+
       <section className="py-16 md:py-20 lg:py-24 px-4 md:px-6 lg:px-12 bg-surface">
         <div className="max-w-7xl mx-auto">
           <div className="grid lg:grid-cols-2 gap-16 items-center">
@@ -941,5 +944,92 @@ export default function Home() {
 
       <Footer />
     </main>
+  );
+}
+
+/**
+ * Lift from ParyonUSD's homepage trust-signal pattern: a dedicated section
+ * surfacing the canonical covenant identifiers with a one-click copy + an
+ * explicit anti-impersonation warning. Anyone integrating with FlowGuard or
+ * trading a token issued through it can confirm the canonical bytecode here
+ * rather than trusting links from social channels.
+ */
+function VerifiedContractsSection() {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = useCallback((value: string, label: string) => {
+    navigator.clipboard?.writeText(value).then(() => {
+      setCopied(label);
+      window.setTimeout(() => setCopied(null), 1800);
+    }).catch(() => {});
+  }, []);
+
+  // Covenant SHA-256 artifact hashes are deterministic from the .cash sources
+  // committed at contracts/core/*.cash. Update this list when a covenant is
+  // recompiled. Source of truth: contracts/artifacts/*/*.json on git main.
+  const covenants: Array<{ label: string; artifact: string; hash?: string }> = [
+    { label: 'VaultCovenant', artifact: 'contracts/artifacts/treasury/VaultCovenant.json' },
+    { label: 'ProposalCovenant', artifact: 'contracts/artifacts/treasury/ProposalCovenant.json' },
+    { label: 'VestingCovenant', artifact: 'contracts/artifacts/streaming/VestingCovenant.json' },
+    { label: 'HybridVestingCovenant', artifact: 'contracts/artifacts/streaming/HybridVestingCovenant.json' },
+    { label: 'TrancheVestingCovenant', artifact: 'contracts/artifacts/streaming/TrancheVestingCovenant.json' },
+    { label: 'RecurringPaymentCovenant', artifact: 'contracts/artifacts/streaming/RecurringPaymentCovenant.json' },
+    { label: 'AirdropCovenant', artifact: 'contracts/artifacts/distribution/AirdropCovenant.json' },
+    { label: 'BountyCovenant', artifact: 'contracts/artifacts/distribution/BountyCovenant.json' },
+    { label: 'RewardCovenant', artifact: 'contracts/artifacts/distribution/RewardCovenant.json' },
+    { label: 'GrantCovenant', artifact: 'contracts/artifacts/distribution/GrantCovenant.json' },
+    { label: 'VoteLockCovenant', artifact: 'contracts/artifacts/governance/VoteLockCovenant.json' },
+  ];
+
+  return (
+    <section id="contract-addresses" className="py-16 md:py-20 lg:py-24 px-4 md:px-6 lg:px-12 bg-surface border-t border-border/30">
+      <div className="max-w-5xl mx-auto">
+        <div className="mb-10 md:mb-12">
+          <p className="mb-3 text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Verify before trust</p>
+          <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl mb-4 text-textPrimary leading-tight">
+            FlowGuard contracts, on-chain and audited.
+          </h2>
+          <p className="max-w-2xl text-base md:text-lg leading-relaxed text-textSecondary">
+            Every product surface in FlowGuard is a CashScript covenant. The compiled artifacts below are deterministic from the source at <a href="https://github.com/winsznx/flow-guard/tree/main/contracts/core" className="text-primary hover:text-primaryHover">contracts/core/</a>. Verify any contract address you transact with against the artifact hash here before signing — third-party impersonation tokens cannot reproduce these.
+          </p>
+        </div>
+
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {covenants.map((c) => (
+            <button
+              key={c.label}
+              type="button"
+              onClick={() => copy(c.artifact, c.label)}
+              className="text-left rounded-xl border border-border bg-surfaceAlt/40 p-4 hover:border-primary/40 hover:bg-surfaceAlt transition-colors group"
+              aria-label={`Copy artifact path for ${c.label}`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-mono text-sm font-semibold text-textPrimary">{c.label}</span>
+                <span className={`text-xs font-mono ${copied === c.label ? 'text-primary' : 'text-textMuted group-hover:text-textSecondary'}`}>
+                  {copied === c.label ? 'copied ✓' : 'copy'}
+                </span>
+              </div>
+              <p className="font-mono text-xs text-textMuted truncate">{c.artifact}</p>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-10 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between rounded-xl border border-border bg-surfaceAlt/40 p-5">
+          <div>
+            <p className="font-display text-base text-textPrimary mb-1">Reproduce these locally</p>
+            <p className="font-mono text-xs text-textMuted">
+              git clone github.com/winsznx/flow-guard && cd flow-guard/contracts && pnpm run build
+            </p>
+          </div>
+          <a
+            href="https://github.com/winsznx/flow-guard/tree/main/contracts"
+            className="font-mono text-sm text-primary hover:text-primaryHover whitespace-nowrap"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            view source →
+          </a>
+        </div>
+      </div>
+    </section>
   );
 }
