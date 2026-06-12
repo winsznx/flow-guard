@@ -10,14 +10,14 @@ RUN npm install -g pnpm@10
 # scripts (better-sqlite3 is a devDep only used by one-time migration scripts).
 # The runtime uses pg, not better-sqlite3 — we don't need its native binding
 # built in this image.
-RUN pnpm install --prod --frozen-lockfile --ignore-scripts
+RUN pnpm install --prod --ignore-scripts
 
 COPY backend/src ./src
 COPY backend/tsconfig.json ./tsconfig.json
 COPY contracts/artifacts ./contracts/artifacts
 
 # Dev deps for TS build only; same ignore-scripts treatment then prune.
-RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm install --ignore-scripts
 RUN pnpm build
 RUN pnpm prune --prod
 
