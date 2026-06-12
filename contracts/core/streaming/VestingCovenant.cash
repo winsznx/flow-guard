@@ -49,6 +49,10 @@ contract VestingCovenant(
      * Cliff enforced: no claims before cliffTimestamp.
      */
     function claim(sig recipientSig, pubkey recipientPubkey) {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -112,10 +116,11 @@ contract VestingCovenant(
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: cap the BCH the claimer can skim as "miner fee" on claim.
-        // Without this, a claim transaction can send the contract's entire BCH
-        // reserve to fees, breaking future claims and (with miner collusion)
-        // exfiltrating funds. Mirrors the cap enforced in complete() below.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - claimable);
+        }
+
+        // Cap miner fee so the claimer cannot drain the contract's BCH reserve.
         int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
         require(claimFee >= 0 && claimFee <= 2000);
     }
@@ -126,6 +131,10 @@ contract VestingCovenant(
      * Returns any unvested remainder to sender.
      */
     function complete() {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -159,6 +168,10 @@ contract VestingCovenant(
      * Records pause_start in state.
      */
     function pause(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -180,7 +193,10 @@ contract VestingCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: bound pause-path miner fee.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
         require(pauseFee >= 0 && pauseFee <= 2000);
     }
@@ -191,6 +207,10 @@ contract VestingCovenant(
      * Sender-only. Advances cursor by pause duration so paused time doesn't vest.
      */
     function resume(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status      = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -219,7 +239,10 @@ contract VestingCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: bound resume-path miner fee.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
         require(resumeFee >= 0 && resumeFee <= 2000);
     }
@@ -231,6 +254,10 @@ contract VestingCovenant(
      * Vested portion goes to recipient, unvested returns to sender.
      */
     function cancel(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -317,8 +344,7 @@ contract VestingCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: bound transfer-path miner fee; without this, the
-        // (signed) recipient could burn the contract reserve during handover.
+        // Bound miner fee so the signed recipient cannot burn the contract reserve during handover.
         int transferFee = tx.inputs[0].value - tx.outputs[0].value;
         require(transferFee >= 0 && transferFee <= 2000);
     }

@@ -119,7 +119,7 @@ router.get('/payments/:id', async (req: Request, res: Response) => {
  */
 router.post('/payments/create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
-    // Sender is bound to the authenticated wallet — body value ignored (audit C-01/C-02).
+    // Sender is bound to the authenticated wallet; any body value is ignored.
     const sender = req.verifiedUser!.address;
     const {
       recipient,
@@ -732,8 +732,7 @@ router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Requ
       });
     }
 
-    // Audit H-07: require the funding tx to consume a UTXO from the caller's
-    // wallet so a third party can't flip status with someone else's tx hash.
+    // Require the funding tx to consume a UTXO from the caller's wallet so a third party can't flip status with someone else's tx hash.
     if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
       return res.status(403).json({
         error: 'Funding transaction does not include an input from your wallet',

@@ -69,9 +69,7 @@ export class RewardDistributionService {
     if (typeof authPubKey === 'string') {
       throw new Error(`Invalid authority private key: ${authPubKey}`);
     }
-    // Audit C-06: RewardCovenant constructor now has TWO authority slots.
-    //   [1] authorityHash      = creator wallet (admin paths only)
-    //   [2] claimAuthorityHash = backend co-signer (reward issuance path)
+    // [1] authorityHash = creator wallet (admin paths); [2] claimAuthorityHash = backend co-signer (reward issuance path)
     const expectedClaimAuthorityHash = this.readBytes20(constructorParams[2], 'claimAuthorityHash');
     const derivedClaimAuthorityHash = hash160(authPubKey);
     if (typeof derivedClaimAuthorityHash === 'string') {
@@ -133,9 +131,7 @@ export class RewardDistributionService {
     }
 
     const rewardAmountBig = BigInt(rewardAmount);
-    // Constructor param indices (RewardCovenant, audit C-06 layout):
-    // [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
-    // [3]=maxRewardAmount [4]=totalPool [5]=startTimestamp [6]=endTimestamp
+    // Constructor param indices: [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash [3]=maxRewardAmount [4]=totalPool [5]=startTimestamp [6]=endTimestamp
     const maxRewardAmount = this.toBigIntParam(constructorParams[3], 'maxRewardAmount');
     if (rewardAmountBig > maxRewardAmount) {
       throw new Error(
@@ -291,7 +287,6 @@ export class RewardDistributionService {
   }
 
   private resolveDistributionLocktime(constructorParams: any[], now: bigint): bigint {
-    // Indices match the C-06 constructor layout (claimAuthorityHash at [2]).
     const startTimestamp = this.toBigIntParam(constructorParams?.[5] ?? 0, 'startTimestamp');
     const endTimestamp = this.toBigIntParam(constructorParams?.[6] ?? 0, 'endTimestamp');
 

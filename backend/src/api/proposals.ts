@@ -38,19 +38,8 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] {
   }
 }
 
-/**
- * Audit H-06 helper. Each execute-signature submission is a fully-signed
- * BCH transaction containing only one signer's witness. To detect substitution
- * attacks we extract the *structural* fingerprint (everything that should be
- * identical across every signer's submission for the same session) and compare.
- *
- * The fingerprint covers: version, locktime, ordered list of (outpoint, vout,
- * sequence) for every input, ordered list of (lockingBytecode, valueSatoshis,
- * token) for every output. The variable-length witness data (signatures) is
- * intentionally excluded.
- *
- * Returns null if the hex cannot be decoded (caller treats as malformed input).
- */
+// Structural fingerprint of a signed tx (inputs/outputs/locktime, excluding witness data)
+// used to detect substitution attacks across signers of the same session. Null on malformed hex.
 function txStructuralFingerprint(txHex: string): string | null {
   try {
     const decoded = decodeTransaction(hexToBin(txHex));
@@ -545,11 +534,8 @@ router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
       return res.status(400).json({ error: 'sessionId and signedTransaction are required' });
     }
 
-    // Audit H-06: extract a structural fingerprint of the submitted tx (inputs,
-    // outputs, locktime — everything except witness data). Every signer of the
-    // same session must submit a transaction whose fingerprint matches the
-    // canonical template's. This stops a malicious signer from substituting a
-    // different payload while reusing another signer's signature.
+    // Every signer must submit a tx whose structural fingerprint matches the canonical template,
+    // preventing a malicious signer from substituting a different payload with a reused signature.
     const submittedFingerprint = txStructuralFingerprint(signedTransaction);
     if (!submittedFingerprint) {
       return res.status(400).json({
@@ -560,10 +546,8 @@ router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
       });
     }
 
-    // Audit M-08: read-modify-write of the session row must be atomic across
-    // concurrent signer submissions. We take a row-level lock with FOR UPDATE
-    // inside a withTransaction block. Concurrent calls block here until the
-    // first commits; the loser then re-reads the updated state.
+    // Read-modify-write of the session row must be atomic across concurrent signer submissions;
+    // FOR UPDATE inside withTransaction serializes them so the loser re-reads the updated state.
     const result = await db.withTransaction(async (client) => {
       const sessionResult = await client.query<ProposalExecutionSessionRow>(
         `SELECT * FROM proposal_execution_sessions

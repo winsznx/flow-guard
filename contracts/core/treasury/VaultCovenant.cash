@@ -68,6 +68,8 @@ contract VaultCovenant(
         int newPeriodId,
         int newSpent
     ) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status          = int(c.split(1)[1].split(1)[0]);
         int currentPeriodId = int(c.split(5)[1].split(4)[0]);
@@ -80,6 +82,9 @@ contract VaultCovenant(
 
         require(newPeriodId == currentPeriodId + 1);
         require(newSpent == 0);
+
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
 
         if (periodDuration > 0) {
             require(tx.locktime >= lastUpdateTime + periodDuration);
@@ -100,6 +105,7 @@ contract VaultCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
     }
 
     /**
@@ -114,6 +120,8 @@ contract VaultCovenant(
         int newPeriodId,
         int newSpent
     ) {
+        require(tx.outputs.length <= 3);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status          = int(c.split(1)[1].split(1)[0]);
         int currentPeriodId = int(c.split(5)[1].split(4)[0]);
@@ -134,12 +142,12 @@ contract VaultCovenant(
 
         require(newPeriodId == currentPeriodId || newPeriodId == currentPeriodId + 1);
 
-        // Audit M-09: a zero-value payout was previously permitted, which let two
-        // colluding signers roll the spending window forward while recording no
-        // meaningful on-chain activity. Require a positive payout on every spend.
+        // Block zero-value spends so colluding signers cannot roll the spending window forward without real on-chain activity.
         require(payoutAmount > 0);
 
         if (newPeriodId == currentPeriodId + 1) {
+            require(tx.time >= 0);
+            require(tx.locktime < 500000000);
             if (periodDuration > 0) { require(tx.locktime >= lastUpdateTime + periodDuration); }
             require(newSpent == payoutAmount);
         } else {
@@ -175,6 +183,7 @@ contract VaultCovenant(
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount);
         require(proposalId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 
@@ -182,6 +191,8 @@ contract VaultCovenant(
      * pause() — Any registered signer can pause the vault
      */
     function pause(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status = int(c.split(1)[1].split(1)[0]);
 
@@ -198,12 +209,15 @@ contract VaultCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
     }
 
     /**
      * resume() — Resume a paused vault (M-of-N required)
      */
     function resume(sig sig1, pubkey pubkey1, sig sig2, pubkey pubkey2) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status = int(c.split(1)[1].split(1)[0]);
 
@@ -226,6 +240,7 @@ contract VaultCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
     }
 
     /**
@@ -236,6 +251,8 @@ contract VaultCovenant(
         sig sig2, pubkey pubkey2,
         sig sig3, pubkey pubkey3
     ) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status = int(c.split(1)[1].split(1)[0]);
 
@@ -257,6 +274,7 @@ contract VaultCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
         require(requiredApprovals > 0);
     }

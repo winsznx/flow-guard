@@ -164,8 +164,7 @@ router.get('/airdrops/:id', async (req: Request, res: Response) => {
  */
 router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
-    // Creator is bound to the authenticated wallet. Previously taken from body;
-    // that allowed impersonation of arbitrary BCH addresses (audit C-02).
+    // Creator is bound to the authenticated wallet to prevent impersonation of arbitrary BCH addresses.
     const creator = req.verifiedUser!.address;
     const {
       title,
@@ -471,9 +470,8 @@ router.post('/airdrops/:id/confirm-funding', requireWalletAuth, async (req: Requ
       });
     }
 
-    // Audit H-07: require the funding tx to consume a UTXO from the caller's
-    // wallet so a third party can't flip a campaign's status with someone
-    // else's tx hash.
+    // Require the funding tx to consume a UTXO from the caller's wallet so a third party
+    // can't flip a campaign's status with someone else's tx hash.
     if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
       return res.status(403).json({
         error: 'Funding transaction does not include an input from your wallet',
@@ -1200,12 +1198,11 @@ function deriveStandaloneVaultId(seed: string): string {
 /**
  * Resolve the canonical public app URL used when rendering claim links.
  *
- * Hardened (audit H-08): in production we refuse to trust `Origin`,
- * `X-Forwarded-Host`, or `Host` — those are attacker-controllable on any
- * incoming request and were being echoed into DB-persisted `claim_link`
- * fields, making them a phishing delivery channel. Only the server-configured
- * env vars are allowed. If the env is misconfigured in production the app
- * fails closed with an error rather than embedding a spoofable URL.
+ * In production we refuse to trust `Origin`, `X-Forwarded-Host`, or `Host` — those are
+ * attacker-controllable on any incoming request and were being echoed into DB-persisted
+ * `claim_link` fields, making them a phishing delivery channel. Only the server-configured
+ * env vars are allowed. If the env is misconfigured in production the app fails closed
+ * with an error rather than embedding a spoofable URL.
  */
 function resolvePublicAppBaseUrl(_req: Request): string {
   const configured = (process.env.APP_URL || process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '').trim();

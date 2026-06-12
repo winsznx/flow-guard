@@ -266,14 +266,9 @@ export function validateUUID(id: string): void {
 }
 
 /**
- * Express `router.param` handler — rejects requests with malformed UUIDs
- * before they touch the database. Use as `router.param('id', uuidParam)`
- * (or any other declared param name) to short-circuit dead lookups.
- *
- * Audit L-02: previously every handler that consumed `req.params.id` would
- * pass the raw value to a Postgres `WHERE id = $1` query. Postgres rejects
- * malformed UUIDs with a driver error that bubbled back as a 500. This guard
- * gives clients a deterministic 400 instead.
+ * Express `router.param` handler — rejects malformed UUIDs before they reach
+ * Postgres, which otherwise raises a driver error that surfaces as a 500
+ * instead of a deterministic 400. Use as `router.param('id', uuidParam)`.
  */
 export function uuidParam(
   req: Request,

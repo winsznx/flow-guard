@@ -146,12 +146,7 @@ export class BountyDeploymentService {
   ) {
     const artifact = ContractFactory.getArtifact('BountyCovenant');
 
-    // Audit C-06: BountyCovenant now has two authority slots.
-    //   authorityHash      = creator's wallet hash (admin paths + cancel refund)
-    //   claimAuthorityHash = backend co-signer hash (claim path only)
-    // Constructor index map (must mirror contracts/core/distribution/BountyCovenant.cash):
-    //   [0] vaultId, [1] authorityHash, [2] claimAuthorityHash,
-    //   [3] rewardPerWinner, [4] maxWinners, [5] startTimestamp, [6] endTimestamp
+    // Two distinct authority slots: authorityHash = creator (admin + cancel refund), claimAuthorityHash = backend co-signer (claim only).
     const constructorArgs = [
       vaultId,
       authorityHash,
@@ -183,10 +178,7 @@ export class BountyDeploymentService {
     }
 
     const vaultId = hexToBin(params.vaultId);
-    // authorityHash binds to the creator's wallet so cancel-refund pays the
-    // creator on chain (audit C-06). claimAuthorityHash binds to a freshly
-    // generated keypair the backend uses to co-sign claims after off-chain
-    // proof review. The two are intentionally distinct.
+    // authorityHash binds to creator's wallet so cancel-refund pays creator on chain; claimAuthorityHash is a fresh backend keypair for co-signing claims after off-chain proof review.
     const authorityHash = this.addressToHash160(params.authorityAddress);
     const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);

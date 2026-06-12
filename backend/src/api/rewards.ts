@@ -98,9 +98,8 @@ router.get('/rewards/:id', async (req: Request, res: Response) => {
  * Create a new reward campaign
  */
 router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Response) => {
-  // C-06 redesign landed: RewardCovenant now has two authority slots.
-  //   authorityHash      = creator wallet (admin paths; cancel-refund target)
-  //   claimAuthorityHash = backend co-signer (reward issuance only)
+  // Two authority slots: authorityHash = creator wallet (admin/cancel-refund);
+  // claimAuthorityHash = backend co-signer (reward issuance only).
   try {
     const creator = req.verifiedUser!.address;
     const {
@@ -324,8 +323,8 @@ router.post('/rewards/:id/confirm-funding', requireWalletAuth, async (req: Reque
       });
     }
 
-    // Audit H-07: require the funding tx to consume a UTXO from the caller's
-    // wallet so a third party can't flip status with someone else's tx hash.
+    // Require the funding tx to consume a UTXO from the caller's wallet so a
+    // third party can't flip status with someone else's tx hash.
     if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
       return res.status(403).json({
         error: 'Funding transaction does not include an input from your wallet',
@@ -458,8 +457,7 @@ router.post('/rewards/:id/distribute', requireWalletAuth, async (req: Request, r
     }
 
     const constructorParams = deserializeConstructorParams(campaign.constructor_params || '[]');
-    // Constructor (audit C-06): [3]=maxRewardAmount, [4]=totalPool after the
-    // claimAuthorityHash slot at [2].
+    // Constructor layout: [2]=claimAuthorityHash, [3]=maxRewardAmount, [4]=totalPool.
     const maxRewardAmountOnChain = readBigIntParam(constructorParams[3], 'maxRewardAmount');
     const rewardAmountOnChain = BigInt(displayAmountToOnChain(rewardAmount, campaign.token_type));
 

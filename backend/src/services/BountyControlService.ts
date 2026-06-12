@@ -142,7 +142,7 @@ export class BountyControlService {
 
     // BountyCovenant commitment layout:
     //   [2-9]=total_paid, [10-13]=winners_count
-    // Constructor (audit C-06):
+    // Constructor:
     //   [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
     //   [3]=rewardPerWinner [4]=maxWinners [5]=startTimestamp [6]=endTimestamp
     const winnersCount = this.readUint32LE(commitment, 10);

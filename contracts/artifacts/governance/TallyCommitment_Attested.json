@@ -19,25 +19,28 @@
       ]
     }
   ],
-  "bytecode": "OP_9 OP_ROLL OP_SIZE 28 OP_EQUALVERIFY OP_7 OP_PICK OP_HASH160 OP_10 OP_PICK OP_HASH160 OP_OVER OP_5 OP_PICK OP_EQUAL OP_2 OP_PICK OP_7 OP_PICK OP_EQUAL OP_BOOLOR OP_2 OP_PICK OP_8 OP_PICK OP_EQUAL OP_BOOLOR OP_VERIFY OP_DUP OP_5 OP_ROLL OP_EQUAL OP_OVER OP_6 OP_ROLL OP_EQUAL OP_BOOLOR OP_OVER OP_6 OP_ROLL OP_EQUAL OP_BOOLOR OP_VERIFY OP_EQUAL OP_NOT OP_VERIFY OP_3 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_3 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_DUP OP_2 OP_SPLIT OP_NIP OP_4 OP_SPLIT OP_DROP OP_ROT OP_4 OP_SPLIT OP_DROP OP_EQUALVERIFY OP_DUP OP_1 OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_DROP OP_BIN2NUM OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCOMMITMENT OP_EQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_UTXOTOKENCATEGORY OP_EQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_0 OP_UTXOBYTECODE OP_EQUALVERIFY OP_2 OP_NUMEQUAL",
-  "source": "/**\n * TallyCommitment_Attested — M-of-N attested tally fallback\n *\n * ENFORCEABILITY: [HYBRID]\n *\n * PURPOSE: For proposals with > 3 voters (pre-Layla limit).\n * Off-chain tally computation + on-chain 2-of-3 attestation.\n * Independent validators verify tally independently.\n *\n * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):\n *   Same layout as TallyCommitment_FixedMax.\n *\n * POST-LAYLA: Loops CHIP enables fully trustless arbitrary tally.\n */\n\npragma cashscript ^0.13.0;\n\ncontract TallyCommitment_Attested(\n    bytes32 proposalId,\n    bytes20 signer1Hash,\n    bytes20 signer2Hash,\n    bytes20 signer3Hash,\n    int requiredAttestations\n) {\n    /**\n     * attestTally() — 2-of-3 signers attest to off-chain computed tally\n     *\n     * Signers verify the tally off-chain and co-sign the commitment.\n     * On-chain: validates 2 distinct registered signers, correct proposal ref.\n     */\n    function attestTally(\n        sig sig1, pubkey pubkey1,\n        sig sig2, pubkey pubkey2,\n        bytes40 tallyCommitment\n    ) {\n        bytes20 pk1Hash = hash160(pubkey1);\n        bytes20 pk2Hash = hash160(pubkey2);\n\n        require(\n            pk1Hash == signer1Hash ||\n            pk1Hash == signer2Hash ||\n            pk1Hash == signer3Hash\n        );\n        require(\n            pk2Hash == signer1Hash ||\n            pk2Hash == signer2Hash ||\n            pk2Hash == signer3Hash\n        );\n        require(pk1Hash != pk2Hash);\n\n        require(checkSig(sig1, pubkey1));\n        require(checkSig(sig2, pubkey2));\n\n        // Tally commitment must reference this proposal (bytes [2:6])\n        require(tallyCommitment.split(2)[1].split(4)[0] == proposalId.split(4)[0]);\n\n        // Status byte at offset 1 must be FINALIZED (1)\n        require(int(tallyCommitment.split(1)[1].split(1)[0]) == 1);\n\n        require(tx.outputs[0].nftCommitment == tallyCommitment);\n        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);\n        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);\n        require(requiredAttestations == 2);\n    }\n}\n",
-  "fingerprint": "e4ac860215b15c60c3ce4ae6a454b83a04b0faa913463c87e505dbb8da1505f9",
+  "bytecode": "OP_9 OP_ROLL OP_SIZE 28 OP_EQUALVERIFY OP_TXOUTPUTCOUNT OP_2 OP_LESSTHANOREQUAL OP_VERIFY OP_7 OP_PICK OP_HASH160 OP_10 OP_PICK OP_HASH160 OP_OVER OP_5 OP_PICK OP_EQUAL OP_2 OP_PICK OP_7 OP_PICK OP_EQUAL OP_BOOLOR OP_2 OP_PICK OP_8 OP_PICK OP_EQUAL OP_BOOLOR OP_VERIFY OP_DUP OP_5 OP_ROLL OP_EQUAL OP_OVER OP_6 OP_ROLL OP_EQUAL OP_BOOLOR OP_OVER OP_6 OP_ROLL OP_EQUAL OP_BOOLOR OP_VERIFY OP_EQUAL OP_NOT OP_VERIFY OP_3 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_3 OP_ROLL OP_4 OP_ROLL OP_CHECKSIGVERIFY OP_DUP OP_2 OP_SPLIT OP_NIP OP_4 OP_SPLIT OP_DROP OP_ROT OP_4 OP_SPLIT OP_DROP OP_EQUALVERIFY OP_DUP OP_1 OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_DROP OP_BIN2NUM OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTTOKENCOMMITMENT OP_EQUALVERIFY OP_0 OP_OUTPUTTOKENCATEGORY OP_0 OP_UTXOTOKENCATEGORY OP_EQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_0 OP_UTXOBYTECODE OP_EQUALVERIFY OP_0 OP_OUTPUTTOKENAMOUNT OP_0 OP_UTXOTOKENAMOUNT OP_NUMEQUALVERIFY OP_0 OP_OUTPUTVALUE OP_0 OP_UTXOVALUE OP_NUMEQUALVERIFY OP_2 OP_NUMEQUAL",
+  "source": "/**\n * TallyCommitment_Attested — M-of-N attested tally fallback\n *\n * ENFORCEABILITY: [HYBRID]\n *\n * PURPOSE: For proposals with > 3 voters (pre-Layla limit).\n * Off-chain tally computation + on-chain 2-of-3 attestation.\n * Independent validators verify tally independently.\n *\n * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):\n *   Same layout as TallyCommitment_FixedMax.\n *\n * POST-LAYLA: Loops CHIP enables fully trustless arbitrary tally.\n */\n\npragma cashscript ^0.13.0;\n\ncontract TallyCommitment_Attested(\n    bytes32 proposalId,\n    bytes20 signer1Hash,\n    bytes20 signer2Hash,\n    bytes20 signer3Hash,\n    int requiredAttestations\n) {\n    /**\n     * attestTally() — 2-of-3 signers attest to off-chain computed tally\n     *\n     * Signers verify the tally off-chain and co-sign the commitment.\n     * On-chain: validates 2 distinct registered signers, correct proposal ref.\n     */\n    function attestTally(\n        sig sig1, pubkey pubkey1,\n        sig sig2, pubkey pubkey2,\n        bytes40 tallyCommitment\n    ) {\n        require(tx.outputs.length <= 2);\n\n        bytes20 pk1Hash = hash160(pubkey1);\n        bytes20 pk2Hash = hash160(pubkey2);\n\n        require(\n            pk1Hash == signer1Hash ||\n            pk1Hash == signer2Hash ||\n            pk1Hash == signer3Hash\n        );\n        require(\n            pk2Hash == signer1Hash ||\n            pk2Hash == signer2Hash ||\n            pk2Hash == signer3Hash\n        );\n        require(pk1Hash != pk2Hash);\n\n        require(checkSig(sig1, pubkey1));\n        require(checkSig(sig2, pubkey2));\n\n        // Tally commitment must reference this proposal (bytes [2:6])\n        require(tallyCommitment.split(2)[1].split(4)[0] == proposalId.split(4)[0]);\n\n        // Status byte at offset 1 must be FINALIZED (1)\n        require(int(tallyCommitment.split(1)[1].split(1)[0]) == 1);\n\n        require(tx.outputs[0].nftCommitment == tallyCommitment);\n        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);\n        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);\n        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);\n        require(tx.outputs[0].value == tx.inputs[0].value);\n        require(requiredAttestations == 2);\n    }\n}\n",
+  "fingerprint": "86a0cafb0a0ee25ea9e14bb5d7f0c73cec10f445ef050a68af7270bd6dd969db",
   "debug": {
-    "bytecode": "597a820128885779a95a79a97855798752795779879b52795879879b6976557a8778567a879b78567a879b69879169537a547aad537a547aad76527f77547f757b547f758876517f77517f7581519d00d28800d100ce8800cd00c788529c",
-    "sourceMap": "34:8:34:31;;;;;36:34:36:41;;:26::42:1;37:34:37:41:0;;:26::42:1;40:12:40:19:0;:23::34;;:12:::1;41::41:19:0;;:23::34;;:12:::1;40;42::42:19:0;;:23::34;;:12:::1;40;39:8:43:10;45:12:45:19:0;:23::34;;:12:::1;46::46:19:0;:23::34;;:12:::1;45;47::47:19:0;:23::34;;:12:::1;45;44:8:48:10;49:16:49:34;;:8::36;51:25:51:29:0;;:31::38;;:8::41:1;52:25:52:29:0;;:31::38;;:8::41:1;55:16:55:31:0;:38::39;:16::40:1;:::43;:50::51:0;:16::52:1;:::55;:59::69:0;:76::77;:59::78:1;:::81;:8::83;58:20:58:35:0;:42::43;:20::44:1;:::47;:54::55:0;:20::56:1;:::59;:16::60;:64::65:0;:8::67:1;60:27:60:28:0;:16::43:1;:8::64;61:27:61:28:0;:16::43:1;:57::58:0;:47::73:1;:8::75;62:27:62:28:0;:16::45:1;:59::60:0;:49::77:1;:8::79;63:40:63:41:0;:8::43:1",
+    "bytecode": "597a82012888c452a1695779a95a79a97855798752795779879b52795879879b6976557a8778567a879b78567a879b69879169537a547aad537a547aad76527f77547f757b547f758876517f77517f7581519d00d28800d100ce8800cd00c78800d300d09d00cc00c69d529c",
+    "sourceMap": "34:8:34:31;;;;;36:16:36:33;:37::38;:16:::1;:8::40;38:34:38:41:0;;:26::42:1;39:34:39:41:0;;:26::42:1;42:12:42:19:0;:23::34;;:12:::1;43::43:19:0;;:23::34;;:12:::1;42;44::44:19:0;;:23::34;;:12:::1;42;41:8:45:10;47:12:47:19:0;:23::34;;:12:::1;48::48:19:0;:23::34;;:12:::1;47;49::49:19:0;:23::34;;:12:::1;47;46:8:50:10;51:16:51:34;;:8::36;53:25:53:29:0;;:31::38;;:8::41:1;54:25:54:29:0;;:31::38;;:8::41:1;57:16:57:31:0;:38::39;:16::40:1;:::43;:50::51:0;:16::52:1;:::55;:59::69:0;:76::77;:59::78:1;:::81;:8::83;60:20:60:35:0;:42::43;:20::44:1;:::47;:54::55:0;:20::56:1;:::59;:16::60;:64::65:0;:8::67:1;62:27:62:28:0;:16::43:1;:8::64;63:27:63:28:0;:16::43:1;:57::58:0;:47::73:1;:8::75;64:27:64:28:0;:16::45:1;:59::60:0;:49::77:1;:8::79;65:27:65:28:0;:16::41:1;:55::56:0;:45::69:1;:8::71;66:27:66:28:0;:16::35:1;:49::50:0;:39::57:1;:8::59;67:40:67:41:0;:8::43:1",
     "logs": [],
     "requires": [
-      { "ip": 32, "line": 39 },
-      { "ip": 47, "line": 44 },
-      { "ip": 50, "line": 49 },
-      { "ip": 55, "line": 51 },
-      { "ip": 60, "line": 52 },
-      { "ip": 72, "line": 55 },
-      { "ip": 82, "line": 58 },
-      { "ip": 85, "line": 60 },
-      { "ip": 90, "line": 61 },
-      { "ip": 95, "line": 62 },
-      { "ip": 98, "line": 63 }
+      { "ip": 13, "line": 36 },
+      { "ip": 36, "line": 41 },
+      { "ip": 51, "line": 46 },
+      { "ip": 54, "line": 51 },
+      { "ip": 59, "line": 53 },
+      { "ip": 64, "line": 54 },
+      { "ip": 76, "line": 57 },
+      { "ip": 86, "line": 60 },
+      { "ip": 89, "line": 62 },
+      { "ip": 94, "line": 63 },
+      { "ip": 99, "line": 64 },
+      { "ip": 104, "line": 65 },
+      { "ip": 109, "line": 66 },
+      { "ip": 112, "line": 67 }
     ],
     "sourceTags": "0:4:pv"
   },
@@ -49,5 +52,5 @@
       "enforceLocktimeGuard": true
     }
   },
-  "updatedAt": "2026-06-10T16:50:43.723Z"
+  "updatedAt": "2026-06-12T10:58:38.081Z"
 }

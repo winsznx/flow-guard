@@ -42,6 +42,10 @@ contract TrancheVestingCovenant(
     int tranche8Cumulative
 ) {
     function claim(sig recipientSig, pubkey recipientPubkey) {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500_000_000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -110,12 +114,19 @@ contract TrancheVestingCovenant(
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: cap claim miner fee to prevent contract BCH drain.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - claimable);
+        }
+
         int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
         require(claimFee >= 0 && claimFee <= 2000);
     }
 
     function complete() {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500_000_000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -152,6 +163,10 @@ contract TrancheVestingCovenant(
     }
 
     function pause(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 0);
+        require(tx.locktime < 500_000_000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -173,12 +188,19 @@ contract TrancheVestingCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: bound pause-path miner fee.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
         require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     function resume(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 0);
+        require(tx.locktime < 500_000_000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -206,12 +228,19 @@ contract TrancheVestingCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: bound resume-path miner fee.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
         require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     function cancel(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 3);
+        require(tx.time >= 0);
+        require(tx.locktime < 500_000_000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -288,6 +317,8 @@ contract TrancheVestingCovenant(
     }
 
     function transfer(sig recipientSig, pubkey recipientPubkey, bytes20 newRecipientHash) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
         bytes1 flagsByte  = c.split(1)[1].split(1)[0];
@@ -303,7 +334,10 @@ contract TrancheVestingCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
-        // Audit H-02: bound transfer-path miner fee.
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int transferFee = tx.inputs[0].value - tx.outputs[0].value;
         require(transferFee >= 0 && transferFee <= 2000);
     }

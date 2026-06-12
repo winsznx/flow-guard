@@ -147,9 +147,7 @@ export class GrantControlService {
       throw new Error('Grant is not cancelable');
     }
 
-    // Constructor (audit C-06):
-    //   [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
-    //   [3]=milestonesTotal [4]=amountPerMilestone [5]=totalAmount
+    // Constructor layout: [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash [3]=milestonesTotal [4]=amountPerMilestone [5]=totalAmount
     const totalReleased = this.readUint64LE(commitment, 3);
     const totalAmount = this.toBigIntParam(params.constructorParams[5], 'totalAmount');
     const remainingAmount = this.clampToZero(totalAmount - totalReleased);

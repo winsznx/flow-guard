@@ -81,10 +81,7 @@ async function confirmVaultFunding(args: {
     };
   }
 
-  // Audit H-07: confirm-funding accepted any tx that produced the expected
-  // contract output. Verify the tx ALSO consumes a UTXO locked to the
-  // authenticated funder, so a third party cannot flip another user's vault
-  // to FUNDED state by replaying a public funding tx hash.
+  // Require the tx to consume a UTXO from the authenticated funder so a third party cannot flip another user's vault to FUNDED by replaying a public funding tx hash.
   if (!(await transactionHasInputFromAddress(args.txid, args.userAddress, network))) {
     return {
       status: 403,
@@ -189,11 +186,7 @@ router.post('/', requireWalletAuth, async (req, res) => {
     if (!dto.signerPubkeys || dto.signerPubkeys.length !== 3) {
       return res.status(400).json({ error: 'Exactly 3 signer public keys are required for blockchain deployment' });
     }
-    // Audit H-03: the on-chain VaultCovenant.spend() hard-codes two required
-    // signatures regardless of the `requiredApprovals` constructor value. Any
-    // value other than 2 produces a misleading UI ("configured 1-of-3" or
-    // "configured 3-of-3") whose on-chain behaviour is 2-of-3. Reject those at
-    // the API boundary and document the invariant.
+    // On-chain VaultCovenant.spend() hard-codes 2-of-3 regardless of `requiredApprovals`; reject other values so the UI cannot misrepresent the contract's true behaviour.
     if (dto.approvalThreshold !== 2) {
       return res.status(400).json({
         error:
@@ -308,8 +301,7 @@ router.post('/:id/signers', requireWalletAuth, async (req, res) => {
   try {
     const dbId = req.params.id;
     const { signerAddress } = req.body;
-    // Requester identity is derived from the verified wallet proof so an
-    // unauthenticated caller cannot spoof the creator via headers (see audit M-01).
+    // Requester identity is derived from the verified wallet proof so an unauthenticated caller cannot spoof the creator via headers.
     const requesterAddress = req.verifiedUser!.address;
 
     if (!signerAddress) {
@@ -430,8 +422,7 @@ router.post('/:id/update-balance', requireWalletAuth, async (req, res) => {
 });
 
 // Confirm vault funding (lifecycle-compatible alias for update-balance)
-// Gated so a random caller cannot flip another user's vault into "funded" state
-// by replaying any matching tx hash (see audit H-07).
+// Gated so a random caller cannot flip another user's vault into "funded" state by replaying any matching tx hash.
 router.post('/:id/confirm-funding', requireWalletAuth, async (req, res) => {
   try {
     const { txHash, txid, amount } = req.body;

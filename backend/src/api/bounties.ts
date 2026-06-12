@@ -45,8 +45,7 @@ router.get('/bounties', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Creator address is required' });
     }
 
-    // Hide pre-C-06 dead rows from creator listings; explicit `?showDeprecated=true`
-    // surfaces them for forensic review.
+    // Hide deprecated rows from creator listings; explicit `?showDeprecated=true` surfaces them for forensic review.
     const showDeprecated = String(req.query.showDeprecated ?? '').toLowerCase() === 'true';
     const rows = showDeprecated
       ? await db!.prepare('SELECT * FROM bounties WHERE creator = ? ORDER BY created_at DESC').all(creator)
@@ -98,11 +97,9 @@ router.get('/bounties/:id', async (req: Request, res: Response) => {
  * Create a new bounty campaign
  */
 router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Response) => {
-  // C-06 redesign landed: BountyCovenant now has two authority slots.
-  //   authorityHash      = creator wallet (admin: pause/resume/cancel; cancel-refund target)
-  //   claimAuthorityHash = backend co-signer (claim path only)
-  // The backend cannot drain the pool because cancel-refund pays to the
-  // creator's wallet, and the creator must wallet-sign pause/cancel.
+  // BountyCovenant has two authority slots: authorityHash (creator wallet — admin + cancel-refund target)
+  // and claimAuthorityHash (backend co-signer for claim path only). Backend cannot drain the pool because
+  // cancel-refund pays the creator's wallet and creator must wallet-sign pause/cancel.
   try {
     const creator = req.verifiedUser!.address;
     const {
@@ -318,8 +315,7 @@ router.post('/bounties/:id/confirm-funding', requireWalletAuth, async (req: Requ
       });
     }
 
-    // Audit H-07: require the funding tx to consume a UTXO from the caller's
-    // wallet so a third party can't flip status with someone else's tx hash.
+    // Require the funding tx to consume a UTXO from the caller's wallet so a third party can't flip status with someone else's tx hash.
     if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
       return res.status(403).json({
         error: 'Funding transaction does not include an input from your wallet',
@@ -453,7 +449,7 @@ router.post('/bounties/:id/claim', requireWalletAuth, async (req: Request, res: 
     }
 
     const constructorParams = deserializeConstructorParams(campaign.constructor_params || '[]');
-    // Constructor (audit C-06): [4]=maxWinners after the claimAuthorityHash slot at [2].
+    // Constructor layout: [4]=maxWinners (after claimAuthorityHash slot at [2]).
     const maxWinners = readBigIntParam(constructorParams[4], 'maxWinners');
 
     if (BigInt(campaign.winners_count || 0) >= maxWinners) {

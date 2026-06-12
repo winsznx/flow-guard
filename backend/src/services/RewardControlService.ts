@@ -140,7 +140,7 @@ export class RewardControlService {
       throw new Error('Campaign is not cancelable');
     }
 
-    // Constructor (audit C-06):
+    // Constructor layout:
     //   [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
     //   [3]=maxRewardAmount [4]=totalPool [5]=startTimestamp [6]=endTimestamp
     const totalDistributed = this.readUint64LE(commitment, 3);

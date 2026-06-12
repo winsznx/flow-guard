@@ -149,9 +149,7 @@ export class GrantDeploymentService {
   ) {
     const artifact = ContractFactory.getArtifact('GrantCovenant');
 
-    // Audit C-06: GrantCovenant now has two authority slots.
-    //   [1] authorityHash      = creator wallet (admin: pause/resume/cancel/transfer)
-    //   [2] claimAuthorityHash = backend co-signer (releaseMilestone only)
+    // authorityHash = creator wallet (admin: pause/resume/cancel/transfer); claimAuthorityHash = backend co-signer (releaseMilestone only)
     const constructorArgs = [
       vaultId,
       authorityHash,

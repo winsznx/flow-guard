@@ -73,9 +73,8 @@ contract VoteLockCovenant(
     //
     // The previous implementation accepted a user-supplied `proposalFinalStatus`
     // integer with NO on-chain verification of the actual proposal state, which
-    // let any voter bypass the entire token lockup at will (audit critical
-    // finding, comprehensive-audit-and-plan §B). Removing the entrypoint is the
-    // safest fix.
+    // let any voter bypass the entire token lockup at will. Removing the
+    // entrypoint is the safest fix.
     //
     // A future revision can reintroduce early-reclaim properly by:
     //   1. Adding a `proposalLockingBytecodeHash` constructor parameter that

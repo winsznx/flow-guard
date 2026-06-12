@@ -512,7 +512,7 @@ router.get('/streams/:id', async (req: Request, res: Response) => {
 router.post('/streams/create', requireWalletAuth, async (req: Request, res: Response) => {
   try {
     // Sender is bound to the verified wallet proof; body value is ignored so
-    // an attacker cannot create streams "from" a victim address (audit C-01).
+    // an attacker cannot create streams "from" a victim address.
     const sender = req.verifiedUser!.address;
     const {
       recipient,
@@ -947,9 +947,9 @@ router.post('/streams/:id/confirm-funding', requireWalletAuth, async (req: Reque
       return res.status(400).json({ error: 'Stream is not pending' });
     }
 
-    // Audit H-07: a third party with knowledge of any matching tx hash could
-    // previously flip a PENDING stream to ACTIVE. Require the tx to consume
-    // a UTXO locked to the authenticated caller's wallet.
+    // Require the funding tx to consume a UTXO locked to the authenticated
+    // caller's wallet, so a third party knowing the tx hash cannot flip a
+    // PENDING stream to ACTIVE.
     if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
       return res.status(403).json({
         error: 'Funding transaction does not include an input from your wallet',

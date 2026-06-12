@@ -38,6 +38,8 @@ contract TallyCommitment_FixedMax(
      * Output[0] is the TallyNFT with the finalized result.
      */
     function createTally() {
+        require(tx.outputs.length <= 2);
+
         int VOTE_AGAINST = 0;
         int VOTE_FOR     = 1;
         int VOTE_ABSTAIN = 2;
@@ -89,5 +91,7 @@ contract TallyCommitment_FixedMax(
         require(tx.outputs[0].nftCommitment == tallyCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == amount0 + amount1 + amount2);
+        require(tx.outputs[0].value >= tx.inputs[0].value + tx.inputs[1].value + tx.inputs[2].value - 2000);
     }
 }

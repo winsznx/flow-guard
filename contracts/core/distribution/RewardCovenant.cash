@@ -7,7 +7,7 @@
  *          Unlike airdrops (fixed equal amounts), rewards are variable.
  *          Authority decides exact amount per reward event.
  *
- * AUTHORITY MODEL (audit C-06):
+ * AUTHORITY MODEL:
  *   - `authorityHash` is the creator's BCH wallet pubkey-hash. It controls
  *     pause / resume / cancel. cancel() refunds the remaining pool to
  *     P2PKH(authorityHash), so a backend compromise cannot redirect funds.
@@ -47,6 +47,8 @@ contract RewardCovenant(
     int endTimestamp
 ) {
     function reward(sig authSig, pubkey authPubkey, bytes20 recipientHash, int rewardAmount) {
+        require(tx.outputs.length <= 3);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status            = int(c.split(1)[0]);
         bytes1 flagsByte      = c.split(1)[1].split(1)[0];
@@ -58,6 +60,10 @@ contract RewardCovenant(
         require(checkSig(authSig, authPubkey));
         require(status == 0); // ACTIVE
 
+        if (startTimestamp > 0 || endTimestamp > 0) {
+            require(tx.time >= 0);
+            require(tx.locktime < 500000000);
+        }
         if (startTimestamp > 0) { require(tx.locktime >= startTimestamp); }
         if (endTimestamp > 0)   { require(tx.locktime <= endTimestamp); }
 
@@ -93,6 +99,10 @@ contract RewardCovenant(
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
 
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - rewardAmount);
+        }
+
         // LIFT-pattern fee cap.
         int rewardFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
         require(rewardFee >= 0 && rewardFee <= 2000);
@@ -101,6 +111,8 @@ contract RewardCovenant(
     }
 
     function pause(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -119,13 +131,20 @@ contract RewardCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
         require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     function resume(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
         bytes c = tx.inputs[0].nftCommitment;
-        int status = int(c.split(1)[0]);
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
 
         require(hash160(authPubkey) == authorityHash);
         require(checkSig(authSig, authPubkey));
@@ -140,11 +159,17 @@ contract RewardCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
         require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     function cancel(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status           = int(c.split(1)[0]);
         bytes1 flagsByte     = c.split(1)[1].split(1)[0];

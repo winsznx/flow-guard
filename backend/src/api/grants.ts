@@ -96,9 +96,7 @@ router.get('/grants/:id', async (req: Request, res: Response) => {
  * Create a new grant program with milestones
  */
 router.post('/grants/create', requireWalletAuth, async (req: Request, res: Response) => {
-  // C-06 redesign landed: GrantCovenant now has two authority slots.
-  //   authorityHash      = creator wallet (admin paths; cancel-refund target)
-  //   claimAuthorityHash = backend co-signer (releaseMilestone only)
+  // GrantCovenant has two authority slots: authorityHash = creator wallet (admin paths; cancel-refund target); claimAuthorityHash = backend co-signer (releaseMilestone only).
   try {
     const creator = req.verifiedUser!.address;
     const {
@@ -342,8 +340,7 @@ router.post('/grants/:id/confirm-funding', requireWalletAuth, async (req: Reques
       });
     }
 
-    // Audit H-07: require the funding tx to consume a UTXO from the caller's
-    // wallet so a third party can't flip status with someone else's tx hash.
+    // Require the funding tx to consume a UTXO from the caller's wallet so a third party can't flip status with someone else's tx hash.
     if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
       return res.status(403).json({
         error: 'Funding transaction does not include an input from your wallet',
@@ -463,7 +460,7 @@ router.post('/grants/:id/release', requireWalletAuth, async (req: Request, res: 
     }
 
     const constructorParams = deserializeConstructorParams(grant.constructor_params || '[]');
-    // Constructor (audit C-06): [3]=milestonesTotal after the claimAuthorityHash slot at [2].
+    // Constructor slot [3] = milestonesTotal, sits after claimAuthorityHash at slot [2].
     const milestonesTotal = readBigIntParam(constructorParams[3], 'milestonesTotal');
 
     if (BigInt(grant.milestones_completed || 0) >= milestonesTotal) {

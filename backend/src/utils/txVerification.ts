@@ -146,15 +146,8 @@ export async function transactionHasExpectedOutput(
 }
 
 /**
- * Audit H-07. Verify that the transaction's inputs spend at least one UTXO
- * that locks to the declared funder's P2PKH address. Without this check,
- * `confirm-funding` would accept any tx whose *output* matches the contract,
- * letting a third party "confirm" funding for a campaign they didn't fund.
- *
- * Implementation note: the funder address could in principle spend non-P2PKH
- * inputs (e.g., from a SmartBCH-style contract), but the platform only
- * supports P2PKH wallets today, so we don't need to reach beyond that.
- *
+ * Verify inputs spend at least one UTXO locked to the declared funder's P2PKH address,
+ * so a third party cannot "confirm" funding for a campaign they didn't fund.
  * Returns false on any decode/network error so callers fail closed.
  */
 export async function transactionHasInputFromAddress(

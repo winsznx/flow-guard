@@ -153,11 +153,7 @@ export class VaultService {
   }
 
   static async getUserVaults(userAddress: string): Promise<Vault[]> {
-    // Audit M-10: pre-fix used `signers LIKE '%userAddress%'` which matched any
-    // vault whose signer list contained `userAddress` as a substring. A caller
-    // querying with a suffix of another user's BCH address would surface vaults
-    // they should not see. We now fetch by creator only at the DB layer and
-    // filter exact signer membership in JS using the JSON-encoded signer list.
+    // Substring LIKE match on signers would leak vaults to users whose address is a suffix of a real signer; filter exact membership in JS instead.
     const asCreator = await db!
       .prepare('SELECT * FROM vaults WHERE creator = ?')
       .all(userAddress) as any[];

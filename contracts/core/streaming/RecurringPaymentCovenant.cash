@@ -46,6 +46,10 @@ contract RecurringPaymentCovenant(
      * Advances next_payment_timestamp by one interval.
      */
     function pay() {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status         = int(c.split(1)[0]);
         bytes1 flagsByte   = c.split(1)[1].split(1)[0];
@@ -93,6 +97,9 @@ contract RecurringPaymentCovenant(
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - amountPerInterval);
+        }
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 
@@ -102,6 +109,10 @@ contract RecurringPaymentCovenant(
      * Sender-only. Records pause_start.
      */
     function pause(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -130,6 +141,10 @@ contract RecurringPaymentCovenant(
      * Resets next_payment to now + interval (no backdated missed payments).
      */
     function resume(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];

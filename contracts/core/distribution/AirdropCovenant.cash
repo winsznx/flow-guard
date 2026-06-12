@@ -40,6 +40,10 @@ contract AirdropCovenant(
     int endTimestamp
 ) {
     function claim(bytes20 claimerHash, sig claimAuthSig, pubkey claimAuthPubkey) {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -82,6 +86,10 @@ contract AirdropCovenant(
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
 
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - amountPerClaim);
+        }
+
         // LIFT-pattern fee cap: cap the total BCH leaving the contract on each
         // claim so the reserve cannot be drained to miners over many claims.
         // outputs[0] is the recipient leg (dust in token mode, payout in BCH
@@ -94,6 +102,8 @@ contract AirdropCovenant(
     }
 
     function pause(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];
@@ -112,14 +122,21 @@ contract AirdropCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         // Bound miner-fee skim on the control path.
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
         require(pauseFee >= 0 && pauseFee <= 2000);
     }
 
     function resume(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
-        int status = int(c.split(1)[0]);
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
 
         require(hash160(authPubkey) == authorityHash);
         require(checkSig(authSig, authPubkey));
@@ -134,11 +151,17 @@ contract AirdropCovenant(
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
 
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
         require(resumeFee >= 0 && resumeFee <= 2000);
     }
 
     function cancel(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 1);
+
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
         bytes1 flagsByte = c.split(1)[1].split(1)[0];

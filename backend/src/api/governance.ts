@@ -90,18 +90,7 @@ router.get('/governance/:proposalId', async (req, res) => {
   }
 });
 
-// Off-chain vote endpoint was removed (audit C-04 / H-01).
-//
-// The old POST /governance/:proposalId/vote accepted an arbitrary caller-
-// supplied `weight` and incremented tally columns directly from the request
-// body. That gave any unauthenticated caller full control over every
-// governance outcome. Legitimate voting now goes through:
-//   1. POST /governance/:proposalId/lock         — deploys the on-chain lock
-//   2. POST /governance/:proposalId/confirm-lock — verifies the on-chain UTXO
-//      and tallies weight server-side based on the *observed* locked amount.
-//
-// We return 410 Gone so clients surface a clear deprecation signal rather
-// than silently failing.
+// Off-chain voting removed: caller-supplied weight let any unauthenticated request control tallies. Weight is now derived server-side from observed on-chain lock UTXOs via /lock + /confirm-lock. 410 Gone surfaces the deprecation to clients.
 router.post('/governance/:proposalId/vote', (_req, res) => {
   res.status(410).json({
     error: 'Endpoint removed',
@@ -183,15 +172,7 @@ router.post('/governance/:proposalId/lock', async (req, res) => {
   }
 });
 
-/**
- * POST /api/governance/:proposalId/confirm-lock
- * Confirm vote lock transaction
- *
- * Hardened: identity comes from the verified wallet auth; the caller no longer
- * supplies the contract address or constructor params — those are recomputed
- * from the stored vote-lock deployment so a poisoned client request cannot
- * steer unlock flows against an attacker-chosen contract (audit M-03).
- */
+// Identity comes from verified wallet auth; contract address and constructor params are recomputed from stored deployment so a poisoned client request cannot steer unlock flows against an attacker-chosen contract.
 router.post('/governance/:proposalId/confirm-lock', requireWalletAuth, async (req, res) => {
   try {
     const voterAddress = req.verifiedUser!.address;

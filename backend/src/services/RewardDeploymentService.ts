@@ -160,9 +160,7 @@ export class RewardDeploymentService {
   ) {
     const artifact = ContractFactory.getArtifact('RewardCovenant');
 
-    // Audit C-06: RewardCovenant now has two authority slots.
-    //   [1] authorityHash      = creator wallet (admin: pause/resume/cancel)
-    //   [2] claimAuthorityHash = backend co-signer (reward issuance only)
+    // Two authority slots: [1] authorityHash = creator wallet (admin: pause/resume/cancel); [2] claimAuthorityHash = backend co-signer (reward issuance only)
     const constructorArgs = [
       vaultId,
       authorityHash,

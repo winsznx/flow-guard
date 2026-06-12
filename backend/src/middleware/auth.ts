@@ -1,12 +1,9 @@
 /**
  * Wallet-ownership authentication middleware (Sign-In With BCH).
  *
- * Purpose
- * -------
- * The pre-audit design trusted the `x-user-address` request header as identity,
- * which was completely spoofable (audit C-01). This middleware closes that gap
- * by requiring a cryptographic proof that the client controls the private key
- * for the declared BCH address.
+ * Requires a cryptographic proof that the client controls the private key for
+ * the declared BCH address, instead of trusting the spoofable `x-user-address`
+ * header as identity.
  *
  * Wire scheme
  * -----------

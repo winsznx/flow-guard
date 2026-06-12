@@ -43,6 +43,7 @@ contract ProposalCovenant(
      * voting twice and self-approving a proposal alone.
      */
     function approve(sig approverSig, pubkey approverPubkey) {
+        require(tx.outputs.length <= 1);
         bytes c = tx.inputs[0].nftCommitment;
         int status          = int(c.split(1)[1].split(1)[0]);
         bytes1 approvalMask = c.split(2)[1].split(1)[0];
@@ -84,16 +85,14 @@ contract ProposalCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+
+        int approveFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(approveFee >= 0 && approveFee <= 2000);
     }
 
     /**
-     * execute() — Execute an approved proposal
-     *
-     * ProposalNFT is burned after execution. Requires a signature from one of
-     * the vault signers (audit critical finding: previously permissionless, so
-     * any actor could burn the proposal NFT without releasing funds, leaving
-     * the proposal permanently "EXECUTED" from the indexer's view while the
-     * vault stayed unspent).
+     * execute() — Requires a vault-signer signature so the proposal NFT cannot be burned without releasing funds (which would leave the proposal "EXECUTED" while the vault stayed unspent).
      */
     function execute(sig executorSig, pubkey executorPubkey) {
         bytes c = tx.inputs[0].nftCommitment;
@@ -107,6 +106,8 @@ contract ProposalCovenant(
         require(checkSig(executorSig, executorPubkey));
 
         require(status == 1); // APPROVED
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
         require(tx.locktime >= executionTimelock);
         require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(payoutHash));
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
@@ -120,6 +121,7 @@ contract ProposalCovenant(
      * cancel() — Cancel a pending or approved proposal (M-of-N)
      */
     function cancel(sig sig1, pubkey pubkey1, sig sig2, pubkey pubkey2) {
+        require(tx.outputs.length <= 1);
         bytes c = tx.inputs[0].nftCommitment;
         int status = int(c.split(1)[1].split(1)[0]);
 
@@ -144,6 +146,7 @@ contract ProposalCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
 
         int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
         require(cancelFee >= 0 && cancelFee <= 2000);
@@ -153,12 +156,15 @@ contract ProposalCovenant(
      * expire() — Mark proposal expired after voting deadline (permissionless)
      */
     function expire() {
+        require(tx.outputs.length <= 1);
         bytes c = tx.inputs[0].nftCommitment;
         int status    = int(c.split(1)[1].split(1)[0]);
         int votingEnd = int(c.split(4)[1].split(5)[0]);
 
         require(status == 0); // PENDING
         require(votingEnd > 0);
+        require(tx.time >= 0);
+        require(tx.locktime < 500000000);
         require(tx.locktime >= votingEnd);
 
         bytes newCommitment =
@@ -170,6 +176,7 @@ contract ProposalCovenant(
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
 
         // Bound miner-fee skim on the permissionless expire path so a miner
         // colluding with anyone cannot drain the proposal NFT's BCH dust.

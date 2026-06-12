@@ -61,10 +61,7 @@ export class GrantMilestoneService {
     if (typeof authPubKey === 'string') {
       throw new Error(`Invalid authority private key: ${authPubKey}`);
     }
-    // Audit C-06: GrantCovenant constructor now has TWO authority slots.
-    //   [1] authorityHash      = creator wallet (admin paths only)
-    //   [2] claimAuthorityHash = backend co-signer (releaseMilestone path)
-    // The release service signs with the backend key, which must match slot [2].
+    // Release path signs with backend co-signer key, which must match constructor slot [2] (claimAuthorityHash); slot [1] is the creator wallet for admin paths only.
     const expectedClaimAuthorityHash = this.readBytes20(constructorParams[2], 'claimAuthorityHash');
     const derivedClaimAuthorityHash = hash160(authPubKey);
     if (typeof derivedClaimAuthorityHash === 'string') {
@@ -110,9 +107,7 @@ export class GrantMilestoneService {
       );
     }
 
-    // Constructor param indices (GrantCovenant, audit C-06 layout):
-    // [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash
-    // [3]=milestonesTotal [4]=amountPerMilestone [5]=totalAmount
+    // GrantCovenant constructor layout: [0]=vaultId [1]=authorityHash [2]=claimAuthorityHash [3]=milestonesTotal [4]=amountPerMilestone [5]=totalAmount
     const milestonesTotal = this.toBigIntParam(constructorParams[3], 'milestonesTotal');
     const amountPerMilestone = this.toBigIntParam(constructorParams[4], 'amountPerMilestone');
 

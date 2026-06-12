@@ -4,16 +4,10 @@ import { pool } from '../database/pg.js';
 /**
  * Per-record AES-256-GCM encryption for campaign authority keys.
  *
- * Pre-fix design (audit C-06 follow-up): every campaign's claim-authority
- * private key was encrypted under a single env-wide master key
- * (`AIRDROP_CLAIM_KEY_ENCRYPTION_KEY`). Leaking that one key compromised
- * every campaign simultaneously.
- *
- * Current design: the master key is used as HKDF input keying material.
- * Each ciphertext is encrypted under a derived key bound to a per-record
- * salt that is sealed inside the ciphertext envelope. An attacker who
- * recovers ONE ciphertext + the master cannot reuse any precomputed work
- * to decrypt the rest.
+ * The master key is used as HKDF input keying material. Each ciphertext is
+ * encrypted under a derived key bound to a per-record salt that is sealed
+ * inside the ciphertext envelope. An attacker who recovers ONE ciphertext
+ * + the master cannot reuse any precomputed work to decrypt the rest.
  *
  * Wire format:
  *   v2:  base64( "v2" || salt(16) || iv(12) || authTag(16) || ciphertext )

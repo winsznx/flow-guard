@@ -18,18 +18,8 @@ if (!connectionString) {
   throw new Error('DATABASE_URL env var is required');
 }
 
-/**
- * TLS config for the Postgres pool.
- *
- * Pre-audit behaviour: `ssl: { rejectUnauthorized: false }` silently accepted
- * any cert, allowing on-path attackers (or cloud-platform operators) to MITM
- * the DB connection without triggering any error (audit M-04).
- *
- * New default: require cert validation. Operators may pin a CA via
- * `PG_SSL_CA_PATH` (file) or `PG_SSL_CA_PEM` (inline). Certificate validation
- * can only be disabled by setting `PG_SSL_INSECURE=true` — explicitly, loudly,
- * and intentionally.
- */
+// Require cert validation by default to prevent MITM; operators may pin a CA via
+// `PG_SSL_CA_PATH`/`PG_SSL_CA_PEM`, or opt out explicitly with `PG_SSL_INSECURE=true`.
 function buildSslConfig(): false | { rejectUnauthorized: boolean; ca?: string } {
   if ((process.env.PG_SSL_DISABLED || '').toLowerCase() === 'true') {
     return false;
