@@ -78,8 +78,18 @@ async function ensureSchema(client: PoolClient): Promise<void> {
   `, [SINGLETON_ID]);
 
   for (const table of COVENANT_TABLES) {
+    const tableExists = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = $1
+       ) AS exists`,
+      [table],
+    );
+    if (!tableExists.rows[0]?.exists) continue;
+
     await client.query(`
       ALTER TABLE ${table}
+        ADD COLUMN IF NOT EXISTS contract_address TEXT,
         ADD COLUMN IF NOT EXISTS utxo_txid TEXT,
         ADD COLUMN IF NOT EXISTS utxo_vout INTEGER,
         ADD COLUMN IF NOT EXISTS nft_commitment TEXT,
