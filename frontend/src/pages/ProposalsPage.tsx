@@ -12,6 +12,7 @@ import { useWalletModal } from '../hooks/useWalletModal';
 import { Button } from '../components/ui/Button';
 import { DataTable, Column } from '../components/shared/DataTable';
 import { StatsCard } from '../components/shared/StatsCard';
+import { SkeletonTable } from '../components/ui/Skeleton';
 
 type ProposalStatus = 'pending' | 'approved' | 'executed' | 'rejected';
 
@@ -322,10 +323,7 @@ export default function ProposalsPage() {
 
         {/* Data Table */}
         {loading ? (
-          <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p className="text-textSecondary font-sans">Loading proposals...</p>
-          </div>
+          <SkeletonTable rows={6} columns={7} />
         ) : (
           <DataTable
             columns={columns}

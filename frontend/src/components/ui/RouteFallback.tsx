@@ -1,18 +1,12 @@
 import { useLocation } from 'react-router-dom';
 import { SkeletonStats, SkeletonTable, SkeletonCard, SkeletonText } from './Skeleton';
 
-/**
- * RouteFallback paints the shape of the destination page while its lazy chunk
- * downloads. Each branch matches what the real page renders, so the user sees
- * a meaningful preview instead of a generic spinner.
- */
 export function RouteFallback() {
   const { pathname } = useLocation();
   return <div className="mx-auto max-w-7xl px-4 py-6 md:px-6">{pickSkeleton(pathname)}</div>;
 }
 
 function pickSkeleton(pathname: string) {
-  // Detail-style pages: header + stats row + body card.
   if (looksLikeDetail(pathname)) {
     return (
       <>
@@ -24,7 +18,6 @@ function pickSkeleton(pathname: string) {
     );
   }
 
-  // Create / form pages: header + form card with several input rows.
   if (pathname.includes('/create')) {
     return (
       <>
@@ -41,7 +34,6 @@ function pickSkeleton(pathname: string) {
     );
   }
 
-  // List-style product pages: header + stats + table.
   if (isListRoute(pathname)) {
     return (
       <>
@@ -52,7 +44,6 @@ function pickSkeleton(pathname: string) {
     );
   }
 
-  // Onboarding / article-style pages: long-form prose.
   if (isArticleRoute(pathname)) {
     return (
       <div className="max-w-3xl mx-auto">
@@ -64,7 +55,6 @@ function pickSkeleton(pathname: string) {
     );
   }
 
-  // App home / dashboard: stats + 2-col cards.
   if (pathname === '/app' || pathname === '/' || pathname === '/app/dao') {
     return (
       <>
@@ -79,7 +69,6 @@ function pickSkeleton(pathname: string) {
     );
   }
 
-  // Generic fallback: a single content card.
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-6 h-10 w-1/2 animate-pulse rounded bg-surfaceAlt border border-border/40" />

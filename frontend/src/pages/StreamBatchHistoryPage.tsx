@@ -6,6 +6,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { StatsCard } from '../components/shared/StatsCard';
 import { DataTable, type Column } from '../components/shared/DataTable';
+import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getExplorerTxUrl } from '../utils/blockchain';
 import { formatLogicalId } from '../utils/display';
 import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
@@ -448,10 +449,7 @@ export default function StreamBatchHistoryPage() {
             </div>
 
             {loading ? (
-              <div className="text-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-                <p className="text-textSecondary font-sans">Loading stream batch runs...</p>
-              </div>
+              <SkeletonTable rows={6} columns={6} />
             ) : (
               <div className="space-y-4">
                 <DataTable
@@ -507,10 +505,7 @@ export default function StreamBatchHistoryPage() {
             </div>
 
             {detailLoading ? (
-              <div className="text-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-                <p className="text-textSecondary font-sans">Loading batch detail...</p>
-              </div>
+              <SkeletonCard lines={4} />
             ) : !selectedBatch ? (
               <div className="rounded-2xl border border-border bg-surfaceAlt p-6 text-center">
                 <p className="text-textMuted font-sans">Select a batch run to review stream inventory, activity, and exports.</p>

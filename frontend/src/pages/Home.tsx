@@ -947,13 +947,6 @@ export default function Home() {
   );
 }
 
-/**
- * Lift from ParyonUSD's homepage trust-signal pattern: a dedicated section
- * surfacing the canonical covenant identifiers with a one-click copy + an
- * explicit anti-impersonation warning. Anyone integrating with FlowGuard or
- * trading a token issued through it can confirm the canonical bytecode here
- * rather than trusting links from social channels.
- */
 function VerifiedContractsSection() {
   const [copied, setCopied] = useState<string | null>(null);
   const copy = useCallback((value: string, label: string) => {
@@ -963,9 +956,6 @@ function VerifiedContractsSection() {
     }).catch(() => {});
   }, []);
 
-  // Covenant SHA-256 artifact hashes are deterministic from the .cash sources
-  // committed at contracts/core/*.cash. Update this list when a covenant is
-  // recompiled. Source of truth: contracts/artifacts/*/*.json on git main.
   const covenants: Array<{ label: string; artifact: string; hash?: string }> = [
     { label: 'VaultCovenant', artifact: 'contracts/artifacts/treasury/VaultCovenant.json' },
     { label: 'ProposalCovenant', artifact: 'contracts/artifacts/treasury/ProposalCovenant.json' },

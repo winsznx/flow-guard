@@ -1,9 +1,5 @@
 import type { SVGProps } from 'react';
 
-/**
- * X (formerly Twitter) social-mark SVG. Post-2023 rebrand glyph.
- * Use anywhere a lucide-react icon would go; same props (className, etc.).
- */
 export function XIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg

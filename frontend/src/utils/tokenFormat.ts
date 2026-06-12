@@ -1,29 +1,8 @@
-/**
- * Single canonical formatter for any on-chain amount in the FlowGuard UI.
- *
- * Today every detail page reinvents its own formatter (formatBch /
- * formatAssetAmount / formatBountyAmount / inline `toFixed(4) + ' BCH'`).
- * That's why AirdropDetailPage + PaymentDetailPage silently relabel
- * CashToken amounts as BCH while other detail pages get it right.
- *
- * Use this everywhere. Pages should pass the parent entity's token_type
- * (and token_category when known); the function decides the symbol and
- * the number of decimal places.
- *
- * BCH: 4 decimals, suffix " BCH"
- * Fungible CashToken: integer, suffix " <CT · 7a1b…3f>" if category known, else " tokens"
- * Unknown / null: render with no suffix and a "?" marker so it's obvious the
- *   backend didn't supply token_type — better than silently lying with "BCH".
- */
-
 export type TokenType = 'BCH' | 'CASHTOKENS' | 'FUNGIBLE_TOKEN' | string | null | undefined;
 
 export interface FormatTokenAmountOptions {
-  /** Override decimals. BCH defaults to 4, CashToken integers to 0. */
   decimals?: number;
-  /** When true, force the suffix to be omitted (use for input placeholders). */
   noSuffix?: boolean;
-  /** When true, include thousands separator on the integer portion. */
   separator?: boolean;
 }
 
@@ -64,9 +43,6 @@ export function formatTokenAmount(
   return options.noSuffix ? value : `${value} ?`;
 }
 
-/**
- * Just the symbol, without an amount. For column headers, badges, etc.
- */
 export function tokenSymbol(tokenType: TokenType, tokenCategory?: string | null): string {
   if (tokenType === 'BCH' || !tokenType) return 'BCH';
   if (tokenType === 'CASHTOKENS' || tokenType === 'FUNGIBLE_TOKEN') {

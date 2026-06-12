@@ -16,6 +16,7 @@ import { Select } from '../components/ui/Select';
 import { Input } from '../components/ui/Input';
 import { DataTable, Column } from '../components/shared/DataTable';
 import { StatsCard } from '../components/shared/StatsCard';
+import { SkeletonTable, SkeletonStats } from '../components/ui/Skeleton';
 
 type ProposalStatus = 'ACTIVE' | 'PASSED' | 'REJECTED' | 'EXPIRED';
 
@@ -393,10 +394,18 @@ export default function GovernancePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mx-auto mb-4" />
-          <p className="text-textSecondary font-sans">Loading treasuries...</p>
+      <div className="min-h-screen pb-20 bg-background">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
+          <div className="mb-6 md:mb-8">
+            <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-4">
+              Treasury Governance
+            </h1>
+            <p className="font-sans text-textMuted max-w-2xl text-sm leading-relaxed">
+              Vote on proposals and coordinate fund releases for your treasuries.
+            </p>
+          </div>
+          <SkeletonStats count={4} className="mb-6" />
+          <SkeletonTable rows={6} columns={6} />
         </div>
       </div>
     );
@@ -550,10 +559,7 @@ export default function GovernancePage() {
 
         {/* Data Table */}
         {proposalsLoading ? (
-          <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p className="text-textSecondary font-sans">Loading proposals...</p>
-          </div>
+          <SkeletonTable rows={6} columns={6} />
         ) : treasuries.length === 0 ? (
           <div className="text-center py-12 bg-surface rounded-lg border border-border">
             <Vote className="w-16 h-16 text-textMuted mx-auto mb-4" />

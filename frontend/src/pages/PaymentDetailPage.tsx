@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { SkeletonStats, SkeletonCard } from '../components/ui/Skeleton';
 import { useWallet } from '../hooks/useWallet';
 import { useNetwork } from '../hooks/useNetwork';
 import {
@@ -340,10 +341,15 @@ export default function PaymentDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mx-auto mb-4" />
-          <p className="text-textMuted font-mono">Loading payment...</p>
+      <div className="min-h-screen pb-20 bg-background">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-8">
+          <div className="mb-6">
+            <div className="h-8 w-1/3 animate-pulse rounded bg-surfaceAlt border border-border/40 mb-3" />
+            <div className="h-4 w-1/2 animate-pulse rounded bg-surfaceAlt border border-border/40" />
+          </div>
+          <SkeletonStats count={4} className="mb-6" />
+          <SkeletonCard lines={3} className="mb-4" />
+          <SkeletonCard lines={3} />
         </div>
       </div>
     );

@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { StatsCard } from '../../components/shared/StatsCard';
 import { DataTable, type Column } from '../../components/shared/DataTable';
+import { SkeletonTable, SkeletonCard } from '../../components/ui/Skeleton';
 import { DaoPreviewBanner } from '../../components/dao/DaoPreviewBanner';
 import { DaoSectionNav } from '../../components/dao/DaoSectionNav';
 import { getExplorerTxUrl } from '../../utils/blockchain';
@@ -452,10 +453,7 @@ export const DaoStreamsPage: React.FC = () => {
           </div>
 
           {loading ? (
-            <div className="text-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-              <p className="text-textSecondary font-sans">Loading treasury streams...</p>
-            </div>
+            <SkeletonTable rows={6} columns={6} />
         ) : (
             <div className="space-y-4">
               <DataTable
@@ -505,10 +503,7 @@ export const DaoStreamsPage: React.FC = () => {
           </div>
 
           {loading ? (
-            <div className="text-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary border-t-transparent mx-auto mb-4" />
-              <p className="text-textSecondary font-sans">Loading treasury activity...</p>
-            </div>
+            <SkeletonCard lines={4} />
           ) : events.length === 0 ? (
             <div className="rounded-2xl border border-border bg-surfaceAlt p-6 text-center">
               <p className="text-textMuted font-sans">No treasury stream activity for the selected filters.</p>

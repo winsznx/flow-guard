@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { SkeletonCard } from '../components/ui/Skeleton';
 
 export default function ClaimLinkPage() {
   const { token } = useParams();
@@ -33,9 +34,8 @@ export default function ClaimLinkPage() {
   if (!error) {
     return (
       <div className="min-h-screen flex items-center justify-center p-8">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mx-auto mb-4" />
-          <p className="text-textMuted font-mono">Resolving claim link...</p>
+        <div className="w-full max-w-md">
+          <SkeletonCard lines={3} />
         </div>
       </div>
     );

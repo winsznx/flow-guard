@@ -41,20 +41,6 @@ const VAULT_SECRET_NAME = 'airdrop_master_key';
 let cachedMasterKey: Buffer | null = null;
 let cachedKeySource: 'vault' | 'env' | null = null;
 
-/**
- * Read the master key from Supabase Vault, falling back to the env var if
- * Vault is unavailable. Caches the result in memory for sync access by
- * encrypt/decrypt later. MUST be awaited once at server boot; subsequent
- * calls are no-ops.
- *
- * Order of precedence:
- *   1. Supabase Vault (vault.decrypted_secrets WHERE name = 'airdrop_master_key')
- *   2. AIRDROP_CLAIM_KEY_ENCRYPTION_KEY env var (legacy fallback)
- *
- * Throws if neither source yields a 64-char hex string. The thrown error
- * surfaces inside startServer() and crashes the process, preventing the
- * backend from serving traffic with a degraded crypto state.
- */
 export async function initializeMasterKey(): Promise<void> {
   if (cachedMasterKey) return;
 
@@ -101,9 +87,6 @@ export async function initializeMasterKey(): Promise<void> {
 function getMasterKey(): Buffer {
   if (cachedMasterKey) return cachedMasterKey;
 
-  // Fallback path for code that imports this before initializeMasterKey() ran
-  // (e.g. one-shot scripts). Maintains the old sync behaviour by reading env
-  // directly. Production server always goes through initializeMasterKey first.
   const keyHex = process.env.AIRDROP_CLAIM_KEY_ENCRYPTION_KEY;
   if (!keyHex || keyHex.length !== 64) {
     throw new Error(

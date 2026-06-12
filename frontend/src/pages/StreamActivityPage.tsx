@@ -10,6 +10,7 @@
 
 import { useEffect } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { SkeletonCard } from '../components/ui/Skeleton';
 
 const TARGET_BASE = '/explorer';
 
@@ -34,10 +35,9 @@ export default function StreamActivityPage() {
   }, [location.pathname, location.state, navigate, searchParams]);
 
   return (
-    <div className="flex min-h-[60vh] items-center justify-center bg-background">
-      <div className="text-center">
-        <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-        <p className="font-sans text-sm text-textMuted">Opening the canonical Explorer…</p>
+    <div className="flex min-h-[60vh] items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md">
+        <SkeletonCard lines={3} />
       </div>
     </div>
   );

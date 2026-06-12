@@ -1,27 +1,7 @@
--- Migration 008: stop the indexer + explorer from labelling CashToken transfers
--- as 'BCH'.
+-- Migration 008: add token_type + token_category to activity_events + transactions.
 --
--- Two tables — activity_events and transactions — are the universal lifecycle
--- log and the vault transaction tab respectively. Neither had a token_type or
--- token_category column, so consumers had to JOIN through each parent entity
--- (streams, payments, airdrops, etc.) to figure out which asset the amount
--- referred to. The /explorer/* endpoints worked around this by hardcoding
--- 'BCH' as token_type on the proposals and vaults branches of the unioned
--- query — which silently mislabels any CashToken transfer that touches a
--- vault or proposal.
---
--- This migration:
---   1. Adds nullable token_type + token_category columns to both tables
---      (idempotent via ADD COLUMN IF NOT EXISTS).
---   2. Backfills activity_events.token_type / token_category by joining each
---      row's entity_type + entity_id back to its parent entity. Rows whose
---      parent is unknown stay NULL; the UI surfaces those as '?' rather than
---      silently defaulting to BCH.
---   3. Backfills transactions.token_type from the parent vault row (vault_id)
---      or proposal row (proposal_id). Rows that match neither stay NULL.
---   4. Adds a partial index on (token_category) so per-CashToken filters do
---      not scan the full table — same pattern ParyonUSD's chaingraph fork
---      adds on chaingraph's output table.
+-- Backfills via JOIN to each parent product entity. Vault-derived rows fall
+-- back to BCH because vaults do not yet model per-vault token_type.
 
 BEGIN;
 
