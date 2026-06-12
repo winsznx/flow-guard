@@ -590,8 +590,21 @@ function App() {
           {/* Public Explorer (no auth required) */}
           <Route path="/claim/:token" element={<ClaimLinkPage />} />
 
-          {/* Public Explorer (no auth required) */}
-          <Route path="/explorer" element={onExplorerHost ? <Navigate to="/" replace /> : <ExplorerPage />} />
+          {/* Explorer: public on the explorer subdomain, wrapped in DashboardLayout for authenticated users so the sidebar persists */}
+          <Route
+            path="/explorer"
+            element={
+              onExplorerHost ? (
+                <Navigate to="/" replace />
+              ) : wallet.isConnected ? (
+                <DashboardLayout>
+                  <ExplorerPage embedded />
+                </DashboardLayout>
+              ) : (
+                <ExplorerPage />
+              )
+            }
+          />
 
           {/* Public Status Page (standalone) */}
           <Route path="/status" element={<StatusPage />} />

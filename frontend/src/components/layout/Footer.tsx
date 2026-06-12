@@ -125,9 +125,9 @@ export function Footer() {
                   </a>
                 </li>
                 <li>
-                  <a href={EXPLORER_SITE_URL} className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
+                  <Link to="/explorer" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">
                     Explorer
-                  </a>
+                  </Link>
                 </li>
                 <li>
                   <Link to="/updates" className="text-brand100 hover:text-white transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand300 rounded-sm">

@@ -968,7 +968,7 @@ function NetworkBadge({ network, blockHeight, loading, onRefresh }: NetworkBadge
   );
 }
 
-export default function ExplorerPage() {
+export default function ExplorerPage({ embedded = false }: { embedded?: boolean } = {}) {
   const wallet = useWallet();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1254,9 +1254,8 @@ export default function ExplorerPage() {
         description="Search Bitcoin Cash addresses, transactions, vaults, streams, payments, airdrops, and proposals across FlowGuard."
         path={onExplorerHost ? '/' : '/explorer'}
       />
-      <div className="flex min-h-screen flex-col bg-background">
-        <main className="flex-1 pb-20">
-          <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6 md:py-10">
+      <ExplorerShell embedded={embedded}>
+        <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6 md:py-10">
             {/* Header */}
             <header className="mb-8">
               <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -1602,10 +1601,20 @@ export default function ExplorerPage() {
                 </div>
               </Card>
             </section>
-          </div>
-        </main>
-        <Footer />
-      </div>
+        </div>
+      </ExplorerShell>
     </>
+  );
+}
+
+function ExplorerShell({ embedded, children }: { embedded: boolean; children: React.ReactNode }) {
+  if (embedded) {
+    return <>{children}</>;
+  }
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <main className="flex-1 pb-20">{children}</main>
+      <Footer />
+    </div>
   );
 }
