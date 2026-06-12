@@ -6,16 +6,15 @@ icon: "signal"
 
 ## Current Network
 
-FlowGuard currently runs on **Chipnet**. The public app, wallet flows, and covenant deployment paths are built around BCH testnet operation today.
+FlowGuard is live on **BCH Mainnet**. The public app, wallet flows, and all covenant deployment paths target the Bitcoin Cash main chain.
 
 | Component | Current state | Network |
 | --- | --- | --- |
-| Frontend | available | Chipnet |
-| Backend API | available | Chipnet |
-| WalletConnect v2 | available | Chipnet |
-| Contract builds and local verification | available | local + Chipnet-targeted |
-| Indexer | optional operator component | Chipnet |
-| Executor | optional operator component | Chipnet |
+| Frontend | available | Mainnet |
+| Backend API | available | Mainnet |
+| WalletConnect v2 | available | Mainnet |
+| Indexer | available | Mainnet |
+| Executor | manual claims via UI | — |
 
 ## Health Check
 
@@ -29,21 +28,25 @@ Example response:
 {
   "status": "ok",
   "service": "flowguard-backend",
+  "network": "mainnet",
   "blockchain": "connected"
 }
 ```
 
-## Current Operational Notes
+## Wallets
 
-- the public product is still Chipnet-only
-- some operator services are optional and can be self-hosted
-- richer analytics and monitoring depend on the indexer and related operator infrastructure
-- vault creation still uses the current signer model and product constraints shown in the app
+The BCH wallets that work with FlowGuard today:
 
-## Getting Test BCH
+- [Cashonize](https://cashonize.com)
+- [Paytaca](https://www.paytaca.com)
+- [Zapit](https://www.zapit.io)
 
-Use the [Chipnet faucet](https://tbch.googol.cash/) to fund testing wallets.
+Any wallet that supports WalletConnect v2 on BCH and can sign CAIP-122 messages will work.
+
+## Testnet
+
+Chipnet is available for development and testing. Use the [Chipnet faucet](https://tbch.googol.cash/) to fund test wallets. Set `VITE_BCH_NETWORK=chipnet` in a local frontend build to target Chipnet.
 
 ## Support
 
-Report issues through the FlowGuard repository or the public community channels linked from the docs footer.
+Report issues through the FlowGuard repository or the community channels linked from the docs footer.

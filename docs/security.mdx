@@ -22,7 +22,7 @@ FlowGuard's security model starts with BCH consensus enforcement. The contracts 
 | Frontend    | Presents product state and helps the user build the right transaction.    |
 | Backend API | Assembles transaction descriptors, confirms broadcasts, and serves indexed state. |
 | Indexer     | Reconstructs covenant state into queryable product views.                  |
-| Executor    | Improves liveness for permissionless timed actions.                        |
+| Executor    | Optional: triggers permissionless timed actions. Not currently operated by FlowGuard; recipients claim manually via UI. |
 
 ## Trust boundaries
 
@@ -36,7 +36,7 @@ Indexing improves usability and reporting. It is not the source of truth for cov
 
 ### Executor
 
-Executors trigger permissionless functions when their preconditions are met. They have no special contract powers and cannot bypass the covenant.
+An executor triggers permissionless functions when their preconditions are met. It has no special contract powers and cannot bypass the covenant. FlowGuard does not operate a shared executor today. Recipients claim manually through the app, or any third party can broadcast a valid permissionless transaction directly.
 
 ### Metadata
 
@@ -56,7 +56,7 @@ FlowGuard does not remove the need for good key management.
 
 ## Current contract status
 
-FlowGuard runs on Chipnet today. Treat it as a BCH-native testnet product until contract review and the deployment posture meet your production bar. Local test coverage and contract verification have improved, but mainnet rollout should follow the operational checks each team is comfortable with.
+FlowGuard is live on BCH Mainnet. The covenants deployed to mainnet were reviewed internally before launch. No third-party audit has been completed. The covenant source is in `contracts/core/` and the bytecode is independently reproducible from source via `node scripts/verify-mainnet-deployment.ts`.
 
 ## Self-hosted verification
 
@@ -65,7 +65,6 @@ For stronger assurance, run your own:
 - Frontend
 - Backend API
 - Indexer
-- Executor
 
 That gives you an independent operating view while still using the same on-chain covenants.
 

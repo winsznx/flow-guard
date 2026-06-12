@@ -1,37 +1,29 @@
 ---
 title: 'Executor API'
-description: 'Automation worker scope, configuration, and current operational boundaries.'
+description: 'Automation worker scope and current operational status.'
 icon: 'robot'
 ---
 
-FlowGuard includes an executor scaffold in `backend/executor/` for automated task polling and transaction construction.
+## Current Status
 
-## Important Scope Note
+FlowGuard does not run a shared executor service today. The executor scaffold from the early codebase has been removed. Permissionless covenant actions (recurring payment claims, proposal expiry) are triggered manually through the UI or by direct contract call.
 
-There is currently no public customer-facing REST API for the executor service itself. It is an operator-run worker process.
+## What Permissionless Means
 
-## What Exists Today
+Covenants like `RecurringPaymentCovenant` and `ProposalCovenant` have paths that anyone can call once the timing condition is satisfied. The covenant enforces the rules. FlowGuard does not need to be the one to submit the transaction.
 
-- Executor codebase: `backend/executor/`
-- Poll loop and task scanning logic
-- Transaction builder logic for schedule and proposal flows
-- Environment-driven configuration
+This means:
 
-## Prototype Configuration
+- Recipients can always claim from the app UI
+- Third-party bots or self-hosted scripts can also trigger permissionless paths
+- FlowGuard servers going offline does not block valid claims
 
-The executor currently reads these environment values:
+## Self-Hosted Execution
 
-| Variable               | Purpose                       |
-| ---------------------- | ----------------------------- |
-| `DATABASE_URL`         | Database connection           |
-| `NETWORK`              | `chipnet` or `mainnet`        |
-| `ELECTRUM_SERVER`      | Electrum server hostname      |
-| `POLL_INTERVAL`        | Poll interval in ms           |
-| `MAX_GAS_PRICE`        | Fee ceiling used by builder   |
-| `EXECUTOR_PRIVATE_KEY` | Optional executor signing key |
+If you want automated triggering for your own deployment, any software that can construct and broadcast a valid BCH transaction works as an executor. The covenants have no FlowGuard-specific access control.
 
 ## Production Guidance
 
-- Do not assume autonomous payout execution unless your own deployment has validated and enabled executor behavior.
-- Treat executor automation as optional infrastructure that must be operated and monitored by your team.
-- Always preserve manual claim/execute paths in UI and ops playbooks.
+- Do not assume autonomous payout execution from a shared FlowGuard service. Manual claim paths are always available.
+- Preserve manual claim and execute paths in your own ops playbooks.
+- A hosted executor network is on the v1.1 roadmap.

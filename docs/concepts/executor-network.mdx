@@ -16,18 +16,16 @@ That is where an executor helps:
 - watch for expired proposal windows
 - submit valid permissionless transitions
 
-## What It Does Today
+## Current Status
 
-The executor layer is most relevant for:
-
-- recurring payment and recurring payout collection
-- proposal expiry flows
-- other permissionless time-triggered covenant actions supported by the current stack
+FlowGuard does not run a shared executor service today. Recipients of recurring payments and vesting schedules claim manually through the UI. All covenant paths that support permissionless execution are reachable directly from the app or by constructing the transaction yourself.
 
 ## Trust Boundary
 
-An executor can improve liveness, but it does not get special contract privileges. It cannot redirect funds or change the contract rules. It can only submit transactions the covenant already allows.
+An executor cannot redirect funds or change the contract rules. It can only submit transactions the covenant already allows. If the executor service is absent or broken, claims still happen through manual UI flows or direct contract calls.
 
 ## Self-Hosting
 
-Executor infrastructure can be self-hosted. If you need stronger operational control, run your own executor and monitoring stack rather than relying only on a shared deployment.
+If you want automated triggering for your own schedules, you can run your own executor. The covenants on chain do not require permission from FlowGuard to interact with them. Any software that can construct a valid BCH transaction and broadcast it to mainnet can serve as an executor.
+
+Executor development for the hosted FlowGuard stack is on the v1.1 roadmap.

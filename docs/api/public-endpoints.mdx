@@ -184,7 +184,7 @@ The `components` array always includes these entries, in this order:
 | `database` | `Database` | `SELECT 1` against the primary application database. |
 | `supabase_vault` | `Database` | Managed secret storage. Reported `unknown` until a server-side probe exists. |
 | `indexer` | `Workers` | Covenant address indexing worker, sanitized from `INDEXER_STATUS_URL`. |
-| `executor` | `Workers` | Scheduled transaction executor, sanitized from `EXECUTOR_STATUS_URL`. |
+| `executor` | `Workers` | Not currently operated. Recipients claim via UI. Will return `operational` when a hosted executor exists. |
 | `blockchain_monitor` | `Workers` | In-process vault balance refresher. Reported `unknown` until liveness instrumentation lands. |
 | `transaction_monitor` | `Workers` | On-chain transaction confirmation watcher. Reported `unknown` until liveness instrumentation lands. |
 | `cycle_unlock_scheduler` | `Workers` | Governance cycle unlock scheduler. Reported `unknown` until liveness instrumentation lands. |
@@ -202,7 +202,7 @@ Each `PublicComponent` has the shape:
 | `uptime90d` | `number \| null` | 90-day uptime estimate. `null` until the component samples store exists. |
 | `lastIncidentAt` | `string \| null` | ISO timestamp of the most recent incident affecting this component. |
 
-Remote worker payloads (indexer, executor) are sanitized before re-emission. Only the upstream `service.status` field is mapped through `normalizeStatus`. Hostnames, queue depths, signing-key flags, and other internals are dropped.
+Remote worker payloads (indexer) are sanitized before re-emission. Only the upstream `service.status` field is mapped through `normalizeStatus`. Hostnames, queue depths, signing-key flags, and other internals are dropped.
 
 ### Network and chain
 
