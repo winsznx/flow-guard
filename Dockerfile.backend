@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY backend/package.json backend/pnpm-lock.yaml ./
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 
 # --ignore-scripts: pnpm 10 errors hard on unapproved native module build
 # scripts (better-sqlite3 is a devDep only used by one-time migration scripts).

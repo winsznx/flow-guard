@@ -15,7 +15,7 @@ COPY contracts/lib ./contracts/lib
 COPY contracts/README.md ./contracts/README.md
 
 # Install pnpm and dependencies
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 RUN pnpm install --frozen-lockfile
 
 # Install and build contracts to produce artifacts

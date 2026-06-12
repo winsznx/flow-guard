@@ -6,7 +6,7 @@ RUN apk add --no-cache python3 py3-setuptools make g++ sqlite-dev nginx supervis
 WORKDIR /app
 
 # Install pnpm globally
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 
 # ============================================
 # Backend Build Stage
