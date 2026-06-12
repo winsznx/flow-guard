@@ -43,7 +43,15 @@ function assertNetwork(value: string): 'mainnet' | 'chipnet' {
   return value;
 }
 
+const COVENANT_TABLES = [
+  'vaults', 'proposals', 'streams', 'payments', 'budget_plans',
+  'airdrops', 'rewards', 'bounties', 'grants', 'governance_votes',
+] as const;
+
+let schemaInitialized = false;
+
 async function ensureSchema(client: PoolClient): Promise<void> {
+  if (schemaInitialized) return;
   await client.query(`
     CREATE TABLE IF NOT EXISTS sync_state (
       id INTEGER PRIMARY KEY,
@@ -68,6 +76,35 @@ async function ensureSchema(client: PoolClient): Promise<void> {
     VALUES ($1, 0, 0, '', '', 'mainnet')
     ON CONFLICT (id) DO NOTHING
   `, [SINGLETON_ID]);
+
+  for (const table of COVENANT_TABLES) {
+    await client.query(`
+      ALTER TABLE ${table}
+        ADD COLUMN IF NOT EXISTS utxo_txid TEXT,
+        ADD COLUMN IF NOT EXISTS utxo_vout INTEGER,
+        ADD COLUMN IF NOT EXISTS nft_commitment TEXT,
+        ADD COLUMN IF NOT EXISTS block_height BIGINT,
+        ADD COLUMN IF NOT EXISTS block_timestamp BIGINT,
+        ADD COLUMN IF NOT EXISTS is_spent BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS spent_txid TEXT,
+        ADD COLUMN IF NOT EXISTS spent_at_height BIGINT,
+        ADD COLUMN IF NOT EXISTS created_by_indexer BOOLEAN NOT NULL DEFAULT FALSE
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_${table}_utxo
+        ON ${table} (utxo_txid, utxo_vout) WHERE utxo_txid IS NOT NULL
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_${table}_is_spent
+        ON ${table} (is_spent)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_${table}_contract_addr
+        ON ${table} (contract_address) WHERE contract_address IS NOT NULL
+    `);
+  }
+
+  schemaInitialized = true;
 }
 
 export async function getSyncState(pool: Pool): Promise<SyncState> {
