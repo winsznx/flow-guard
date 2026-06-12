@@ -85,12 +85,63 @@ const DaoTreasuryPolicyPage = lazy(() => import('./pages/dao/DaoTreasuryPolicyPa
 const DaoStreamsPage = lazy(() => import('./pages/dao/DaoStreamsPage').then((m) => ({ default: m.DaoStreamsPage })));
 const SplitLoginScreen = lazy(() => import('./pages/SplitLoginScreen').then((m) => ({ default: m.SplitLoginScreen })));
 
-function RouteFallback() {
-  return (
-    <div className="flex items-center justify-center min-h-[40vh] text-textMuted text-sm">
-      Loading…
-    </div>
-  );
+import { RouteFallback } from './components/ui/RouteFallback';
+
+// Pre-warm every lazy route's chunk on browser idle so navigation feels
+// instant. The first paint already shipped the main bundle; the network is
+// quiet for a moment, perfect time to fetch the rest in the background.
+function preloadAllLazyRoutes() {
+  const importers = [
+    () => import('./pages/VaultsPage'),
+    () => import('./pages/CreateVaultPage'),
+    () => import('./pages/VaultDetailPage'),
+    () => import('./pages/CreateProposalPage'),
+    () => import('./pages/ProposalsPage'),
+    () => import('./pages/RequestDetailPage'),
+    () => import('./pages/BudgetPlansPage'),
+    () => import('./pages/CreateBudgetPlanPage'),
+    () => import('./pages/GovernancePage'),
+    () => import('./pages/StreamsPage'),
+    () => import('./pages/StreamDetailPage'),
+    () => import('./pages/CreateStreamPage'),
+    () => import('./pages/BatchCreateStreamsPage'),
+    () => import('./pages/StreamBatchHistoryPage'),
+    () => import('./pages/StreamShapeGalleryPage'),
+    () => import('./pages/StreamActivityPage'),
+    () => import('./pages/PaymentsPage'),
+    () => import('./pages/CreatePaymentPage'),
+    () => import('./pages/PaymentDetailPage'),
+    () => import('./pages/AirdropsPage'),
+    () => import('./pages/CreateAirdropPage'),
+    () => import('./pages/AirdropDetailPage'),
+    () => import('./pages/BountiesPage'),
+    () => import('./pages/CreateBountyPage'),
+    () => import('./pages/BountyDetailPage'),
+    () => import('./pages/RewardsPage'),
+    () => import('./pages/CreateRewardPage'),
+    () => import('./pages/RewardDetailPage'),
+    () => import('./pages/GrantsPage'),
+    () => import('./pages/CreateGrantPage'),
+    () => import('./pages/GrantDetailPage'),
+    () => import('./pages/ExplorerPage'),
+    () => import('./pages/StatusPage'),
+    () => import('./pages/AppShellPage'),
+    () => import('./pages/dao/DaoOverviewPage'),
+    () => import('./pages/dao/DaoStreamsPage'),
+    () => import('./pages/dao/DaoTeamPage'),
+    () => import('./pages/dao/DaoRolesPage'),
+    () => import('./pages/dao/DaoTreasuryPolicyPage'),
+  ];
+  const schedule =
+    typeof window !== 'undefined' && 'requestIdleCallback' in window
+      ? (cb: () => void) => (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback(cb, { timeout: 5000 })
+      : (cb: () => void) => setTimeout(cb, 1500);
+  schedule(() => {
+    // Fire-and-forget; failures are silent because the route still works on demand.
+    importers.forEach((imp) => {
+      imp().catch(() => {});
+    });
+  });
 }
 
 function App() {
@@ -107,6 +158,11 @@ function App() {
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
   }, [location.pathname, location.search]);
+
+  // Pre-warm every lazy route chunk on browser idle so navigation is instant.
+  useEffect(() => {
+    preloadAllLazyRoutes();
+  }, []);
 
   return (
     <div className="bg-background min-h-screen flex flex-col">
