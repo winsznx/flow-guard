@@ -8,6 +8,7 @@ COPY shared/package.json ./shared/package.json
 COPY shared/tsconfig.json ./shared/tsconfig.json
 COPY shared/types ./shared/types
 COPY shared/constants ./shared/constants
+COPY shared/utils ./shared/utils
 
 COPY backend/indexer/package.json ./indexer/package.json
 
@@ -22,9 +23,7 @@ WORKDIR /app/indexer
 RUN pnpm install --no-frozen-lockfile
 
 COPY backend/indexer/src ./src
-COPY backend/indexer/schema.sql ./schema.sql
-
-RUN printf '{"compilerOptions":{"target":"ES2020","module":"NodeNext","lib":["ES2020"],"outDir":"./dist","rootDir":"./src","strict":true,"esModuleInterop":true,"skipLibCheck":true,"forceConsistentCasingInFileNames":true,"resolveJsonModule":true,"moduleResolution":"NodeNext"},"include":["src/**/*"],"exclude":["node_modules","dist"]}' > tsconfig.json
+COPY backend/indexer/tsconfig.json ./tsconfig.json
 
 RUN pnpm build
 
