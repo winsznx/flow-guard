@@ -45,6 +45,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 import { Footer } from '../components/layout/Footer';
+import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
 import { PageMeta } from '../components/seo/PageMeta';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -462,9 +463,11 @@ function TransactionRow({ tx, network, onSelectAddress }: TransactionRowProps) {
       </td>
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
-          <span className="font-display text-sm font-semibold text-textPrimary">{formatBch(tx.amount)}</span>
+          <span className="font-display text-sm font-semibold text-textPrimary">
+            {formatTokenAmount(tx.amount, tx.token_type ?? null, tx.token_category ?? null, { noSuffix: true })}
+          </span>
           <span className="font-mono text-[11px] uppercase tracking-wider text-textMuted">
-            {tx.token_type || 'BCH'}
+            {tokenSymbol(tx.token_type ?? null, tx.token_category ?? null)}
           </span>
         </div>
       </td>
@@ -529,8 +532,12 @@ function TransactionCard({ tx, network, onSelectAddress }: TransactionRowProps) 
         <p className="font-mono text-[11px] text-textMuted">{formatLogicalId(tx.id)}</p>
       </Link>
       <div className="mt-3 flex items-baseline justify-between">
-        <span className="font-display text-lg font-semibold text-textPrimary">{formatBch(tx.amount)}</span>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-textMuted">{tx.token_type || 'BCH'}</span>
+        <span className="font-display text-lg font-semibold text-textPrimary">
+          {formatTokenAmount(tx.amount, tx.token_type ?? null, tx.token_category ?? null, { noSuffix: true })}
+        </span>
+        <span className="font-mono text-[11px] uppercase tracking-wider text-textMuted">
+          {tokenSymbol(tx.token_type ?? null, tx.token_category ?? null)}
+        </span>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
         <AddressTag address={tx.sender} onSelect={onSelectAddress} network={network} />

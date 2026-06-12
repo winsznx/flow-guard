@@ -27,6 +27,7 @@ router.get('/explorer/activity', async (req, res) => {
         sender: stream.sender,
         recipient: stream.recipient,
         token_type: stream.token_type,
+        token_category: (stream as { token_category?: string | null }).token_category ?? null,
         total_amount: stream.total_amount,
         vested_amount: stream.vested_amount,
         progress_percentage: stream.progress_percentage,
@@ -39,7 +40,7 @@ router.get('/explorer/activity', async (req, res) => {
 
     // Fetch payments
     if (!type || type === 'payments') {
-      let sql = `SELECT id, payment_id as stream_id, sender, recipient, token_type,
+      let sql = `SELECT id, payment_id as stream_id, sender, recipient, token_type, token_category,
         amount_per_period as total_amount, total_paid as vested_amount,
         CASE WHEN status = 'COMPLETED' THEN 100 ELSE 0 END as progress_percentage,
         interval as stream_type, status, created_at, 'PAYMENT' as activity_type
@@ -55,7 +56,7 @@ router.get('/explorer/activity', async (req, res) => {
     // Fetch airdrops
     if (!type || type === 'airdrops') {
       let sql = `SELECT id, campaign_id as stream_id, creator as sender,
-        '' as recipient, token_type,
+        '' as recipient, token_type, token_category,
         total_amount, (claimed_count * amount_per_claim) as vested_amount,
         CASE WHEN total_amount > 0 THEN ROUND((claimed_count * amount_per_claim) * 100.0 / total_amount) ELSE 0 END as progress_percentage,
         campaign_type as stream_type, status, created_at, 'AIRDROP' as activity_type
@@ -68,10 +69,12 @@ router.get('/explorer/activity', async (req, res) => {
       results.push(...rows.map(r => ({ ...r, created_at: Number(new Date(r.created_at)) / 1000 })));
     }
 
-    // Fetch treasury operations (proposals)
+    // Fetch treasury operations (proposals). token_type is BCH today because
+    // proposals do not yet model per-proposal asset; flagged with NULL
+    // token_category so the UI can distinguish "unknown" from "asserted BCH".
     if (!type || type === 'treasuries') {
       let sql = `SELECT p.id, p.vault_id as stream_id, '' as sender,
-        p.recipient, 'BCH' as token_type,
+        p.recipient, 'BCH' as token_type, NULL as token_category,
         p.amount as total_amount,
         CASE WHEN p.status = 'EXECUTED' THEN p.amount ELSE 0 END as vested_amount,
         CASE WHEN p.status = 'EXECUTED' THEN 100 ELSE p.approval_count * 25 END as progress_percentage,

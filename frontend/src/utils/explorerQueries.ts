@@ -91,6 +91,7 @@ export interface ExplorerTransactionRow {
   recipient?: string | null;
   amount: number;
   token_type?: ExplorerTokenType | null;
+  token_category?: string | null;
   tx_type: ExplorerTxType;
   status: string;
   created_at: number;
@@ -294,6 +295,7 @@ export interface ExplorerActivityRow {
   sender: string;
   recipient: string;
   token_type: string;
+  token_category?: string | null;
   total_amount: number;
   vested_amount: number;
   progress_percentage: number;
