@@ -87,6 +87,7 @@ Key values in `backend/.env`:
 - `DATABASE_URL`: Postgres connection string (Supabase or self-hosted).
 - `CHAINGRAPH_URL`: optional, enables richer chain indexing.
 - `CORS_ALLOWED_ORIGINS`: comma-separated list of allowed frontend origins.
+- `REDIS_URL`: optional, enables Redis-backed nonce store for multi-replica auth. Falls back to in-memory if unset.
 - `ADMIN_EXPORT_TOKEN`: optional, enables `/api/admin/export` (redacts private-key columns).
 - Authority and fee-payer values used by specific product flows when enabled.
 
@@ -96,7 +97,7 @@ Key values in `backend/.env`:
 
 ### Optional services
 
-The repo also includes optional indexer and executor services under `backend/indexer/` and `backend/executor/` for richer activity and automation workflows.
+The repo also includes an indexer service under `backend/indexer/` that reconstructs covenant state from the BCH chain into queryable views.
 
 ## Build commands
 
@@ -129,7 +130,7 @@ cd contracts && pnpm run test:streaming
 - Contracts: compiled locally and consumed by the backend and tests.
 - Docs: Mintlify documentation under `docs/`.
 
-Mainnet rollout should follow contract review, operational testing, and wallet compatibility checks.
+FlowGuard is live on BCH Mainnet. Contracts were reviewed internally before launch. A third-party audit is on the roadmap.
 
 ## Documentation
 
@@ -138,7 +139,7 @@ Mainnet rollout should follow contract review, operational testing, and wallet c
 
 ## Status
 
-FlowGuard is actively evolving. Some surfaces are still marked alpha, beta, or preview while the contract-backed flows continue to expand across treasury, stream, distribution, and governance modules.
+FlowGuard is on BCH Mainnet. The core contract-backed flows — treasury, streaming, distributions, and governance — are live. FT (CashToken) mode is implemented and written end to end; testing on mainnet with a real token category is the next step before treating it as stable.
 
 ## License
 
