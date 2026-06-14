@@ -45,6 +45,7 @@ app.set('trust proxy', 1);
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://flowguard.cash',
   'https://www.flowguard.cash',
+  'https://app.flowguard.cash',
   'https://docs.flowguard.cash',
   'https://*.vercel.app',
 ];
