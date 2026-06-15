@@ -397,6 +397,54 @@ function recoverPubkey(rs: Uint8Array, recoveryId: 0 | 1 | 2 | 3, digest: Uint8A
 }
 
 /**
+ * Recover the pubkey whose hash160 equals `expectedHash` from a 64-byte (r||s)
+ * signature. Tries the preferred recovery id first (from a 65-byte header when
+ * present), then the remaining ids, so wallets that emit a 64-byte compact
+ * signature without a recovery header still verify.
+ *
+ * Safe to brute-force the recovery id: acceptance still requires
+ * hash160(recovered) === expectedHash, so a forged signature recovers to a
+ * random pubkey that cannot collide with a specific address hash without the
+ * private key. Four attempts vs one only changes the odds by 4/2^160.
+ */
+function recoverMatchingPubkey(
+  rs: Uint8Array,
+  digest: Uint8Array,
+  expectedHash: Uint8Array,
+  preferredRecoveryId?: 0 | 1 | 2 | 3,
+): Uint8Array | null {
+  const order: Array<0 | 1 | 2 | 3> =
+    preferredRecoveryId === undefined
+      ? [0, 1, 2, 3]
+      : [preferredRecoveryId, ...([0, 1, 2, 3] as const).filter((i) => i !== preferredRecoveryId)];
+  for (const recoveryId of order) {
+    const recovered = recoverPubkey(rs, recoveryId, digest);
+    if (!recovered) continue;
+    const recoveredHash = hash160(recovered);
+    if (typeof recoveredHash !== 'string' && bytesEqual(recoveredHash, expectedHash)) {
+      return recovered;
+    }
+  }
+  return null;
+}
+
+/**
+ * Classify the wire shape of an incoming signature for diagnostics only. Never
+ * influences acceptance; exists so a failed verification logs WHY server-side.
+ */
+function classifySignatureShape(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'empty';
+  if (trimmed === '[object Object]') return 'object-coerced-to-string';
+  if (/^[0-9a-fA-F]+$/.test(trimmed)) {
+    return `hex(${trimmed.length / 2}B)`;
+  }
+  const decoded = decodeBase64Signature(trimmed);
+  if (decoded) return `base64(${decoded.length}B)`;
+  return 'unrecognized';
+}
+
+/**
  * Verify a wallet-ownership proof. Returns the authenticated user on success,
  * otherwise throws with a client-safe message.
  *
@@ -428,24 +476,26 @@ export async function verifyWalletOwnership(params: {
   const record = await nonceStore.consume(nonceId, address);
   if (!record) throw new Error('Nonce expired or already consumed');
 
-  // -- Path 1: BIP-322 base64 65-byte recoverable signature ------------------
+  const digest = hashBchSignedMessage(record.message);
+
+  // -- Path 1: BIP-322 base64 recoverable signature --------------------------
+  // Accepts the 65-byte recoverable shape (header || r || s) that compliant BCH
+  // wallets emit, and also a 64-byte compact (r || s) by brute-forcing the
+  // recovery id. Acceptance always reduces to hash160(recovered) === expected.
   const sigBytes = decodeBase64Signature(signature);
   if (sigBytes) {
     const split = splitRecoverableSignature(sigBytes);
-    if (split) {
-      const digest = hashBchSignedMessage(record.message);
-      const recovered = recoverPubkey(split.rs, split.recoveryId, digest);
+    const rs = split ? split.rs : sigBytes.length === 64 ? sigBytes : null;
+    if (rs) {
+      const recovered = recoverMatchingPubkey(rs, digest, expectedHash, split?.recoveryId);
       if (recovered) {
-        const recoveredHash = hash160(recovered);
-        if (typeof recoveredHash !== 'string' && bytesEqual(recoveredHash, expectedHash)) {
-          return {
-            address,
-            pubkeyHex: Buffer.from(recovered).toString('hex'),
-            pubkeyHash: Buffer.from(expectedHash).toString('hex'),
-            authenticatedAt: Date.now(),
-            legacySiwxFormat: false,
-          };
-        }
+        return {
+          address,
+          pubkeyHex: Buffer.from(recovered).toString('hex'),
+          pubkeyHash: Buffer.from(expectedHash).toString('hex'),
+          authenticatedAt: Date.now(),
+          legacySiwxFormat: false,
+        };
       }
     }
   }
@@ -456,7 +506,6 @@ export async function verifyWalletOwnership(params: {
     if (pubkeyBin.length === 33) {
       const derivedHash = hash160(pubkeyBin);
       if (typeof derivedHash !== 'string' && bytesEqual(derivedHash, expectedHash)) {
-        const digest = hashBchSignedMessage(record.message);
         const legacyBytes = hexToBin(signature);
         const verifiedCompact =
           legacyBytes.length === 64
@@ -479,6 +528,14 @@ export async function verifyWalletOwnership(params: {
     }
   }
 
+  console.warn('[auth] verify_failed', {
+    address,
+    signatureShape: classifySignatureShape(signature),
+    signatureChars: signature.length,
+    hadSignerPubkey: Boolean(signerPubkeyHex),
+    expectedHash160: Buffer.from(expectedHash).toString('hex'),
+    messageBytes: utf8ToBin(record.message).length,
+  });
   throw new Error('Signature verification failed');
 }
 

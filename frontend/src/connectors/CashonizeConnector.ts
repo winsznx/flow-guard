@@ -26,6 +26,7 @@ import type {
   CashScriptSignOptions,
   CashScriptSignResponse,
 } from '../types/wallet';
+import { normalizeSignatureResponse } from '../utils/signature';
 
 // WalletConnect Project ID - sourced exclusively from env. No hardcoded fallback.
 const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined;
@@ -311,7 +312,7 @@ export class CashonizeConnector implements IWalletConnector {
     const address = await this.getAddress();
 
     try {
-      const result = (await this.client.request({
+      const result = await this.client.request({
         topic: this.session.topic,
         chainId: this.getChainId(),
         request: {
@@ -324,9 +325,9 @@ export class CashonizeConnector implements IWalletConnector {
             },
           ],
         },
-      })) as any;
+      });
 
-      return result.signature;
+      return normalizeSignatureResponse(result);
     } catch (error: any) {
       console.error('[Cashonize] Sign message error:', error);
       throw new Error(`Failed to sign message: ${error.message}`);

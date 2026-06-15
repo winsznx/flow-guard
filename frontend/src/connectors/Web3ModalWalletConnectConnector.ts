@@ -25,6 +25,7 @@ import type {
   CashScriptSignOptions,
   CashScriptSignResponse,
 } from '../types/wallet';
+import { normalizeSignatureResponse } from '../utils/signature';
 
 // WalletConnect Project ID - sourced exclusively from env. Free at
 // https://cloud.walletconnect.com. No hardcoded fallback so a misconfigured
@@ -867,7 +868,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
 
       console.log('[Web3ModalWC] Signing message...');
 
-      const signature = await this._requestWithoutRedirect(() =>
+      const result = await this._requestWithoutRedirect(() =>
         this.client!.request({
           topic: this.session!.topic,
           chainId: connectedChain,
@@ -879,7 +880,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       );
 
       console.log('[Web3ModalWC] Message signed');
-      return signature as string;
+      return normalizeSignatureResponse(result);
     } catch (error: any) {
       console.error('[Web3ModalWC] Message signing failed:', error);
       const message = this._extractErrorMessage(error, 'Unknown wallet error');

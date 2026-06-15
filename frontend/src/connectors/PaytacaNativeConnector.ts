@@ -17,6 +17,7 @@ import type {
   CashScriptSignOptions,
   CashScriptSignResponse,
 } from '../types/wallet';
+import { normalizeSignatureResponse } from '../utils/signature';
 
 export class PaytacaNativeConnector implements IWalletConnector {
   type: WalletType = 'paytaca' as WalletType;
@@ -288,17 +289,17 @@ export class PaytacaNativeConnector implements IWalletConnector {
     try {
       console.log('[PaytacaNative] Signing message...');
 
-      const signature = await window.paytaca.signMessage({
+      const result = await window.paytaca.signMessage({
         message,
         userPrompt,
       });
 
-      if (!signature) {
+      if (!result) {
         throw new Error('Message signing rejected by user');
       }
 
       console.log('[PaytacaNative] Message signed');
-      return signature;
+      return normalizeSignatureResponse(result);
     } catch (error: any) {
       console.error('[PaytacaNative] Message signing failed:', error);
 
