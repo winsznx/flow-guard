@@ -128,6 +128,14 @@ export class StreamFundingService {
       nftCapability,
     } = params;
 
+    console.log('[StreamFunding] build', {
+      network: this.network,
+      tokenType: tokenType ?? 'BCH',
+      tokenCategory: tokenCategory ?? null,
+      amount: String(amount),
+      contractAddress,
+    });
+
     // Get UTXOs for sender
     const utxos = await this.provider.getUtxos(senderAddress);
 
@@ -154,6 +162,12 @@ export class StreamFundingService {
       selectedUtxos = [selection.authorityUtxo, ...selection.fungibleUtxos];
       totalTokenInputAmount = selection.totalTokenAmount;
       totalInputValue = selection.totalInputSatoshis;
+      console.log('[StreamFunding] ft_inputs', {
+        tokenCategory,
+        required: amountOnChain.toString(),
+        selectedTokenAmount: selection.totalTokenAmount.toString(),
+        inputCount: selectedUtxos.length,
+      });
       authorityChangeOutput = {
         to: senderAddress,
         amount: dustAmount.toString(),

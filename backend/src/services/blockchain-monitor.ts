@@ -3,6 +3,7 @@
  * Monitors all vault contracts and updates balances
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { ContractService } from './contract-service.js';
 import { VaultService } from './vaultService.js';
 import db from '../database/schema.js';
@@ -150,7 +151,7 @@ let monitorInstance: BlockchainMonitor | null = null;
 
 export function getBlockchainMonitor(): BlockchainMonitor {
   if (!monitorInstance) {
-    monitorInstance = new BlockchainMonitor('chipnet');
+    monitorInstance = new BlockchainMonitor(resolveBchNetwork());
   }
   return monitorInstance;
 }

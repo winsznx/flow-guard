@@ -3,6 +3,7 @@
  * Handles mass distribution campaigns
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
@@ -223,7 +224,7 @@ router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Res
     const claimLink = `${publicAppBaseUrl}/claim/${claimToken}`;
 
     // Deploy airdrop contract with proper NFT state
-    const deploymentService = new AirdropDeploymentService('chipnet');
+    const deploymentService = new AirdropDeploymentService(resolveBchNetwork());
 
     // Get vault's contract vaultId
     let actualVaultId = deriveStandaloneVaultId(`${id}:${creator}:${now}`);
@@ -395,7 +396,7 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
     const fundingAmountOnChain = displayAmountToOnChain(campaign.total_amount, campaign.token_type);
     const nftCommitment = campaign.nft_commitment || '';
 
-    const fundingService = new AirdropFundingService('chipnet');
+    const fundingService = new AirdropFundingService(resolveBchNetwork());
 
     try {
       const fundingTx = await fundingService.buildFundingTransaction({
@@ -427,7 +428,7 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
     } catch (fundingError: any) {
       if (fundingError.message?.includes('outpoint index 0')) {
         const { checkAndPrepareGenesisUtxo } = await import('../utils/genesisPrep.js');
-        const provider = new (await import('cashscript')).ElectrumNetworkProvider('chipnet');
+        const provider = new (await import('cashscript')).ElectrumNetworkProvider(resolveBchNetwork());
         const prepResult = await checkAndPrepareGenesisUtxo(provider, campaign.creator);
         if (prepResult.required && prepResult.wcTransaction) {
           return res.json({
@@ -700,12 +701,12 @@ router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: 
 
     const now = Math.floor(Date.now() / 1000);
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
       || campaign.nft_commitment
       || '00'.repeat(40);
 
-    const claimService = new AirdropClaimService('chipnet');
+    const claimService = new AirdropClaimService(resolveBchNetwork());
     const claimAmountOnChain = bigIntToSafeNumber(
       constructorAmountPerClaim,
       'amountPerClaim',
@@ -864,8 +865,8 @@ router.post('/airdrops/:id/pause', requireWalletAuth, async (req: Request, res: 
       return res.status(400).json({ error: 'Campaign contract is not fully configured' });
     }
 
-    const controlService = new AirdropControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new AirdropControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
       || campaign.nft_commitment
       || '';
@@ -995,8 +996,8 @@ router.post('/airdrops/:id/cancel', requireWalletAuth, async (req: Request, res:
       return res.status(400).json({ error: 'Campaign contract is not fully configured' });
     }
 
-    const controlService = new AirdropControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new AirdropControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
       || campaign.nft_commitment
       || '';

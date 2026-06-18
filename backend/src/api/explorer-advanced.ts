@@ -3,13 +3,14 @@
  * Professional-grade blockchain explorer endpoints
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router } from 'express';
 import { ElectrumNetworkProvider } from 'cashscript';
 import db from '../database/schema.js';
 import { getLatestActivityEvents } from '../utils/activityEvents.js';
 
 const router = Router();
-const provider = new ElectrumNetworkProvider('chipnet');
+const provider = new ElectrumNetworkProvider(resolveBchNetwork());
 
 /**
  * GET /api/explorer/stats

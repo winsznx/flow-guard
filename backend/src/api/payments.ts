@@ -3,6 +3,7 @@
  * Handles recurring payment operations
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
 import { cashAddressToLockingBytecode } from '@bitauth/libauth';
@@ -176,7 +177,7 @@ router.post('/payments/create', requireWalletAuth, async (req: Request, res: Res
     }
 
     // Deploy payment contract
-    const deploymentService = new PaymentDeploymentService('chipnet');
+    const deploymentService = new PaymentDeploymentService(resolveBchNetwork());
     const deployment = await deploymentService.deployRecurringPayment({
       vaultId: actualVaultId,
       sender,
@@ -275,8 +276,8 @@ router.post('/payments/:id/pause', requireWalletAuth, async (req: Request, res: 
       return res.status(400).json({ error: 'Payment contract is not fully configured' });
     }
 
-    const controlService = new PaymentControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new PaymentControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(payment.contract_address);
     if (!currentCommitment) {
       return res.status(409).json({
@@ -334,8 +335,8 @@ router.post('/payments/:id/resume', requireWalletAuth, async (req: Request, res:
       return res.status(400).json({ error: 'Payment contract is not fully configured' });
     }
 
-    const controlService = new PaymentControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new PaymentControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(payment.contract_address)
       || payment.nft_commitment
       || '';
@@ -386,8 +387,8 @@ router.post('/payments/:id/cancel', requireWalletAuth, async (req: Request, res:
       return res.status(400).json({ error: 'Payment contract is not fully configured' });
     }
 
-    const controlService = new PaymentControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new PaymentControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(payment.contract_address)
       || payment.nft_commitment
       || '';
@@ -660,7 +661,7 @@ router.get('/payments/:id/funding-info', async (req: Request, res: Response) => 
     const fundingAmountDisplay = fundingExpectation.fundingAmountDisplay;
     const fundingAmountOnChain = fundingExpectation.fundingAmountOnChain;
 
-    const fundingService = new PaymentFundingService('chipnet');
+    const fundingService = new PaymentFundingService(resolveBchNetwork());
 
     try {
       const fundingTx = await fundingService.buildFundingTransaction({
@@ -689,7 +690,7 @@ router.get('/payments/:id/funding-info', async (req: Request, res: Response) => 
     } catch (fundingError: any) {
       if (fundingError.message?.includes('outpoint index 0')) {
         const { checkAndPrepareGenesisUtxo } = await import('../utils/genesisPrep.js');
-        const provider = new (await import('cashscript')).ElectrumNetworkProvider('chipnet');
+        const provider = new (await import('cashscript')).ElectrumNetworkProvider(resolveBchNetwork());
         const prepResult = await checkAndPrepareGenesisUtxo(provider, payment.sender);
         if (prepResult.required && prepResult.wcTransaction) {
           return res.json({
@@ -790,7 +791,7 @@ router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Requ
     const now = Math.floor(Date.now() / 1000);
     const activationStart = Math.max(now, Number(payment.start_date || 0));
     const nextPaymentDate = activationStart + Number(payment.interval_seconds || 0);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const confirmedCommitment = await contractService.getNFTCommitment(payment.contract_address)
       || payment.nft_commitment
       || null;
@@ -871,7 +872,7 @@ router.post('/payments/:id/claim', requireWalletAuth, async (req: Request, res: 
     const now = Math.floor(Date.now() / 1000);
 
     // Fetch current NFT commitment from blockchain
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(payment.contract_address);
     if (!currentCommitment) {
       return res.status(409).json({
@@ -903,7 +904,7 @@ router.post('/payments/:id/claim', requireWalletAuth, async (req: Request, res: 
     }
 
     // Build claim transaction
-    const claimService = new PaymentClaimService('chipnet');
+    const claimService = new PaymentClaimService(resolveBchNetwork());
     const claimTx = await claimService.buildClaimTransaction({
       paymentId: payment.payment_id,
       contractAddress: payment.contract_address,

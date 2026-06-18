@@ -1,3 +1,4 @@
+import { resolveBchNetwork } from '../utils/network.js';
 import { randomUUID } from 'crypto';
 import db from '../database/schema.js';
 import { Vault, CreateVaultDto } from '../models/Vault.js';
@@ -24,7 +25,7 @@ export class VaultService {
 
     // Non-custodial instantiation
     try {
-      const contractService = new ContractService('chipnet');
+      const contractService = new ContractService(resolveBchNetwork());
       const spendingCapSatoshis = displayAmountToOnChain(dto.spendingCap || 0, 'BCH');
 
       const deployment = await contractService.deployVault({

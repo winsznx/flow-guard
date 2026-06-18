@@ -3,6 +3,7 @@
  * Handles reward distribution campaigns (achievement, referral, loyalty, custom)
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
@@ -150,7 +151,7 @@ router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Resp
     const campaignId = `#FG-REWARD-${String((countRow?.cnt ?? 0) + 1).padStart(3, '0')}`;
     const now = Math.floor(Date.now() / 1000);
 
-    const deploymentService = new RewardDeploymentService('chipnet');
+    const deploymentService = new RewardDeploymentService(resolveBchNetwork());
 
     let actualVaultId = deriveStandaloneVaultId(`${id}:${creator}:${now}`);
     if (vaultId) {
@@ -251,7 +252,7 @@ router.get('/rewards/:id/funding-info', async (req: Request, res: Response) => {
     const fundingAmountOnChain = displayAmountToOnChain(campaign.total_pool, campaign.token_type);
     const nftCommitment = campaign.nft_commitment || '';
 
-    const fundingService = new RewardFundingService('chipnet');
+    const fundingService = new RewardFundingService(resolveBchNetwork());
 
     try {
       const fundingTx = await fundingService.buildFundingTransaction({
@@ -280,7 +281,7 @@ router.get('/rewards/:id/funding-info', async (req: Request, res: Response) => {
     } catch (fundingError: any) {
       if (fundingError.message?.includes('outpoint index 0')) {
         const { checkAndPrepareGenesisUtxo } = await import('../utils/genesisPrep.js');
-        const provider = new (await import('cashscript')).ElectrumNetworkProvider('chipnet');
+        const provider = new (await import('cashscript')).ElectrumNetworkProvider(resolveBchNetwork());
         const prepResult = await checkAndPrepareGenesisUtxo(provider, campaign.creator);
         if (prepResult.required && prepResult.wcTransaction) {
           return res.json({
@@ -476,12 +477,12 @@ router.post('/rewards/:id/distribute', requireWalletAuth, async (req: Request, r
 
     const now = Math.floor(Date.now() / 1000);
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
       || campaign.nft_commitment
       || '00'.repeat(40);
 
-    const distributionService = new RewardDistributionService('chipnet');
+    const distributionService = new RewardDistributionService(resolveBchNetwork());
     const rewardAmountOnChainNumber = bigIntToSafeNumber(rewardAmountOnChain, 'rewardAmount');
     const distributionTx = await distributionService.buildDistributionTransaction({
       rewardId: campaign.campaign_id,
@@ -637,8 +638,8 @@ router.post('/rewards/:id/pause', requireWalletAuth, async (req: Request, res: R
       return res.status(400).json({ error: 'Campaign contract is not fully configured' });
     }
 
-    const controlService = new RewardControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new RewardControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
       || campaign.nft_commitment
       || '';
@@ -768,8 +769,8 @@ router.post('/rewards/:id/cancel', requireWalletAuth, async (req: Request, res: 
       return res.status(400).json({ error: 'Campaign contract is not fully configured' });
     }
 
-    const controlService = new RewardControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new RewardControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
       || campaign.nft_commitment
       || '';

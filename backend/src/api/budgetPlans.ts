@@ -1,3 +1,4 @@
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import {
@@ -100,7 +101,7 @@ router.post('/vaults/:vaultId/budget-plans', async (req, res) => {
       : creator;
 
     // Deploy budget contract
-    const deploymentService = new BudgetDeploymentService('chipnet');
+    const deploymentService = new BudgetDeploymentService(resolveBchNetwork());
     const deployment = await deploymentService.deployBudget({
       vaultId: actualVaultId,
       sender: senderControlAddress,
@@ -208,7 +209,7 @@ router.get('/budget-plans/:id/funding-info', async (req, res) => {
     const nftCommitment = plan.nft_commitment || '00'.repeat(40);
 
     // Build funding transaction using BudgetFundingService
-    const fundingService = new BudgetFundingService('chipnet');
+    const fundingService = new BudgetFundingService(resolveBchNetwork());
     const fundingTx = await fundingService.buildFundingTransaction({
       contractAddress: plan.contract_address,
       senderAddress,
@@ -365,13 +366,13 @@ router.post('/budget-plans/:id/release', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
     const totalAmountOnChain = displayAmountToOnChain(plan.total_amount, plan.token_type);
     const releasedAmountOnChain = displayAmountToOnChain(plan.released_amount || 0, plan.token_type);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(plan.contract_address)
       || plan.nft_commitment
       || '00';
 
     // Build release transaction
-    const releaseService = new BudgetReleaseService('chipnet');
+    const releaseService = new BudgetReleaseService(resolveBchNetwork());
     const releaseTx = await releaseService.buildReleaseTransaction({
       budgetId: plan.id,
       contractAddress: plan.contract_address,
@@ -580,8 +581,8 @@ router.post('/budget-plans/:id/pause', async (req, res) => {
       });
     }
 
-    const controlService = new BudgetControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new BudgetControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(plan.contract_address)
       || plan.nft_commitment
       || '00'.repeat(40);
@@ -709,11 +710,11 @@ router.post('/budget-plans/:id/cancel', async (req, res) => {
       });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(plan.contract_address)
       || plan.nft_commitment
       || '00'.repeat(40);
-    const cancelService = new StreamCancelService('chipnet');
+    const cancelService = new StreamCancelService(resolveBchNetwork());
     const cancelTx = await cancelService.buildCancelTransaction({
       streamType: 'STEP',
       contractAddress: plan.contract_address,

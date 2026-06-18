@@ -3,6 +3,7 @@
  * Provides endpoints for contract deployment and verification
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router } from 'express';
 import { ContractService } from '../services/contract-service.js';
 import { DeploymentRegistryService } from '../services/DeploymentRegistryService.js';
@@ -38,7 +39,7 @@ router.post('/deploy', async (req, res) => {
       return res.status(400).json({ error: 'All three signer public keys are required' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
 
     const deployment = await contractService.deployVault({
       signerPubkeys: [signer1, signer2, signer3],
@@ -90,7 +91,7 @@ router.get('/verify/:address', async (req, res) => {
   try {
     const { address } = req.params;
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const balance = await contractService.getBalance(address);
     const utxos = await contractService.getUTXOs(address);
     const blockHeight = await contractService.getBlockHeight();

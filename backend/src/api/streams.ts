@@ -3,6 +3,7 @@
  * Handles streaming payment operations
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
 import { cashAddressToLockingBytecode, hexToBin, binToHex } from '@bitauth/libauth';
@@ -575,8 +576,17 @@ router.post('/streams/create', requireWalletAuth, async (req: Request, res: Resp
     const id = randomUUID();
     const now = Math.floor(Date.now() / 1000);
 
+    console.log('[streams.create]', {
+      network: resolveBchNetwork(),
+      tokenType: normalizedTokenType,
+      tokenCategory: tokenCategory ?? null,
+      totalAmount,
+      streamType,
+      hasVault: Boolean(vaultId),
+    });
+
     // Deploy stream contract with proper NFT state
-    const deploymentService = new StreamDeploymentService('chipnet');
+    const deploymentService = new StreamDeploymentService(resolveBchNetwork());
 
     // Resolve vault linkage: support standalone streams while preserving nonzero
     // constructor vaultId expected by on-chain covenant invariants.
@@ -878,7 +888,7 @@ router.get('/streams/:id/funding-info', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing stream NFT commitment for funding' });
     }
 
-    const fundingService = new StreamFundingService('chipnet');
+    const fundingService = new StreamFundingService(resolveBchNetwork());
     const fundingTx = await fundingService.buildFundingTransaction({
       contractAddress,
       senderAddress: row.sender,
@@ -992,7 +1002,7 @@ router.post('/streams/:id/confirm-funding', requireWalletAuth, async (req: Reque
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const predictedCommitment = getPendingFundingCommitment(row, now);
     const confirmedCommitment = await contractService.getNFTCommitment(row.contract_address)
       || predictedCommitment
@@ -1080,7 +1090,7 @@ router.post('/streams/:id/claim', requireWalletAuth, async (req: Request, res: R
       return res.status(403).json({ error: 'Only the stream recipient can claim funds' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const constructorParams = deserializeConstructorParams(row.constructor_params);
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address);
     if (!currentCommitment) {
@@ -1094,7 +1104,7 @@ router.post('/streams/:id/claim', requireWalletAuth, async (req: Request, res: R
     }
 
     if (row.stream_type === 'RECURRING') {
-      const recurringClaimService = new PaymentClaimService('chipnet');
+      const recurringClaimService = new PaymentClaimService(resolveBchNetwork());
       const recurringState = parseRecurringCommitment(currentCommitment);
       const claimTx = await recurringClaimService.buildClaimTransaction({
         paymentId: row.stream_id,
@@ -1120,7 +1130,7 @@ router.post('/streams/:id/claim', requireWalletAuth, async (req: Request, res: R
       });
     }
 
-    const claimService = new StreamClaimService('chipnet');
+    const claimService = new StreamClaimService(resolveBchNetwork());
     const vestingState = parseVestingCommitmentState(currentCommitment);
     if (!vestingState) {
       return res.status(409).json({
@@ -1355,7 +1365,7 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
       });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const constructorParams = deserializeConstructorParams(row.constructor_params);
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address);
     if (!currentCommitment) {
@@ -1369,7 +1379,7 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
     }
 
     if (row.stream_type === 'RECURRING') {
-      const recurringClaimService = new PaymentClaimService('chipnet');
+      const recurringClaimService = new PaymentClaimService(resolveBchNetwork());
       const recurringState = parseRecurringCommitment(currentCommitment);
       const claimTx = await recurringClaimService.buildClaimTransaction({
         paymentId: row.stream_id,
@@ -1400,7 +1410,7 @@ router.get('/streams/:id/claim-info', async (req: Request, res: Response) => {
       });
     }
 
-    const claimService = new StreamClaimService('chipnet');
+    const claimService = new StreamClaimService(resolveBchNetwork());
     const vestingState = parseVestingCommitmentState(currentCommitment);
     if (!vestingState) {
       return res.status(409).json({
@@ -1508,12 +1518,12 @@ router.post('/streams/:id/pause', requireWalletAuth, async (req: Request, res: R
       return res.status(400).json({ error: 'Stream contract is not fully configured' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || '00'.repeat(40);
 
-    const controlService = new StreamControlService('chipnet');
+    const controlService = new StreamControlService(resolveBchNetwork());
     const pauseTx = await controlService.buildPauseTransaction({
       streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
       contractAddress: row.contract_address,
@@ -1589,7 +1599,7 @@ router.post('/streams/:id/confirm-pause', requireWalletAuth, async (req: Request
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
@@ -1658,12 +1668,12 @@ router.post('/streams/:id/resume', requireWalletAuth, async (req: Request, res: 
       return res.status(400).json({ error: 'Stream contract is not fully configured' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || '00'.repeat(40);
 
-    const controlService = new StreamControlService('chipnet');
+    const controlService = new StreamControlService(resolveBchNetwork());
     const resumeTx = await controlService.buildResumeTransaction({
       streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
       contractAddress: row.contract_address,
@@ -1739,7 +1749,7 @@ router.post('/streams/:id/confirm-resume', requireWalletAuth, async (req: Reques
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
@@ -1828,12 +1838,12 @@ router.post('/streams/:id/refill', requireWalletAuth, async (req: Request, res: 
       return res.status(400).json({ error: 'Refill amount is too small for this asset type' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || '00'.repeat(40);
 
-    const controlService = new StreamControlService('chipnet');
+    const controlService = new StreamControlService(resolveBchNetwork());
     const refillTx = await controlService.buildRefillTransaction({
       streamType: 'RECURRING',
       contractAddress: row.contract_address,
@@ -1922,7 +1932,7 @@ router.post('/streams/:id/confirm-refill', requireWalletAuth, async (req: Reques
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
@@ -2015,12 +2025,12 @@ router.post('/streams/:id/transfer', requireWalletAuth, async (req: Request, res
       return res.status(400).json({ error: 'Stream contract is not fully configured' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || '00'.repeat(40);
 
-    const controlService = new StreamControlService('chipnet');
+    const controlService = new StreamControlService(resolveBchNetwork());
     const transferTx = await controlService.buildTransferTransaction({
       streamType: row.stream_type as 'LINEAR' | 'STEP' | 'TRANCHE' | 'HYBRID',
       contractAddress: row.contract_address,
@@ -2105,7 +2115,7 @@ router.post('/streams/:id/confirm-transfer', requireWalletAuth, async (req: Requ
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const nextCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || null;
@@ -2181,12 +2191,12 @@ router.post('/streams/:id/cancel', requireWalletAuth, async (req: Request, res: 
     }
 
     const constructorParams = deserializeConstructorParams(row.constructor_params || '[]');
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(row.contract_address)
       || row.nft_commitment
       || '00'.repeat(40);
 
-    const cancelService = new StreamCancelService('chipnet');
+    const cancelService = new StreamCancelService(resolveBchNetwork());
     const cancelTx = await cancelService.buildCancelTransaction({
       streamType: row.stream_type as 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID',
       contractAddress: row.contract_address,
@@ -2533,7 +2543,7 @@ router.post('/treasuries/:vaultId/batch-create', requireWalletAuth, async (req: 
       });
     }
 
-    const fundingService = new StreamFundingService('chipnet');
+    const fundingService = new StreamFundingService(resolveBchNetwork());
     const fundingTx = await fundingService.buildBatchFundingTransaction({
       senderAddress,
       items: preparedStreams.map((prepared) => ({
@@ -2664,7 +2674,7 @@ router.post('/treasuries/:vaultId/batch-create/confirm', requireWalletAuth, asyn
     }
 
     const updatedAt = Math.floor(Date.now() / 1000);
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const confirmedCommitments = new Map<string, string | null>();
     for (const row of rows) {
       const commitment = await contractService.getNFTCommitment(row.contract_address);
@@ -3105,7 +3115,7 @@ async function preparePendingStreamRecord(params: {
   const refillableRequested = Boolean(refillable);
   const scheduleEndTime = endTime || startTime + 86400 * 365;
   const resolvedEndTime = refillableRequested && streamType === 'RECURRING' ? 0 : scheduleEndTime;
-  const deploymentService = new StreamDeploymentService('chipnet');
+  const deploymentService = new StreamDeploymentService(resolveBchNetwork());
 
   let actualVaultId = deriveStandaloneVaultId(`${id}:${sender}:${recipient}:${createdAt}`);
   if (vaultId) {

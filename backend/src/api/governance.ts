@@ -1,3 +1,4 @@
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import db from '../database/schema.js';
@@ -136,7 +137,7 @@ router.post('/governance/:proposalId/lock', async (req, res) => {
     }
 
     // Deploy vote lock contract
-    const deploymentService = new VoteDeploymentService('chipnet');
+    const deploymentService = new VoteDeploymentService(resolveBchNetwork());
     const deployment = await deploymentService.deployVoteLock({
       proposalId: req.params.proposalId,
       voter: voterAddress,
@@ -147,7 +148,7 @@ router.post('/governance/:proposalId/lock', async (req, res) => {
     });
 
     // Build lock transaction (returns WcTransactionObject — wallet signs P2PKH inputs)
-    const lockService = new VoteLockService('chipnet');
+    const lockService = new VoteLockService(resolveBchNetwork());
     const lockTx = await lockService.buildLockTransaction({
       contractAddress: deployment.contractAddress,
       voterAddress,
@@ -194,7 +195,7 @@ router.post('/governance/:proposalId/confirm-lock', requireWalletAuth, async (re
       return res.status(404).json({ error: 'Proposal not found' });
     }
     const votingPeriodEndForDeploy = Math.floor(new Date(proposalForDeploy.voting_ends_at).getTime() / 1000);
-    const deploymentService = new VoteDeploymentService('chipnet');
+    const deploymentService = new VoteDeploymentService(resolveBchNetwork());
     const deployment = await deploymentService.deployVoteLock({
       proposalId: req.params.proposalId,
       voter: voterAddress,
@@ -330,7 +331,7 @@ router.post('/governance/:proposalId/unlock', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
 
     // Build unlock transaction
-    const unlockService = new VoteUnlockService('chipnet');
+    const unlockService = new VoteUnlockService(resolveBchNetwork());
     const unlockTx = await unlockService.buildUnlockTransaction({
       voteId,
       contractAddress,

@@ -3,6 +3,7 @@
  * Handles grant programs with milestone-based releases and recipient transfers
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
@@ -155,7 +156,7 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
     const grantNumber = `#FG-GRANT-${String((countRow?.cnt ?? 0) + 1).padStart(3, '0')}`;
     const now = Math.floor(Date.now() / 1000);
 
-    const deploymentService = new GrantDeploymentService('chipnet');
+    const deploymentService = new GrantDeploymentService(resolveBchNetwork());
 
     let actualVaultId = deriveStandaloneVaultId(`${id}:${creator}:${now}`);
     if (vaultId) {
@@ -268,7 +269,7 @@ router.get('/grants/:id/funding-info', async (req: Request, res: Response) => {
     const totalAmountOnChain = displayAmountToOnChain(grant.total_amount, grant.token_type);
     const nftCommitment = grant.nft_commitment || '';
 
-    const fundingService = new GrantFundingService('chipnet');
+    const fundingService = new GrantFundingService(resolveBchNetwork());
 
     try {
       const fundingTx = await fundingService.buildFundingTransaction({
@@ -297,7 +298,7 @@ router.get('/grants/:id/funding-info', async (req: Request, res: Response) => {
     } catch (fundingError: any) {
       if (fundingError.message?.includes('outpoint index 0')) {
         const { checkAndPrepareGenesisUtxo } = await import('../utils/genesisPrep.js');
-        const provider = new (await import('cashscript')).ElectrumNetworkProvider('chipnet');
+        const provider = new (await import('cashscript')).ElectrumNetworkProvider(resolveBchNetwork());
         const prepResult = await checkAndPrepareGenesisUtxo(provider, grant.creator);
         if (prepResult.required && prepResult.wcTransaction) {
           return res.json({
@@ -469,12 +470,12 @@ router.post('/grants/:id/release', requireWalletAuth, async (req: Request, res: 
 
     const now = Math.floor(Date.now() / 1000);
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(grant.contract_address)
       || grant.nft_commitment
       || '00'.repeat(40);
 
-    const milestoneService = new GrantMilestoneService('chipnet');
+    const milestoneService = new GrantMilestoneService(resolveBchNetwork());
     const releaseTx = await milestoneService.buildReleaseTransaction({
       grantId: grant.grant_number,
       contractAddress: grant.contract_address,
@@ -644,8 +645,8 @@ router.post('/grants/:id/pause', requireWalletAuth, async (req: Request, res: Re
       return res.status(400).json({ error: 'Grant contract is not fully configured' });
     }
 
-    const controlService = new GrantControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new GrantControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(grant.contract_address)
       || grant.nft_commitment
       || '';
@@ -775,8 +776,8 @@ router.post('/grants/:id/cancel', requireWalletAuth, async (req: Request, res: R
       return res.status(400).json({ error: 'Grant contract is not fully configured' });
     }
 
-    const controlService = new GrantControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new GrantControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(grant.contract_address)
       || grant.nft_commitment
       || '';
@@ -933,8 +934,8 @@ router.post('/grants/:id/transfer', requireWalletAuth, async (req: Request, res:
       return res.status(400).json({ error: 'Grant contract is not fully configured' });
     }
 
-    const controlService = new GrantControlService('chipnet');
-    const contractService = new ContractService('chipnet');
+    const controlService = new GrantControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(grant.contract_address)
       || grant.nft_commitment
       || '';

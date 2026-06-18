@@ -3,6 +3,7 @@
  * Provides endpoints for transaction history and building
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router } from 'express';
 import { TransactionService } from '../services/transactionService.js';
 import { Contract, ElectrumNetworkProvider, TransactionBuilder, type Output } from 'cashscript';
@@ -196,7 +197,7 @@ router.post('/transactions/broadcast', async (req, res) => {
       return res.status(400).json({ error: 'txHex is required' });
     }
 
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const txid = await contractService.broadcastTransaction(txHex);
 
     const recordableTypes = new Set(['create', 'unlock', 'proposal', 'approve', 'payout']);

@@ -3,6 +3,7 @@
  * Monitors vaults and triggers cycle unlocks when conditions are met
  */
 
+import { resolveBchNetwork } from '../utils/network.js';
 import { randomUUID } from 'crypto';
 import db from '../database/schema.js';
 import { VaultService } from './vaultService.js';
@@ -398,7 +399,7 @@ let schedulerInstance: CycleUnlockScheduler | null = null;
 
 export function getCycleUnlockScheduler(): CycleUnlockScheduler {
   if (!schedulerInstance) {
-    schedulerInstance = new CycleUnlockScheduler('chipnet');
+    schedulerInstance = new CycleUnlockScheduler(resolveBchNetwork());
   }
   return schedulerInstance;
 }

@@ -1,3 +1,4 @@
+import { resolveBchNetwork } from '../utils/network.js';
 import { Router } from 'express';
 import { decodeTransaction, hexToBin, binToHex } from '@bitauth/libauth';
 import { ProposalService } from '../services/proposalService.js';
@@ -692,7 +693,7 @@ router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
     }
 
     const { ContractService } = await import('../services/contract-service.js');
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
     const txid = await contractService.broadcastTransaction(finalTransaction);
 
     await ProposalService.markProposalExecuted(proposalId, txid);
@@ -740,7 +741,7 @@ router.post('/broadcast', requireWalletAuth, async (req, res) => {
 
     // Import ContractService
     const { ContractService } = await import('../services/contract-service.js');
-    const contractService = new ContractService('chipnet');
+    const contractService = new ContractService(resolveBchNetwork());
 
     // Broadcast the signed transaction
     const txid = await contractService.broadcastTransaction(txHex);
