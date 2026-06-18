@@ -4,7 +4,6 @@ import { CreateVaultDto } from '../models/Vault.js';
 import {
   transactionExists,
   transactionHasExpectedOutput,
-  transactionHasInputFromAddress,
 } from '../utils/txVerification.js';
 import { VaultFundingService } from '../services/VaultFundingService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
@@ -81,22 +80,13 @@ async function confirmVaultFunding(args: {
     };
   }
 
-  // Require the tx to consume a UTXO from the authenticated funder so a third party cannot flip another user's vault to FUNDED by replaying a public funding tx hash.
-  if (!(await transactionHasInputFromAddress(args.txid, args.userAddress, network))) {
-    return {
-      status: 403,
-      body: {
-        error: 'Funding transaction does not include an input from your wallet',
-        message:
-          'Confirm-funding requires the caller to have actually funded the vault. '
-          + 'Sign the funding transaction from the same wallet that opened this confirmation, '
-          + 'or wait for the original funder to confirm.',
-        state: 'failed',
-        retryable: false,
-        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
-      },
-    };
-  }
+  // Anti-replay is covered by two checks that do not assume a single-address
+  // wallet: only the vault creator may confirm (isCreator, above), and the tx
+  // must carry the expected funding output to THIS vault contract (below). The
+  // previous "funding input must resolve to the caller's address" guard broke
+  // multi-address / covenant wallets (which fund from a different address than
+  // they authenticate with) and depended on fragile prevout resolution, while
+  // adding nothing those two checks do not already guarantee.
 
   const minSatoshis = BigInt(Math.max(546, displayAmountToOnChain(args.amount, 'BCH')));
   const isInitialFunding = (vault.balance || 0) <= 0;

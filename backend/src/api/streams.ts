@@ -24,7 +24,6 @@ import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import {
   transactionExists,
   transactionHasExpectedOutput,
-  transactionHasInputFromAddress,
 } from '../utils/txVerification.js';
 import {
   bchToSatoshis,
@@ -932,15 +931,15 @@ router.post('/streams/:id/confirm-funding', requireWalletAuth, async (req: Reque
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const callerWallet = req.verifiedUser!.address;
+    const network = resolveBchNetwork();
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, network))) {
       return res.status(409).json({
-        error: 'Transaction hash not found on chipnet',
+        error: 'Transaction hash not found on network',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
         state: 'pending',
         retryable: true,
@@ -957,17 +956,11 @@ router.post('/streams/:id/confirm-funding', requireWalletAuth, async (req: Reque
       return res.status(400).json({ error: 'Stream is not pending' });
     }
 
-    // Require the funding tx to consume a UTXO locked to the authenticated
-    // caller's wallet, so a third party knowing the tx hash cannot flip a
-    // PENDING stream to ACTIVE.
-    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
-      return res.status(403).json({
-        error: 'Funding transaction does not include an input from your wallet',
-        state: 'failed',
-        retryable: false,
-        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
-      });
-    }
+    // A PENDING stream is flipped to ACTIVE only when the funding tx carries the
+    // expected output to THIS stream's contract address (checked below), which
+    // binds the confirmation to the specific contract. The earlier "input must
+    // come from the caller's address" guard broke multi-address / covenant
+    // wallets that fund from a different address than they authenticate with.
 
     const isTokenStream = row.token_type === 'CASHTOKENS';
     const fundingAmountOnChain = displayAmountToOnChain(Number(row.total_amount), row.token_type);
@@ -992,7 +985,7 @@ router.post('/streams/:id/confirm-funding', requireWalletAuth, async (req: Reque
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      network,
     );
 
     if (!expectedContractOutput) {
