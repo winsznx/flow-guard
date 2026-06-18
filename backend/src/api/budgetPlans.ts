@@ -255,7 +255,7 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -293,7 +293,7 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
 
     if (!expectedContractOutput) {
@@ -426,7 +426,7 @@ router.post('/budget-plans/:id/confirm-release', async (req, res) => {
       return res.status(400).json({ error: 'Released amount and transaction hash are required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -460,7 +460,7 @@ router.post('/budget-plans/:id/confirm-release', async (req, res) => {
             }
           : {}),
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
 
     if (!expectedReleaseOutput) {
@@ -617,7 +617,7 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -651,7 +651,7 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 35,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasExpectedState) {
       return res.status(400).json({
@@ -766,7 +766,7 @@ router.post('/budget-plans/:id/confirm-cancel', async (req, res) => {
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -800,7 +800,7 @@ router.post('/budget-plans/:id/confirm-cancel', async (req, res) => {
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 20,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (hasStateOutput) {
       return res.status(400).json({

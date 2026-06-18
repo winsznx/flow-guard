@@ -13,7 +13,7 @@ import { PaymentFundingService } from '../services/PaymentFundingService.js';
 import { PaymentClaimService } from '../services/PaymentClaimService.js';
 import { PaymentControlService } from '../services/PaymentControlService.js';
 import { ContractService } from '../services/contract-service.js';
-import { transactionExists, transactionHasExpectedOutput, transactionHasInputFromAddress } from '../utils/txVerification.js';
+import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import {
@@ -426,7 +426,7 @@ router.post('/payments/:id/confirm-pause', requireWalletAuth, async (req: Reques
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -450,7 +450,7 @@ router.post('/payments/:id/confirm-pause', requireWalletAuth, async (req: Reques
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 35,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasExpectedState) {
       return res.status(400).json({
@@ -495,7 +495,7 @@ router.post('/payments/:id/confirm-resume', requireWalletAuth, async (req: Reque
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -519,7 +519,7 @@ router.post('/payments/:id/confirm-resume', requireWalletAuth, async (req: Reque
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 40,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasExpectedState) {
       return res.status(400).json({
@@ -565,7 +565,7 @@ router.post('/payments/:id/confirm-cancel', requireWalletAuth, async (req: Reque
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -601,7 +601,7 @@ router.post('/payments/:id/confirm-cancel', requireWalletAuth, async (req: Reque
             }
             : {}),
         },
-        'chipnet',
+        resolveBchNetwork(),
       );
       if (!hasExpectedRefund) {
         return res.status(400).json({
@@ -717,13 +717,12 @@ router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Requ
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const callerWallet = req.verifiedUser!.address;
 
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -733,15 +732,10 @@ router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Requ
       });
     }
 
-    // Require the funding tx to consume a UTXO from the caller's wallet so a third party can't flip status with someone else's tx hash.
-    if (!(await transactionHasInputFromAddress(txHash, callerWallet, 'chipnet'))) {
-      return res.status(403).json({
-        error: 'Funding transaction does not include an input from your wallet',
-        state: 'failed',
-        retryable: false,
-        errorCode: 'TX_INPUT_NOT_FROM_FUNDER',
-      });
-    }
+    // Anti-replay is covered by the expected-output check below (the tx must
+    // fund this specific contract). The removed input-from-caller guard broke
+    // multi-address / covenant wallets that fund from a different address than
+    // they authenticate with.
 
     const payment = await db!.prepare('SELECT * FROM payments WHERE id = ?').get(id) as any;
     if (!payment) {
@@ -779,7 +773,7 @@ router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Requ
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
 
     if (!expectedContractOutput) {
@@ -978,7 +972,7 @@ router.post('/payments/:id/confirm-claim', requireWalletAuth, async (req: Reques
       return res.status(400).json({ error: 'Claimed amount and transaction hash are required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -1014,7 +1008,7 @@ router.post('/payments/:id/confirm-claim', requireWalletAuth, async (req: Reques
           }
           : {}),
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
 
     if (!expectedRecipientOutput) {

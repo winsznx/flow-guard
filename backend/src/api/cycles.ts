@@ -6,6 +6,7 @@ import { StateService } from '../services/state-service.js';
 import { VaultService } from '../services/vaultService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
 import { transactionExists } from '../utils/txVerification.js';
+import { resolveBchNetwork } from '../utils/network.js';
 
 const router = Router();
 
@@ -171,7 +172,7 @@ router.post('/vaults/:vaultId/confirm-unlock-onchain', async (req, res) => {
       return res.status(403).json({ error: 'Only signers can confirm cycle unlocks' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',

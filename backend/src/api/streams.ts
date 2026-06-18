@@ -1229,7 +1229,7 @@ router.post('/streams/:id/confirm-claim', requireWalletAuth, async (req: Request
       return res.status(400).json({ error: 'Claimed amount and transaction hash required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -1264,7 +1264,7 @@ router.post('/streams/:id/confirm-claim', requireWalletAuth, async (req: Request
             }
           : {}),
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
 
     if (!expectedClaimOutput) {
@@ -1553,7 +1553,7 @@ router.post('/streams/:id/confirm-pause', requireWalletAuth, async (req: Request
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -1583,7 +1583,7 @@ router.post('/streams/:id/confirm-pause', requireWalletAuth, async (req: Request
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasStateOutput) {
       return res.status(400).json({
@@ -1703,7 +1703,7 @@ router.post('/streams/:id/confirm-resume', requireWalletAuth, async (req: Reques
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -1733,7 +1733,7 @@ router.post('/streams/:id/confirm-resume', requireWalletAuth, async (req: Reques
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasStateOutput) {
       return res.status(400).json({
@@ -1880,7 +1880,7 @@ router.post('/streams/:id/confirm-refill', requireWalletAuth, async (req: Reques
     if (!Number.isFinite(refillAmountDisplay) || refillAmountDisplay <= 0) {
       return res.status(400).json({ error: 'Refill amount must be greater than zero' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -1916,7 +1916,7 @@ router.post('/streams/:id/confirm-refill', requireWalletAuth, async (req: Reques
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasStateOutput) {
       return res.status(400).json({
@@ -2063,7 +2063,7 @@ router.post('/streams/:id/confirm-transfer', requireWalletAuth, async (req: Requ
     if (!txHash || !newRecipientAddress) {
       return res.status(400).json({ error: 'Transaction hash and new recipient address are required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -2099,7 +2099,7 @@ router.post('/streams/:id/confirm-transfer', requireWalletAuth, async (req: Requ
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 32,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasStateOutput) {
       return res.status(400).json({
@@ -2273,7 +2273,7 @@ router.post('/streams/:id/confirm-cancel', requireWalletAuth, async (req: Reques
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -2302,7 +2302,7 @@ router.post('/streams/:id/confirm-cancel', requireWalletAuth, async (req: Reques
         minimumSatoshis: 546n,
         requireNft: true,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (hasStateOutput) {
       return res.status(400).json({
@@ -2592,7 +2592,7 @@ router.post('/treasuries/:vaultId/batch-create/confirm', requireWalletAuth, asyn
       return res.status(400).json({ error: 'streamIds array is required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -2651,7 +2651,7 @@ router.post('/treasuries/:vaultId/batch-create/confirm', requireWalletAuth, asyn
           requiredNftCapability: 'mutable',
           minimumNftCommitmentBytes: 32,
         },
-        'chipnet',
+        resolveBchNetwork(),
       );
 
       if (!expectedContractOutput) {

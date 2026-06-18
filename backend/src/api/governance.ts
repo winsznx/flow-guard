@@ -209,7 +209,7 @@ router.post('/governance/:proposalId/confirm-lock', requireWalletAuth, async (re
     const constructorParams = deployment.constructorParams;
     const nftCommitment = deployment.initialCommitment;
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -229,7 +229,7 @@ router.post('/governance/:proposalId/confirm-lock', requireWalletAuth, async (re
         requiredNftCapability: 'mutable',
         minimumNftCommitmentBytes: 20,
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasExpectedLockOutput) {
       return res.status(400).json({
@@ -372,7 +372,7 @@ router.post('/governance/:proposalId/confirm-unlock', async (req, res) => {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
 
-    if (!(await transactionExists(txHash, 'chipnet'))) {
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
       return res.status(409).json({
         error: 'Transaction hash not found on chipnet',
         message: 'Transaction is not indexed yet. Retry confirmation shortly.',
@@ -396,7 +396,7 @@ router.post('/governance/:proposalId/confirm-unlock', async (req, res) => {
         minimumSatoshis: 546n,
         minimumTokenAmount: BigInt(Math.max(1, Math.trunc(Number(voteRecord.weight || 1)))),
       },
-      'chipnet',
+      resolveBchNetwork(),
     );
     if (!hasExpectedUnlockOutput) {
       return res.status(400).json({
