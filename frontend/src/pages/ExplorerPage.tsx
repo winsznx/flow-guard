@@ -431,6 +431,9 @@ function TransactionRow({ tx, network, onSelectAddress }: TransactionRowProps) {
   const txHash = tx.latest_event?.tx_hash || tx.tx_hash || null;
   const createdMs = toUnixMs(tx.created_at);
   const eventMs = tx.latest_event ? toUnixMs(tx.latest_event.created_at) : NaN;
+  // The tx shown is the latest on-chain event, so pair it with that event's
+  // time, not the row's DB creation (which can be many minutes earlier).
+  const txTimeMs = Number.isNaN(eventMs) ? createdMs : eventMs;
 
   return (
     <tr className="group border-b border-border/60 transition-colors hover:bg-surfaceAlt/60">
@@ -489,8 +492,8 @@ function TransactionRow({ tx, network, onSelectAddress }: TransactionRowProps) {
       </td>
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
-          <span className="text-xs text-textPrimary" title={new Date(createdMs).toLocaleString()}>
-            {formatRelativeTime(createdMs)}
+          <span className="text-xs text-textPrimary" title={new Date(txTimeMs).toLocaleString()}>
+            {formatRelativeTime(txTimeMs)}
           </span>
           {txHash && (
             <a
@@ -516,6 +519,8 @@ function TransactionCard({ tx, network, onSelectAddress }: TransactionRowProps) 
   const detailPath = meta ? meta.detailPath(tx) : `#`;
   const txHash = tx.latest_event?.tx_hash || tx.tx_hash || null;
   const createdMs = toUnixMs(tx.created_at);
+  const eventMs = tx.latest_event ? toUnixMs(tx.latest_event.created_at) : NaN;
+  const txTimeMs = Number.isNaN(eventMs) ? createdMs : eventMs;
 
   return (
     <div className="rounded-xl border border-border bg-surface p-4 shadow-sm">
@@ -550,7 +555,7 @@ function TransactionCard({ tx, network, onSelectAddress }: TransactionRowProps) 
         )}
       </div>
       <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3 text-xs text-textMuted">
-        <span>{formatRelativeTime(createdMs)}</span>
+        <span title={new Date(txTimeMs).toLocaleString()}>{formatRelativeTime(txTimeMs)}</span>
         {txHash && (
           <a
             href={getExplorerTxUrl(txHash, network)}
