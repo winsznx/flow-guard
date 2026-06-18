@@ -535,8 +535,56 @@ export async function verifyWalletOwnership(params: {
     hadSignerPubkey: Boolean(signerPubkeyHex),
     expectedHash160: Buffer.from(expectedHash).toString('hex'),
     messageBytes: utf8ToBin(record.message).length,
+    recoveryProbe: probeRecoverySchemes(signature, record.message, expectedHash),
   });
   throw new Error('Signature verification failed');
+}
+
+/**
+ * Diagnostic: recover the pubkey from a 65-byte signature under several
+ * message-digest schemes and report which (if any) produces the expected
+ * address hash. Lets a failed verify reveal whether the wallet signed with a
+ * different magic, hashing depth, or line ending than we assume. Failure-path
+ * only; remove once the wallet's scheme is confirmed.
+ */
+function probeRecoverySchemes(
+  signature: string,
+  message: string,
+  expectedHash: Uint8Array,
+): Record<string, string> {
+  const sig = decodeBase64Signature(signature);
+  if (!sig || sig.length !== 65) return { note: 'not-65-byte-base64' };
+  const rs = sig.slice(1);
+  const sha = (b: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update(b).digest());
+  const dsha = (b: Uint8Array): Uint8Array => sha(sha(b));
+  const tag = (text: string): Uint8Array => {
+    const magic = utf8ToBin(BITCOIN_MESSAGE_MAGIC);
+    const body = utf8ToBin(text);
+    return concatBytes([encodeVarint(magic.length), magic, encodeVarint(body.length), body]);
+  };
+  const crlf = message.replace(/\n/g, '\r\n');
+  const schemes: Record<string, Uint8Array> = {
+    magic_dsha: dsha(tag(message)),
+    magic_sha: sha(tag(message)),
+    raw_dsha: dsha(utf8ToBin(message)),
+    raw_sha: sha(utf8ToBin(message)),
+    magic_dsha_crlf: dsha(tag(crlf)),
+  };
+  const out: Record<string, string> = {};
+  for (const [name, digest] of Object.entries(schemes)) {
+    const recovered: string[] = [];
+    let matched = '';
+    for (let id = 0; id < 4; id++) {
+      const r = secp256k1.recoverPublicKeyCompressed(rs, id as 0 | 1 | 2 | 3, digest);
+      if (typeof r === 'string') { recovered.push('err'); continue; }
+      const h = hash160(r);
+      if (typeof h === 'string') { recovered.push('err'); continue; }
+      if (bytesEqual(h, expectedHash)) matched = `id${id}`;
+      recovered.push(Buffer.from(h).toString('hex').slice(0, 8));
+    }
+    out[name] = matched ? `MATCH(${matched})` : recovered.join(',');
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
