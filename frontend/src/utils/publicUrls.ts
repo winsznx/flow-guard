@@ -43,3 +43,16 @@ export function getCurrentSiteOrigin() {
 
   return MAIN_SITE_URL;
 }
+
+/**
+ * Resolve an in-app route for a link. On the explorer host, interactive pages
+ * (vault/stream/payment detail) need to open on the app host so WalletConnect's
+ * origin allowlist is satisfied, so this returns an absolute app URL. On the app
+ * host (or anywhere else) it stays relative for normal SPA navigation.
+ */
+export function appHref(path: string) {
+  if (isExplorerHost()) {
+    return `${APP_SITE_URL}${path}`;
+  }
+  return path;
+}

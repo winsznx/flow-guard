@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { CrossLink } from '../components/CrossLink';
 import {
   Activity,
   ArrowUpRight,
@@ -434,19 +435,19 @@ function TransactionRow({ tx, network, onSelectAddress }: TransactionRowProps) {
   return (
     <tr className="group border-b border-border/60 transition-colors hover:bg-surfaceAlt/60">
       <td className="px-4 py-3">
-        <Link
+        <CrossLink
           to={detailPath}
           className="inline-flex items-center gap-2 rounded-full border border-border bg-surfaceAlt px-2.5 py-1 text-xs font-medium text-textPrimary hover:border-primary/40 hover:bg-primarySoft"
         >
           <Icon className="h-3.5 w-3.5 text-primary" />
           {meta?.label || tx.tx_type}
-        </Link>
+        </CrossLink>
       </td>
       <td className="px-4 py-3">
         <div className="flex flex-col">
-          <Link to={detailPath} className="font-sans text-sm font-medium text-textPrimary hover:text-primary">
+          <CrossLink to={detailPath} className="font-sans text-sm font-medium text-textPrimary hover:text-primary">
             {tx.name || formatLogicalId(tx.id)}
-          </Link>
+          </CrossLink>
           <span className="font-mono text-[11px] text-textMuted">{formatLogicalId(tx.id)}</span>
         </div>
       </td>
@@ -519,18 +520,18 @@ function TransactionCard({ tx, network, onSelectAddress }: TransactionRowProps) 
   return (
     <div className="rounded-xl border border-border bg-surface p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
-        <Link to={detailPath} className="inline-flex items-center gap-2 rounded-full bg-primarySoft px-2.5 py-1 text-xs font-medium text-primaryHover">
+        <CrossLink to={detailPath} className="inline-flex items-center gap-2 rounded-full bg-primarySoft px-2.5 py-1 text-xs font-medium text-primaryHover">
           <Icon className="h-3.5 w-3.5" />
           {meta?.label || tx.tx_type}
-        </Link>
+        </CrossLink>
         <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${getStatusClasses(tx.status)}`}>
           {tx.status}
         </span>
       </div>
-      <Link to={detailPath} className="mt-3 block">
+      <CrossLink to={detailPath} className="mt-3 block">
         <p className="font-sans text-sm font-semibold text-textPrimary">{tx.name || formatLogicalId(tx.id)}</p>
         <p className="font-mono text-[11px] text-textMuted">{formatLogicalId(tx.id)}</p>
-      </Link>
+      </CrossLink>
       <div className="mt-3 flex items-baseline justify-between">
         <span className="font-display text-lg font-semibold text-textPrimary">
           {formatTokenAmount(tx.amount, tx.token_type ?? null, tx.token_category ?? null, { noSuffix: true })}
@@ -760,13 +761,13 @@ function SearchResultsPanel({ results, network, onSelectAddress, onClose }: Sear
             <ul className="space-y-2">
               {results.results.vaults.map((vault) => (
                 <li key={vault.vault_id}>
-                  <Link to={`/vaults/${vault.vault_id}`} className="flex items-center justify-between rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
+                  <CrossLink to={`/vaults/${vault.vault_id}`} className="flex items-center justify-between rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
                     <div className="min-w-0">
                       <p className="truncate font-sans font-medium text-textPrimary">{vault.name}</p>
                       <p className="font-mono text-[11px] text-textMuted">{formatLogicalId(vault.vault_id)}</p>
                     </div>
                     <span className="font-mono text-[11px] text-primary">{formatBch(vault.total_deposit)}</span>
-                  </Link>
+                  </CrossLink>
                 </li>
               ))}
             </ul>
@@ -782,7 +783,7 @@ function SearchResultsPanel({ results, network, onSelectAddress, onClose }: Sear
             <ul className="space-y-2">
               {results.results.streams.map((stream) => (
                 <li key={stream.stream_id}>
-                  <Link to={`/streams/${stream.stream_id}`} className="block rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
+                  <CrossLink to={`/streams/${stream.stream_id}`} className="block rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
                     <div className="flex items-center justify-between">
                       <p className="font-mono text-textPrimary">{formatLogicalId(stream.stream_id)}</p>
                       <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${getStatusClasses(stream.status)}`}>
@@ -794,7 +795,7 @@ function SearchResultsPanel({ results, network, onSelectAddress, onClose }: Sear
                       <ChevronRight className="h-3 w-3" />
                       <span>{formatAddress(stream.recipient)}</span>
                     </div>
-                  </Link>
+                  </CrossLink>
                 </li>
               ))}
             </ul>
