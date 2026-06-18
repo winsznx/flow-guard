@@ -481,21 +481,29 @@ export async function verifyWalletOwnership(params: {
   // -- Path 1: BIP-322 base64 recoverable signature --------------------------
   // Accepts the 65-byte recoverable shape (header || r || s) that compliant BCH
   // wallets emit, and also a 64-byte compact (r || s) by brute-forcing the
-  // recovery id. Acceptance always reduces to hash160(recovered) === expected.
+  // recovery id. Acceptance always reduces to hash160(recovered) === expected,
+  // so trying several message-digest schemes cannot admit a wrong signature: a
+  // forgery would have to recover to the exact address pubkey under some scheme,
+  // which still needs the private key.
   const sigBytes = decodeBase64Signature(signature);
   if (sigBytes) {
     const split = splitRecoverableSignature(sigBytes);
     const rs = split ? split.rs : sigBytes.length === 64 ? sigBytes : null;
     if (rs) {
-      const recovered = recoverMatchingPubkey(rs, digest, expectedHash, split?.recoveryId);
-      if (recovered) {
-        return {
-          address,
-          pubkeyHex: Buffer.from(recovered).toString('hex'),
-          pubkeyHash: Buffer.from(expectedHash).toString('hex'),
-          authenticatedAt: Date.now(),
-          legacySiwxFormat: false,
-        };
+      for (const { name, digest: candidate } of candidateDigests(record.message)) {
+        const recovered = recoverMatchingPubkey(rs, candidate, expectedHash, split?.recoveryId);
+        if (recovered) {
+          if (name !== 'magic_dsha') {
+            console.log('[auth] verify_ok via non-standard digest scheme', { scheme: name, address });
+          }
+          return {
+            address,
+            pubkeyHex: Buffer.from(recovered).toString('hex'),
+            pubkeyHash: Buffer.from(expectedHash).toString('hex'),
+            authenticatedAt: Date.now(),
+            legacySiwxFormat: false,
+          };
+        }
       }
     }
   }
@@ -541,11 +549,34 @@ export async function verifyWalletOwnership(params: {
 }
 
 /**
- * Diagnostic: recover the pubkey from a 65-byte signature under several
- * message-digest schemes and report which (if any) produces the expected
- * address hash. Lets a failed verify reveal whether the wallet signed with a
- * different magic, hashing depth, or line ending than we assume. Failure-path
- * only; remove once the wallet's scheme is confirmed.
+ * Candidate message-digest schemes a BCH wallet might use for `bch_signMessage`.
+ * The standard (magic + double-SHA256, Electron Cash compatible) is first;
+ * the rest cover wallets that drop the magic, single-hash, or use CRLF line
+ * endings. Acceptance still requires the recovered key to match the address,
+ * so trying all of them stays safe.
+ */
+function candidateDigests(message: string): Array<{ name: string; digest: Uint8Array }> {
+  const sha = (b: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update(b).digest());
+  const dsha = (b: Uint8Array): Uint8Array => sha(sha(b));
+  const tag = (text: string): Uint8Array => {
+    const magic = utf8ToBin(BITCOIN_MESSAGE_MAGIC);
+    const body = utf8ToBin(text);
+    return concatBytes([encodeVarint(magic.length), magic, encodeVarint(body.length), body]);
+  };
+  const crlf = message.replace(/\n/g, '\r\n');
+  return [
+    { name: 'magic_dsha', digest: dsha(tag(message)) },
+    { name: 'magic_dsha_crlf', digest: dsha(tag(crlf)) },
+    { name: 'magic_sha', digest: sha(tag(message)) },
+    { name: 'raw_dsha', digest: dsha(utf8ToBin(message)) },
+    { name: 'raw_sha', digest: sha(utf8ToBin(message)) },
+  ];
+}
+
+/**
+ * Diagnostic for the failure path: when no scheme accepted, report what each
+ * scheme's recovery ids produced so we can see whether the wallet signed with
+ * a different key entirely (no scheme matches under any id).
  */
 function probeRecoverySchemes(
   signature: string,
@@ -555,23 +586,8 @@ function probeRecoverySchemes(
   const sig = decodeBase64Signature(signature);
   if (!sig || sig.length !== 65) return { note: 'not-65-byte-base64' };
   const rs = sig.slice(1);
-  const sha = (b: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update(b).digest());
-  const dsha = (b: Uint8Array): Uint8Array => sha(sha(b));
-  const tag = (text: string): Uint8Array => {
-    const magic = utf8ToBin(BITCOIN_MESSAGE_MAGIC);
-    const body = utf8ToBin(text);
-    return concatBytes([encodeVarint(magic.length), magic, encodeVarint(body.length), body]);
-  };
-  const crlf = message.replace(/\n/g, '\r\n');
-  const schemes: Record<string, Uint8Array> = {
-    magic_dsha: dsha(tag(message)),
-    magic_sha: sha(tag(message)),
-    raw_dsha: dsha(utf8ToBin(message)),
-    raw_sha: sha(utf8ToBin(message)),
-    magic_dsha_crlf: dsha(tag(crlf)),
-  };
   const out: Record<string, string> = {};
-  for (const [name, digest] of Object.entries(schemes)) {
+  for (const { name, digest } of candidateDigests(message)) {
     const recovered: string[] = [];
     let matched = '';
     for (let id = 0; id < 4; id++) {
