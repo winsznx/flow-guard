@@ -5,11 +5,13 @@ import { Button } from '../components/ui/Button';
 import { useWallet } from '../hooks/useWallet';
 import { useTransactionConfirm } from '../hooks/useTransactionConfirm';
 import { createVault, updateVaultBalance } from '../utils/api';
-import { depositToVault } from '../utils/blockchain';
+import { depositToVault, getExplorerTxUrl } from '../utils/blockchain';
+import { useNetwork } from '../hooks/useNetwork';
 
 export default function CreateVaultPage() {
   const navigate = useNavigate();
   const wallet = useWallet();
+  const network = useNetwork();
   const { confirmTransaction, TransactionConfirmModal } = useTransactionConfirm();
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -277,7 +279,7 @@ export default function CreateVaultPage() {
                     {txid && (
                       <span className="block text-xs mt-1 text-textMuted">
                         TX: <a
-                          href={`https://chipnet.imaginary.cash/tx/${txid}`}
+                          href={getExplorerTxUrl(txid, network)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="underline hover:text-accent"
