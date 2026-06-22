@@ -225,6 +225,8 @@ export default function CreateStreamPage() {
   const network = useNetwork();
   const launchState = location.state as CreateStreamLocationState | null;
   const daoContext = launchState?.daoContext;
+  const handoffSource = searchParams.get('source');
+  const handoffSymbol = searchParams.get('symbol');
 
   const [formData, setFormData] = useState<FormData>({
     recipient: '',
@@ -834,6 +836,18 @@ export default function CreateStreamPage() {
   }, [searchParams]);
 
   useEffect(() => {
+    const category = searchParams.get('tokenCategory');
+    if (!category || !/^[0-9a-fA-F]{64}$/.test(category)) return;
+    const tokenTypeParam = (searchParams.get('tokenType') || '').toUpperCase();
+    const isFungibleToken = tokenTypeParam === 'FT' || tokenTypeParam === 'FUNGIBLE_TOKEN';
+    setFormData((prev) => ({
+      ...prev,
+      tokenType: isFungibleToken ? 'FUNGIBLE_TOKEN' : prev.tokenType,
+      tokenCategory: category.toLowerCase(),
+    }));
+  }, [searchParams]);
+
+  useEffect(() => {
     if (formData.streamType !== 'TRANCHE' || trancheConfig.length === 0) return;
     const firstOffset = trancheConfig[0]?.offsetDays || '0';
     const finalOffset = trancheConfig[trancheConfig.length - 1]?.offsetDays || '0';
@@ -1290,6 +1304,14 @@ export default function CreateStreamPage() {
                   : 'Build a BCH-native release schedule with continuous vesting, recurring payouts, or milestone unlocks.'
                 }
               </p>
+              {handoffSource === 'cashtokens-studio' && (
+                <div className="mt-4 inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm text-textMuted">
+                  <span>
+                    Continuing from CashTokens Studio.{' '}
+                    {handoffSymbol ? `Token ${handoffSymbol} is` : 'Your new token is'} prefilled below.
+                  </span>
+                </div>
+              )}
             </div>
             <Button
               type="button"
