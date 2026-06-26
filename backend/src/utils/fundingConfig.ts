@@ -1,8 +1,13 @@
 const DUST_DEFAULT = 1000n;
 const TOKEN_FUNDING_DEFAULT = 20_000n;
 const MIN_TOKEN_FUNDING = 546n;
+// Spends self-fund a ~4000-sat fee from this reserve (covenant redeem ~3KB, min
+// relay ~3500) and must leave a >= 546 state-dust output, so reserve >= ~4546.
+// It must ALSO stay <= 5000: the distribution cancel paths compute
+// cancelFee = input - out0 and cap it at 5000, charging the whole reserve as fee.
+// So the reserve is pinned in [4546, 5000]; 5000 is the long-standing default.
 const STATEFUL_CONTRACT_RESERVE_DEFAULT = 5_000n;
-const MIN_STATEFUL_CONTRACT_RESERVE = 2_500n;
+const MIN_STATEFUL_CONTRACT_RESERVE = 4_600n;
 
 function parsePositiveIntEnv(value: string | undefined): bigint | null {
   if (!value || value.trim().length === 0) return null;

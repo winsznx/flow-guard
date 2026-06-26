@@ -156,18 +156,21 @@ export class VaultFundingService {
     commitment[2] = 0;
     commitment[3] = 0;
     commitment[4] = 0;
-    // [5..8] current_period_id (big-endian uint32)
+    // [5..8] current_period_id (little-endian uint32, to match the covenant)
     commitment[5] = 0;
     commitment[6] = 0;
     commitment[7] = 0;
     commitment[8] = 0;
-    // [9..16] spent_this_period (big-endian uint64)
+    // [9..16] spent_this_period (little-endian uint64)
     commitment.fill(0, 9, 17);
 
+    // [17..24] last_update_timestamp — little-endian, matching the covenant's
+    // int()/toPaddedBytes. Big-endian here made the covenant read a byte-reversed
+    // timestamp and broke the first spend's commitment check.
     const now = BigInt(Math.floor(Date.now() / 1000));
     const timestampBytes = new Uint8Array(8);
     let temp = now;
-    for (let i = 7; i >= 0; i--) {
+    for (let i = 0; i < 8; i++) {
       timestampBytes[i] = Number(temp & 0xffn);
       temp >>= 8n;
     }

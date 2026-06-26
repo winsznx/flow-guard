@@ -50,8 +50,8 @@ contract VestingCovenant(
      */
     function claim(sig recipientSig, pubkey recipientPubkey) {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
@@ -122,7 +122,7 @@ contract VestingCovenant(
 
         // Cap miner fee so the claimer cannot drain the contract's BCH reserve.
         int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
-        require(claimFee >= 0 && claimFee <= 2000);
+        require(claimFee >= 0 && claimFee <= 5000);
     }
 
     /**
@@ -132,8 +132,8 @@ contract VestingCovenant(
      */
     function complete() {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
@@ -157,7 +157,7 @@ contract VestingCovenant(
         }
 
         int completeFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(completeFee >= 0 && completeFee <= 2000);
+        require(completeFee >= 0 && completeFee <= 5000);
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
 
@@ -169,8 +169,8 @@ contract VestingCovenant(
      */
     function pause(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 1);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
@@ -198,7 +198,7 @@ contract VestingCovenant(
         }
 
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(pauseFee >= 0 && pauseFee <= 2000);
+        require(pauseFee >= 0 && pauseFee <= 5000);
     }
 
     /**
@@ -208,8 +208,8 @@ contract VestingCovenant(
      */
     function resume(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 1);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status      = int(c.split(1)[0]);
@@ -244,7 +244,7 @@ contract VestingCovenant(
         }
 
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(resumeFee >= 0 && resumeFee <= 2000);
+        require(resumeFee >= 0 && resumeFee <= 5000);
     }
 
     /**
@@ -255,8 +255,8 @@ contract VestingCovenant(
      */
     function cancel(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
@@ -346,6 +346,6 @@ contract VestingCovenant(
 
         // Bound miner fee so the signed recipient cannot burn the contract reserve during handover.
         int transferFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(transferFee >= 0 && transferFee <= 2000);
+        require(transferFee >= 0 && transferFee <= 5000);
     }
 }

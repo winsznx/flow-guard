@@ -47,8 +47,8 @@ contract RecurringPaymentCovenant(
      */
     function pay() {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status         = int(c.split(1)[0]);
@@ -92,7 +92,7 @@ contract RecurringPaymentCovenant(
             0x000000000000000000000000;
 
         int payFeeDelta = tx.inputs[0].value - amountPerInterval - tx.outputs[1].value;
-        require(payFeeDelta >= 0 && payFeeDelta <= 2000);
+        require(payFeeDelta >= 0 && payFeeDelta <= 5000);
 
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
@@ -110,8 +110,8 @@ contract RecurringPaymentCovenant(
      */
     function pause(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 1);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
@@ -142,8 +142,8 @@ contract RecurringPaymentCovenant(
      */
     function resume(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 1);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status = int(c.split(1)[0]);
@@ -226,7 +226,7 @@ contract RecurringPaymentCovenant(
             }
         } else {
             int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
-            require(feeDelta >= 0 && feeDelta <= 2000);
+            require(feeDelta >= 0 && feeDelta <= 5000);
         }
     }
 }

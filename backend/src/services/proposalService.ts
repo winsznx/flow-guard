@@ -560,7 +560,9 @@ export class ProposalService {
     nextCommitment[2] = newApprovalMask;
     nextCommitment.fill(0, 34, 40);
 
-    const feeReserve = 700n;
+    // ~3KB proposal tx; fee must clear min relay (~3500) and stay <= the 5000
+    // approveFee covenant cap. approve() has no CLTV, so locktime/sequence are moot.
+    const feeReserve = 4000n;
     const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Proposal covenant UTXO is too small to cover approval transaction fee');
@@ -756,15 +758,18 @@ export class ProposalService {
       throw new Error(`Vault is not active (status=${status}); cannot execute payout`);
     }
 
-    const currentPeriodId = this.readUint32BE(commitment, 5);
-    const spentThisPeriod = this.readUint64BE(commitment, 9);
-    const lastUpdate = this.readUint64BE(commitment, 17);
+    const currentPeriodId = this.readUint32LE(commitment, 5);
+    const spentThisPeriod = this.readUint64LE(commitment, 9);
+    const lastUpdate = this.readUint64LE(commitment, 17);
 
     const periodDuration = this.toBigIntParam(constructorParams[5], 'periodDuration');
     const periodCap = this.toBigIntParam(constructorParams[6], 'periodCap');
     const recipientCap = this.toBigIntParam(constructorParams[7], 'recipientCap');
 
-    const locktime = Math.floor(Date.now() / 1000);
+    // ~2h back so nLockTime is a timestamp <= median-time-past (immediately
+    // mineable); the spend's new-period branch enforces tx.time CLTV. The period
+    // roll, setLocktime, and the commitment's last_update all use this value.
+    const locktime = Math.floor(Date.now() / 1000) - 7200;
     let newPeriodId = currentPeriodId;
     if (periodDuration > 0n && BigInt(locktime) >= (lastUpdate + periodDuration)) {
       const elapsed = BigInt(locktime) - lastUpdate;
@@ -781,7 +786,9 @@ export class ProposalService {
       throw new Error('Payout exceeds the vault recipient cap');
     }
 
-    const feeReserve = 2500n;
+    // ~3KB multisig spend; fee must clear min relay (~3196) and stay <= the 5000
+    // covenant spendFeeDelta cap. The spend self-funds it from the vault balance.
+    const feeReserve = 4000n;
     const stateOutputSatoshis = contractUtxo.satoshis - payoutSatoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Insufficient vault balance to pay recipient and preserve state UTXO');
@@ -816,6 +823,9 @@ export class ProposalService {
         BigInt(newPeriodId),
         newSpent,
       ),
+      // Non-final: the new-period branch enforces tx.time CLTV, which rejects a
+      // final (0xffffffff) input sequence.
+      { sequence: 0xfffffffe },
     );
 
     txBuilder.addOutput({
@@ -919,9 +929,9 @@ export class ProposalService {
     // [3] required_approvals
     commitment[3] = Math.max(1, Math.min(255, Math.trunc(args.requiredApprovals)));
     // [4..8] voting_end_timestamp (uint40 BE)
-    this.writeUint40BE(commitment, 4, args.votingEndTimestamp);
+    this.writeUint40LE(commitment, 4, args.votingEndTimestamp);
     // [9..13] execution_timelock (uint40 BE)
-    this.writeUint40BE(commitment, 9, args.executionTimelock);
+    this.writeUint40LE(commitment, 9, args.executionTimelock);
     // [14..33] payout hash (bytes20)
     const payoutHashBytes = hexToBin(args.payoutHashHex);
     commitment.set(payoutHashBytes.slice(0, 20), 14);
@@ -980,29 +990,32 @@ export class ProposalService {
     return lockingBytecode.slice(3, 23);
   }
 
-  private static readUint32BE(source: Uint8Array, offset: number): number {
+  // The covenants read/write commitment ints little-endian (CashScript int()/
+  // toPaddedBytes), so these MUST be LE — big-endian made the spend's newCommitment
+  // mismatch the covenant's expected value, locking every vault that held funds.
+  private static readUint32LE(source: Uint8Array, offset: number): number {
     const view = new DataView(source.buffer, source.byteOffset + offset, 4);
-    return view.getUint32(0, false);
+    return view.getUint32(0, true);
   }
 
-  private static readUint64BE(source: Uint8Array, offset: number): bigint {
+  private static readUint64LE(source: Uint8Array, offset: number): bigint {
     const view = new DataView(source.buffer, source.byteOffset + offset, 8);
-    return view.getBigUint64(0, false);
+    return view.getBigUint64(0, true);
   }
 
-  private static writeUint32BE(target: Uint8Array, offset: number, value: number): void {
+  private static writeUint32LE(target: Uint8Array, offset: number, value: number): void {
     const view = new DataView(target.buffer, target.byteOffset + offset, 4);
-    view.setUint32(0, value, false);
+    view.setUint32(0, value, true);
   }
 
-  private static writeUint64BE(target: Uint8Array, offset: number, value: bigint): void {
+  private static writeUint64LE(target: Uint8Array, offset: number, value: bigint): void {
     const view = new DataView(target.buffer, target.byteOffset + offset, 8);
-    view.setBigUint64(0, value, false);
+    view.setBigUint64(0, value, true);
   }
 
-  private static writeUint40BE(target: Uint8Array, offset: number, value: number): void {
+  private static writeUint40LE(target: Uint8Array, offset: number, value: number): void {
     let remainder = BigInt(Math.max(0, Math.trunc(value)));
-    for (let i = 4; i >= 0; i--) {
+    for (let i = 0; i <= 4; i++) {
       target[offset + i] = Number(remainder & 0xffn);
       remainder >>= 8n;
     }
@@ -1021,11 +1034,11 @@ export class ProposalService {
     // [1] status
     next[1] = 0;
     // [5..8] current_period_id
-    this.writeUint32BE(next, 5, args.newPeriodId);
+    this.writeUint32LE(next, 5, args.newPeriodId);
     // [9..16] spent_this_period
-    this.writeUint64BE(next, 9, args.newSpent);
+    this.writeUint64LE(next, 9, args.newSpent);
     // [17..24] last_update_timestamp
-    this.writeUint64BE(next, 17, args.locktime);
+    this.writeUint64LE(next, 17, args.locktime);
     // [25..] reserved
     next.fill(0, 25);
 

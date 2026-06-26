@@ -66,7 +66,9 @@ export class RewardControlService {
     newCommitment.set(commitment.slice(1, 24), 1);
     newCommitment.fill(0, 24);
 
-    const feeReserve = 2000n;
+    // ~3KB control tx; fee must clear min relay (~3500). No CLTV on Reward control
+    // paths, so locktime/sequence are irrelevant here.
+    const feeReserve = 4000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
@@ -162,10 +164,11 @@ export class RewardControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 2500n;
-    const feePayer = params.feePayerAddress
-      ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
-      : null;
+    const feeReserve = 4000n; // ~3KB cancel tx must clear min relay (~3500)
+    // Reward.cancel caps outputs at <= 2 (refund + contract change). An external
+    // fee payer would add a 3rd (fee-change) output and exceed the cap, so this
+    // path must self-fund the fee from the contract balance.
+    const feePayer: { utxos: any[]; total: bigint } | null = null as { utxos: any[]; total: bigint } | null;
     if (feePayer) {
       const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
       for (const utxo of feePayer.utxos) {

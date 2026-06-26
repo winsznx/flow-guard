@@ -45,8 +45,8 @@ contract GrantCovenant(
 ) {
     function releaseMilestone(sig authSig, pubkey authPubkey) {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status              = int(c.split(1)[0]);
@@ -95,7 +95,7 @@ contract GrantCovenant(
 
         // LIFT-pattern fee cap.
         int releaseFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
-        require(releaseFee >= 0 && releaseFee <= 2000);
+        require(releaseFee >= 0 && releaseFee <= 5000);
 
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
@@ -122,7 +122,7 @@ contract GrantCovenant(
         }
 
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(pauseFee >= 0 && pauseFee <= 2000);
+        require(pauseFee >= 0 && pauseFee <= 5000);
     }
 
     function resume(sig authSig, pubkey authPubkey) {
@@ -146,7 +146,7 @@ contract GrantCovenant(
         }
 
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(resumeFee >= 0 && resumeFee <= 2000);
+        require(resumeFee >= 0 && resumeFee <= 5000);
     }
 
     function cancel(sig authSig, pubkey authPubkey) {
@@ -173,7 +173,7 @@ contract GrantCovenant(
         }
 
         int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(cancelFee >= 0 && cancelFee <= 2000);
+        require(cancelFee >= 0 && cancelFee <= 5000);
     }
 
     function transfer(sig recipientSig, pubkey recipientPubkey, bytes20 newRecipientHash) {
@@ -199,6 +199,6 @@ contract GrantCovenant(
         }
 
         int transferFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(transferFee >= 0 && transferFee <= 2000);
+        require(transferFee >= 0 && transferFee <= 5000);
     }
 }

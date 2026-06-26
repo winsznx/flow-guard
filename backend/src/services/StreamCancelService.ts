@@ -73,26 +73,28 @@ export class StreamCancelService {
     const commitment = this.resolveCommitment(contractUtxo.token.nft.commitment, params.currentCommitment);
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    // cancel() enforces tx.time/tx.locktime >= 500000000 (CHECKLOCKTIMEVERIFY).
+    // nLockTime ~2h back so it is <= median-time-past (immediately mineable); the
+    // input is non-final so the network enforces it. The vested/unvested split is
+    // computed by the covenant from tx.locktime, so the output helpers below MUST
+    // use this same buffered value (not params.currentTime) or the amounts mismatch.
+    const cancelLocktime = Math.max(0, params.currentTime - 7200);
+    txBuilder.setLocktime(cancelLocktime);
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.cancel(
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      { sequence: 0xfffffffe },
     );
 
     const contractBalance = contractUtxo.satoshis;
-    const fee = 2500n;
-    const feePayerAddress = params.feePayerAddress || params.sender;
-    const feePayer = feePayerAddress
-      ? await resolveFeePayer(
-          this.provider,
-          this.network,
-          feePayerAddress,
-          fee + CANCEL_EXTERNAL_CUSHION,
-        )
-      : null;
+    const fee = 4000n; // ~3KB cancel tx; in [min relay ~3500, 5000]
+    // Vesting/Hybrid/Recurring cancel cap outputs at <= 2 (vested + unvested). An
+    // external fee payer's change output would add a 3rd output and exceed the cap,
+    // so the fee is always self-funded from the contract's reserve.
+    const feePayer = null as Awaited<ReturnType<typeof resolveFeePayer>> | null;
     const feeFromContract = feePayer ? 0n : fee;
 
     if (feePayer) {
@@ -174,7 +176,7 @@ export class StreamCancelService {
           unlockTimestamp: this.readBigInt(params.constructorParams[4], 'unlockTimestamp'),
           endTimestamp: this.readBigInt(params.constructorParams[5], 'endTimestamp'),
           upfrontAmount: this.readBigInt(params.constructorParams[6], 'upfrontAmount'),
-          locktime: params.currentTime,
+          locktime: cancelLocktime,
         })
       : this.addVestingCancelOutputs({
           txBuilder,
@@ -192,7 +194,7 @@ export class StreamCancelService {
           endTimestamp: this.readBigInt(params.constructorParams[5], 'endTimestamp'),
           stepInterval: this.readBigInt(params.constructorParams[7], 'stepInterval'),
           stepAmount: this.readBigInt(params.constructorParams[8], 'stepAmount'),
-          locktime: params.currentTime,
+          locktime: cancelLocktime,
         });
 
     if (feePayer) {

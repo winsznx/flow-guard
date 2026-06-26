@@ -55,28 +55,35 @@ export class PaymentControlService {
       throw new Error('Payment is not configured as cancelable/pausable');
     }
 
+    // pause() enforces tx.time/tx.locktime CLTV and records pause_start = tx.locktime,
+    // so the builder must write the SAME nLockTime the covenant sees. ~2h back so it
+    // is a timestamp <= median-time-past (immediately mineable).
+    const pauseLocktime = Math.max(0, params.currentTime - 7200);
+
     // Matches RecurringPaymentCovenant.pause() serialization exactly.
     const newCommitment = new Uint8Array(35);
     newCommitment[0] = 1;
     newCommitment[1] = flags;
     newCommitment.set(commitment.slice(2, 18), 2);
-    this.setUint40LE(newCommitment, 18, params.currentTime);
+    this.setUint40LE(newCommitment, 18, pauseLocktime);
     newCommitment.fill(0, 23);
 
-    const feeReserve = 900n;
+    const feeReserve = 4000n; // ~3KB control tx; must clear min relay (~3500)
     const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Insufficient contract balance to pause payment');
     }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(pauseLocktime);
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.pause(
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      // Non-final: pause() enforces tx.time CLTV, which rejects a final input.
+      { sequence: 0xfffffffe },
     );
     txBuilder.addOutput({
       to: contract.tokenAddress,
@@ -112,7 +119,10 @@ export class PaymentControlService {
 
     const flags = commitment[1] ?? 0;
     const intervalSeconds = this.toBigIntParam(params.constructorParams[4], 'intervalSeconds');
-    const newNextPayment = BigInt(params.currentTime) + intervalSeconds;
+    // resume() enforces CLTV and sets next_payment = tx.locktime + interval, so the
+    // builder must derive it from the SAME nLockTime the covenant sees (~2h back, <= MTP).
+    const resumeLocktime = Math.max(0, params.currentTime - 7200);
+    const newNextPayment = BigInt(resumeLocktime) + intervalSeconds;
 
     // Matches RecurringPaymentCovenant.resume() serialization exactly.
     const newCommitment = new Uint8Array(40);
@@ -124,20 +134,22 @@ export class PaymentControlService {
     this.setUint40LE(newCommitment, 23, 0);
     newCommitment.fill(0, 28);
 
-    const feeReserve = 900n;
+    const feeReserve = 4000n; // ~3KB control tx; must clear min relay (~3500)
     const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Insufficient contract balance to resume payment');
     }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(resumeLocktime);
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.resume(
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      // Non-final: resume() enforces tx.time CLTV, which rejects a final input.
+      { sequence: 0xfffffffe },
     );
     txBuilder.addOutput({
       to: contract.tokenAddress,

@@ -190,7 +190,10 @@ export class BountyClaimService {
     }
     const winnerHash = b.slice(3, 23);
 
-    const fee = 2500n;
+    // Bounty.claim caps outputs at <= 3 (winner + state + fee-payer change), so the
+    // external fee payer is allowed; covenant claimFee nets to 0 and the miner fee
+    // below must clear min relay for the ~3KB claim tx.
+    const fee = 4000n;
     const feePayerAddress = signer || winnerAddress;
     const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const winnerOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : rewardPerWinner;
@@ -205,14 +208,16 @@ export class BountyClaimService {
     txBuilder.setLocktime(Number(locktime));
     txBuilder.addInput(
       contractUtxo,
+      // Covenant entrypoint is claim(sig, pubkey, winnerHash, proofHash) — the
+      // reward is fixed by the constructor, not an unlock arg.
       contract.unlock.claim(
-        winnerHash,
-        proofHashBin,
-        rewardPerWinner,
         new SignatureTemplate(authPrivKey),
         authPubKey,
+        winnerHash,
+        proofHashBin,
       ),
-      { sequence: 0xffffffff },
+      // Non-final: windowed bounties enforce tx.time CLTV, which rejects 0xffffffff.
+      { sequence: 0xfffffffe },
     );
     for (const utxo of feePayer.utxos) {
       txBuilder.addInput(utxo, feePayer.unlocker, { sequence: 0xffffffff });
@@ -316,7 +321,8 @@ export class BountyClaimService {
       throw new Error('Bounty claim window has ended');
     }
 
-    let locktime = now > 30n ? now - 30n : now;
+    // ~2h behind wall clock so nLockTime is already <= median-time-past (MTP lags ~1h).
+    let locktime = now > 7200n ? now - 7200n : now;
     if (startTimestamp > 0n && locktime < startTimestamp) {
       locktime = startTimestamp;
     }

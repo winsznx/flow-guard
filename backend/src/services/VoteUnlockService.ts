@@ -18,7 +18,7 @@ import {
   placeholderSignature,
   type WcTransactionObject,
 } from 'cashscript';
-import { hexToBin } from '@bitauth/libauth';
+import { hexToBin, decodeCashAddress, encodeCashAddress } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 
 export interface UnlockTransactionParams {
@@ -72,7 +72,7 @@ export class VoteUnlockService {
     const lockedTokens = contractUtxo.token?.amount ?? 0n;
     const category = contractUtxo.token?.category || tokenCategory;
 
-    const fee = 2500n;
+    const fee = 4000n; // ~3KB reclaim tx; must clear min relay (~3500)
     const voterAmount = contractUtxo.satoshis - fee;
     if (voterAmount < 546n) {
       throw new Error('Insufficient contract balance to cover transaction fee');
@@ -80,9 +80,13 @@ export class VoteUnlockService {
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
 
-    // CLTV: locktime must be >= unlockTimestamp (the constructor param)
-    // currentTime >= votingPeriodEnd == unlockTimestamp is already validated above
-    txBuilder.setLocktime(currentTime);
+    // The covenant enforces the lock via tx.locktime >= unlockTimestamp. For that
+    // to be REAL the input must be non-final, so the network requires nLockTime <=
+    // median-time-past — otherwise a final input lets the voter set any future
+    // nLockTime and reclaim before the unlock. Set nLockTime ~2h back so it is
+    // already <= MTP (which lags ~1h) and the tx is immediately mineable.
+    const reclaimLocktime = Math.max(0, currentTime - 7200);
+    txBuilder.setLocktime(reclaimLocktime);
 
     txBuilder.addInput(
       contractUtxo,
@@ -90,15 +94,19 @@ export class VoteUnlockService {
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      { sequence: 0xfffffffe },
     );
 
-    // Return BCH + FTs to voter; NFT is consumed (burned) — vote is finalized
+    // Return BCH + FTs to voter; NFT is consumed (burned) — vote is finalized.
+    // Token outputs require a token-aware (p2pkhWithTokens) address even though the
+    // locking bytecode is identical to the plain P2PKH; the authenticated voter
+    // address is plain, so re-encode it when returning the governance tokens.
+    const hasTokens = lockedTokens > 0n && Boolean(category);
+    const recipientAddress = hasTokens ? this.toTokenAwareAddress(voter) : voter;
     txBuilder.addOutput({
-      to: voter,
+      to: recipientAddress,
       amount: voterAmount,
-      ...(lockedTokens > 0n && category ? {
-        token: { category, amount: lockedTokens },
-      } : {}),
+      ...(hasTokens ? { token: { category, amount: lockedTokens } } : {}),
     });
 
     const wcTransaction = txBuilder.generateWcTransactionObject({
@@ -107,5 +115,17 @@ export class VoteUnlockService {
     });
 
     return { unlockedAmount: Number(lockedTokens), wcTransaction };
+  }
+
+  private toTokenAwareAddress(address: string): string {
+    const decoded = decodeCashAddress(address);
+    if (typeof decoded === 'string') {
+      throw new Error(`Invalid voter address for token return: ${decoded}`);
+    }
+    if (decoded.type === 'p2pkhWithTokens' || decoded.type === 'p2shWithTokens') {
+      return address;
+    }
+    const tokenType = decoded.type === 'p2sh' ? 'p2shWithTokens' : 'p2pkhWithTokens';
+    return encodeCashAddress({ prefix: decoded.prefix, type: tokenType, payload: decoded.payload }).address;
   }
 }

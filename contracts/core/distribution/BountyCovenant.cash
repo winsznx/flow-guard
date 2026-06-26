@@ -60,8 +60,8 @@ contract BountyCovenant(
         require(checkSig(authSig, authPubkey));
         require(status == 0); // ACTIVE
 
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
         if (startTimestamp > 0) { require(tx.locktime >= startTimestamp); }
         if (endTimestamp > 0)   { require(tx.locktime <= endTimestamp); }
 
@@ -102,7 +102,7 @@ contract BountyCovenant(
         // LIFT-pattern fee cap on claim. Keeps BCH reserve solvent across
         // many sequential bounty payouts.
         int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
-        require(claimFee >= 0 && claimFee <= 2000);
+        require(claimFee >= 0 && claimFee <= 5000);
 
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
     }
@@ -133,7 +133,7 @@ contract BountyCovenant(
         }
 
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(pauseFee >= 0 && pauseFee <= 2000);
+        require(pauseFee >= 0 && pauseFee <= 5000);
     }
 
     function resume(sig authSig, pubkey authPubkey) {
@@ -161,7 +161,7 @@ contract BountyCovenant(
         }
 
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(resumeFee >= 0 && resumeFee <= 2000);
+        require(resumeFee >= 0 && resumeFee <= 5000);
     }
 
     function cancel(sig authSig, pubkey authPubkey) {
@@ -191,6 +191,6 @@ contract BountyCovenant(
         }
 
         int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(cancelFee >= 0 && cancelFee <= 2000);
+        require(cancelFee >= 0 && cancelFee <= 5000);
     }
 }

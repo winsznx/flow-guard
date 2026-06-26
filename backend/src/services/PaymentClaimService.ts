@@ -142,32 +142,23 @@ export class PaymentClaimService {
     this.setUint40LE(newCommitment, 23, 0); // pause_start reset
 
     const claimAmountBig = BigInt(claimableAmount);
-    const fee = 2500n;
+    // RecurringPayment.pay caps outputs at <= 2 (recipient + state) and
+    // payFeeDelta = input - amountPerInterval - out1, so the fee is self-funded
+    // from the contract reserve (an external fee payer's change output would
+    // exceed the cap). Fee 4000 is in [min relay ~3500, 5000 covenant cap].
+    const fee = 4000n;
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    if (contractBalance < recipientOutputSatoshis) {
-      throw new Error('Insufficient contract balance to satisfy payment output');
+    const stateOutputSatoshis = contractBalance - recipientOutputSatoshis - fee;
+    if (stateOutputSatoshis < 546n) {
+      throw new Error('Insufficient contract balance to preserve recurring payment state UTXO');
     }
-    const minimumStateOutput = 546n;
-    const contractStateAmount = contractBalance - recipientOutputSatoshis;
-    const stateTopUpNeeded = contractStateAmount >= minimumStateOutput
-      ? 0n
-      : minimumStateOutput - contractStateAmount;
-    const requiredExternalSatoshis = fee + stateTopUpNeeded;
-    const resolvedFeePayerAddress = feePayerAddress || recipient;
-    const feePayer = await resolveFeePayer(
-      this.provider,
-      this.network,
-      resolvedFeePayerAddress,
-      requiredExternalSatoshis,
-    );
-    const stateOutputSatoshis = contractStateAmount + stateTopUpNeeded;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(currentTime);
-    txBuilder.addInput(contractUtxo, contract.unlock.pay());
-    for (const utxo of feePayer.utxos) {
-      txBuilder.addInput(utxo, feePayer.unlocker);
-    }
+    // pay() enforces tx.time/tx.locktime >= 500000000 (CHECKLOCKTIMEVERIFY). Set
+    // nLockTime ~2h back so it is <= median-time-past (immediately mineable) and
+    // keep the input non-final so the network enforces it.
+    txBuilder.setLocktime(Math.max(0, currentTime - 7200));
+    txBuilder.addInput(contractUtxo, contract.unlock.pay(), { sequence: 0xfffffffe });
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       const tokenAmount = contractUtxo.token.amount ?? 0n;
@@ -205,14 +196,6 @@ export class PaymentClaimService {
       });
     }
 
-    const feeChange = feePayer.total - requiredExternalSatoshis;
-    if (feeChange > 546n) {
-      txBuilder.addOutput({
-        to: feePayer.address,
-        amount: feeChange,
-      });
-    }
-
     const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim recurring payment',
@@ -224,9 +207,8 @@ export class PaymentClaimService {
       intervalsClaimable: intervals,
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
-      feePayerAddress: feePayer.address,
-      feeSponsored: feePayer.sponsored,
-      stateTopUpSatoshis: stateTopUpNeeded.toString(),
+      fee: fee.toString(),
+      stateOutputSatoshis: stateOutputSatoshis.toString(),
       inputSatoshis: contractUtxo.satoshis.toString(),
     });
 

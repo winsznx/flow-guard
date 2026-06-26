@@ -177,7 +177,12 @@ export class RewardDistributionService {
     }
     const recipientHash = b.slice(3, 23);
 
-    const fee = 2500n;
+    // Reward.reward caps outputs at <= 3 (recipient + state + fee-payer change), so
+    // the external fee payer is allowed here. The covenant's rewardFee accounting
+    // (input[0] - out0 - out1) nets to 0; the miner fee below is what must clear
+    // min relay. The reward tx is ~3KB, so the fee must be ~3500+ (and <= the 5000
+    // covenant skim cap, which only bounds the contract-funded portion = 0 here).
+    const fee = 4000n;
     const feePayerAddress = signer || recipientAddress;
     const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : rewardAmountBig;
@@ -192,13 +197,17 @@ export class RewardDistributionService {
     txBuilder.setLocktime(Number(locktime));
     txBuilder.addInput(
       contractUtxo,
-      contract.unlock.distribute(
-        recipientHash,
-        rewardAmountBig,
+      // Covenant entrypoint is reward(sig, pubkey, recipientHash, rewardAmount);
+      // there is no `distribute` function and the arg order is sig/pubkey first.
+      contract.unlock.reward(
         new SignatureTemplate(authPrivKey),
         authPubKey,
+        recipientHash,
+        rewardAmountBig,
       ),
-      { sequence: 0xffffffff },
+      // Non-final: windowed campaigns enforce tx.time >= 500000000 (CHECKLOCKTIMEVERIFY),
+      // which rejects a final (0xffffffff) sequence on the spent input.
+      { sequence: 0xfffffffe },
     );
     for (const utxo of feePayer.utxos) {
       txBuilder.addInput(utxo, feePayer.unlocker, { sequence: 0xffffffff });
@@ -300,7 +309,9 @@ export class RewardDistributionService {
       throw new Error('Campaign distribution window has ended');
     }
 
-    let locktime = now > 30n ? now - 30n : now;
+    // Set nLockTime ~2h behind wall clock so it is already <= the chain's
+    // median-time-past and the tx is immediately mineable (MTP lags ~1h).
+    let locktime = now > 7200n ? now - 7200n : now;
     if (startTimestamp > 0n && locktime < startTimestamp) {
       locktime = startTimestamp;
     }

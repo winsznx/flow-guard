@@ -83,8 +83,8 @@ contract VaultCovenant(
         require(newPeriodId == currentPeriodId + 1);
         require(newSpent == 0);
 
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
 
         if (periodDuration > 0) {
             require(tx.locktime >= lastUpdateTime + periodDuration);
@@ -97,10 +97,10 @@ contract VaultCovenant(
             toPaddedBytes(newPeriodId, 4) +
             toPaddedBytes(newSpent, 8) +
             toPaddedBytes(tx.locktime, 8) +
-            0x0000000000000000000000000000;
+            0x00000000000000;
 
         int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
-        require(feeDelta >= 0 && feeDelta <= 2000); // allow paying miner fee from treasury UTXO
+        require(feeDelta >= 0 && feeDelta <= 5000); // allow paying miner fee from treasury UTXO
 
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
@@ -146,8 +146,8 @@ contract VaultCovenant(
         require(payoutAmount > 0);
 
         if (newPeriodId == currentPeriodId + 1) {
-            require(tx.time >= 0);
-            require(tx.locktime < 500000000);
+            require(tx.time >= 500000000);
+            require(tx.locktime >= 500000000);
             if (periodDuration > 0) { require(tx.locktime >= lastUpdateTime + periodDuration); }
             require(newSpent == payoutAmount);
         } else {
@@ -175,10 +175,10 @@ contract VaultCovenant(
             toPaddedBytes(newPeriodId, 4) +
             toPaddedBytes(newSpent, 8) +
             toPaddedBytes(tx.locktime, 8) +
-            0x0000000000000000000000000000;
+            0x00000000000000;
 
         int spendFeeDelta = tx.inputs[0].value - payoutAmount - tx.outputs[1].value;
-        require(spendFeeDelta >= 0 && spendFeeDelta <= 2000);
+        require(spendFeeDelta >= 0 && spendFeeDelta <= 5000);
 
         require(tx.outputs[1].nftCommitment == newCommitment);
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
@@ -204,7 +204,7 @@ contract VaultCovenant(
         bytes newCommitment = c.split(1)[0] + 0x01 + c.split(2)[1].split(30)[0];
 
         int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
-        require(feeDelta >= 0 && feeDelta <= 2000);
+        require(feeDelta >= 0 && feeDelta <= 5000);
 
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
@@ -235,7 +235,7 @@ contract VaultCovenant(
         bytes newCommitment = c.split(1)[0] + 0x00 + c.split(2)[1].split(30)[0];
 
         int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
-        require(feeDelta >= 0 && feeDelta <= 2000);
+        require(feeDelta >= 0 && feeDelta <= 5000);
 
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
@@ -269,7 +269,7 @@ contract VaultCovenant(
         bytes newCommitment = c.split(1)[0] + 0x02 + c.split(2)[1].split(30)[0];
 
         int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
-        require(feeDelta >= 0 && feeDelta <= 2000);
+        require(feeDelta >= 0 && feeDelta <= 5000);
 
         require(tx.outputs[0].nftCommitment == newCommitment);
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
