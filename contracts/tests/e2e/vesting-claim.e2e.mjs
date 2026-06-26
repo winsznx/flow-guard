@@ -22,8 +22,8 @@ import { Contract, TransactionBuilder, SignatureTemplate, ElectrumNetworkProvide
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const artifact = JSON.parse(readFileSync(join(__dirname, '../../artifacts/streaming/VestingCovenant.json'), 'utf8'));
 
-const NETWORK = 'chipnet';
-const PREFIX = 'bchtest';
+const NETWORK = process.env.BCH_NETWORK || 'chipnet';
+const PREFIX = NETWORK === 'mainnet' ? 'bitcoincash' : 'bchtest';
 const FINAL = 0xffffffff;
 const NON_FINAL = 0xfffffffe;
 

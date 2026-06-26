@@ -11,7 +11,8 @@ import { Contract, TransactionBuilder, SignatureTemplate, ElectrumNetworkProvide
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const artifact = JSON.parse(readFileSync(join(__dirname, '../../artifacts/distribution/RewardCovenant.json'), 'utf8'));
-const PREFIX = 'bchtest';
+const NETWORK = process.env.BCH_NETWORK || 'chipnet';
+const PREFIX = NETWORK === 'mainnet' ? 'bitcoincash' : 'bchtest';
 const NON_FINAL = 0xfffffffe;
 const log = (...a) => console.log('[reward-e2e]', ...a);
 const fail = (m) => { console.error('[reward-e2e] FAIL:', m); process.exit(1); };
@@ -44,7 +45,7 @@ async function waitUtxo(provider, address, pred, label, tries = 60) {
 }
 
 async function main() {
-  const provider = new ElectrumNetworkProvider('chipnet');
+  const provider = new ElectrumNetworkProvider(NETWORK);
   log('wallet:', addr);
   let utxos = (await provider.getUtxos(addr)).filter((u) => !u.token);
   const bal = utxos.reduce((s, u) => s + u.satoshis, 0n);
