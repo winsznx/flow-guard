@@ -108,7 +108,7 @@ async function main(): Promise<void> {
   const registry: RegistryEntry[] = await loadRegistry(pool);
   console.log(`[indexer] registry loaded: ${registry.length} addresses`);
 
-  const stopProjector = await startProjector({
+  const projector = await startProjector({
     pool,
     electrum,
     registry,
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
         electrumConnected: electrum.isConnected,
         currentHeight: sync?.lastHeight ?? null,
         lastSafeHeight: sync?.lastSafeHeight ?? null,
-        registrySize: registry.length,
+        registrySize: projector.getRegistrySize(),
         confirmations: env.confirmations,
         pollIntervalMs: env.pollIntervalMs,
         timestamp: new Date().toISOString(),
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[indexer] ${signal} received, shutting down`);
     try {
-      await stopProjector();
+      await projector.stop();
       await new Promise<void>((resolve) => statusServer.close(() => resolve()));
       await electrum.disconnect();
       await pool.end();

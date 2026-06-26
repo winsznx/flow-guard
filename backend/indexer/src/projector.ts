@@ -30,6 +30,11 @@ export interface ProjectorOpts {
   registryRefreshMs?: number;
 }
 
+export interface ProjectorHandle {
+  stop: () => Promise<void>;
+  getRegistrySize: () => number;
+}
+
 const DEFAULT_REGISTRY_REFRESH_MS = 60_000;
 
 interface Tip {
@@ -87,7 +92,7 @@ function parseHeader(hex: string): { prevHash: string; timestamp: number } {
   return { prevHash: prevBE.toString('hex'), timestamp };
 }
 
-export async function startProjector(opts: ProjectorOpts): Promise<() => Promise<void>> {
+export async function startProjector(opts: ProjectorOpts): Promise<ProjectorHandle> {
   const { pool, electrum, registry, confirmations } = opts;
   const log = (msg: string, ctx?: unknown): void => {
     if (ctx === undefined) console.log(`[projector] ${msg}`);
@@ -441,7 +446,7 @@ export async function startProjector(opts: ProjectorOpts): Promise<() => Promise
 
   log('projector started', { addresses: addressBySh.size, tipHeight: tip.height });
 
-  return async function stop(): Promise<void> {
+  const stop = async (): Promise<void> => {
     stopping = true;
     if (refreshTimer) clearInterval(refreshTimer);
     for (const sh of addressBySh.keys()) {
@@ -454,4 +459,6 @@ export async function startProjector(opts: ProjectorOpts): Promise<() => Promise
     await Promise.allSettled([...pending.values()]);
     log('projector stopped');
   };
+
+  return { stop, getRegistrySize: () => addressBySh.size };
 }
