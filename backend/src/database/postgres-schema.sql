@@ -180,7 +180,12 @@ CREATE INDEX IF NOT EXISTS idx_stream_batches_launch_source ON stream_batches(la
 -- Supabase Advisor: views default to security_invoker=false, which runs the
 -- query with the view OWNER's privileges and bypasses RLS on the underlying
 -- table. We expose the same RLS surface as `streams` itself.
-CREATE OR REPLACE VIEW streams_with_vested
+-- DROP + recreate (not CREATE OR REPLACE): the view is SELECT s.*, and the
+-- indexer's migrations add columns to `streams`, which shifts the trailing
+-- vested/claimable columns. CREATE OR REPLACE forbids renaming an existing
+-- view column, so it must be dropped and rebuilt to track the live table shape.
+DROP VIEW IF EXISTS streams_with_vested;
+CREATE VIEW streams_with_vested
 WITH (security_invoker = true) AS
 SELECT
     s.*,
