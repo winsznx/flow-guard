@@ -126,21 +126,27 @@ export class GrantMilestoneService {
     const newTotalReleased = totalReleased + amountPerMilestone;
     const newStatus = newMilestonesCompleted >= milestonesTotal ? 3 : 0;
 
+    // The covenant writes last_update = tx.locktime into the new commitment, so the
+    // builder must write the SAME buffered nLockTime it sets below (raw currentTime
+    // would mismatch tx.locktime and fail the commitment check at GrantCovenant:88).
+    const releaseLocktime = Math.max(0, currentTime - 7200);
+
     const newCommitment = new Uint8Array(40);
     newCommitment[0] = newStatus;
     newCommitment[1] = commitment[1]; // preserve flags
     newCommitment[2] = Number(newMilestonesCompleted);
     new DataView(newCommitment.buffer, newCommitment.byteOffset + 3, 8)
       .setBigUint64(0, newTotalReleased, true);
-    this.setUint40LE(newCommitment, 11, currentTime);
+    this.setUint40LE(newCommitment, 11, releaseLocktime);
     newCommitment.set(recipientHash, 16);
     newCommitment.fill(0, 36);
 
-    const fee = 2500n;
-    const feePayerAddress = signer || recipientAddress;
-    const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
+    // Grant.releaseMilestone caps outputs at <= 2 (recipient + state) and
+    // releaseFee = input - out0 - out1, so the fee is self-funded from the
+    // contract reserve (an external fee payer's change output would exceed the cap).
+    const fee = 4000n;
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : amountPerMilestone;
-    const remainingAmount = contractBalance - recipientOutputSatoshis;
+    const remainingAmount = contractBalance - recipientOutputSatoshis - fee;
     const minimumStateOutput = 546n;
 
     if (remainingAmount < minimumStateOutput) {
@@ -148,18 +154,17 @@ export class GrantMilestoneService {
     }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(0);
+    // releaseMilestone enforces tx.time/tx.locktime >= 500000000 (CHECKLOCKTIMEVERIFY).
+    // Non-final input + nLockTime <= MTP; same value written into the commitment above.
+    txBuilder.setLocktime(releaseLocktime);
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.releaseMilestone(
         new SignatureTemplate(authPrivKey),
         authPubKey,
       ),
-      { sequence: 0xffffffff },
+      { sequence: 0xfffffffe },
     );
-    for (const utxo of feePayer.utxos) {
-      txBuilder.addInput(utxo, feePayer.unlocker, { sequence: 0xffffffff });
-    }
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       txBuilder.addOutput({
@@ -194,14 +199,6 @@ export class GrantMilestoneService {
         },
       });
     }
-    const feeChange = feePayer.total - fee;
-    if (feeChange > 546n) {
-      txBuilder.addOutput({
-        to: feePayer.address,
-        amount: feeChange,
-      });
-    }
-
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Release grant milestone payment',
@@ -213,8 +210,8 @@ export class GrantMilestoneService {
       milestoneNumber: Number(newMilestonesCompleted),
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
-      signer: feePayer.address,
-      feeSponsored: feePayer.sponsored,
+      fee: fee.toString(),
+      stateOutputSatoshis: remainingAmount.toString(),
       inputSatoshis: contractUtxo.satoshis.toString(),
     });
 

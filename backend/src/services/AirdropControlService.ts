@@ -62,10 +62,13 @@ export class AirdropControlService {
     newCommitment.set(commitment.slice(1, 23), 1);
     newCommitment.fill(0, 23);
 
-    const feeReserve = 2000n;
+    // ~3KB control tx; fee must clear min relay (~3500). Airdrop.pause caps
+    // outputs at <= 1 (state only), so an external fee payer's change output would
+    // exceed the cap — the fee is always self-funded from the contract balance.
+    // pause() has no CLTV guard, so locktime/sequence are irrelevant.
+    const feeReserve = 4000n;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    // pause() does not depend on locktime; keep final tx behavior across wallets
     txBuilder.setLocktime(0);
     txBuilder.addInput(
       contractUtxo,
@@ -74,9 +77,7 @@ export class AirdropControlService {
         placeholderPublicKey(),
       ),
     );
-    const feePayer = params.feePayerAddress
-      ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
-      : null;
+    const feePayer = null as { utxos: any[]; total: bigint } | null;
     if (feePayer) {
       const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
       for (const utxo of feePayer.utxos) {

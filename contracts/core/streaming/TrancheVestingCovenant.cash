@@ -43,8 +43,8 @@ contract TrancheVestingCovenant(
 ) {
     function claim(sig recipientSig, pubkey recipientPubkey) {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500_000_000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500_000_000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
@@ -119,13 +119,13 @@ contract TrancheVestingCovenant(
         }
 
         int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
-        require(claimFee >= 0 && claimFee <= 2000);
+        require(claimFee >= 0 && claimFee <= 5000);
     }
 
     function complete() {
         require(tx.outputs.length <= 2);
-        require(tx.time >= 0);
-        require(tx.locktime < 500_000_000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500_000_000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
@@ -164,8 +164,8 @@ contract TrancheVestingCovenant(
 
     function pause(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 1);
-        require(tx.time >= 0);
-        require(tx.locktime < 500_000_000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500_000_000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
@@ -193,13 +193,13 @@ contract TrancheVestingCovenant(
         }
 
         int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(pauseFee >= 0 && pauseFee <= 2000);
+        require(pauseFee >= 0 && pauseFee <= 5000);
     }
 
     function resume(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 1);
-        require(tx.time >= 0);
-        require(tx.locktime < 500_000_000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500_000_000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status       = int(c.split(1)[0]);
@@ -233,13 +233,13 @@ contract TrancheVestingCovenant(
         }
 
         int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(resumeFee >= 0 && resumeFee <= 2000);
+        require(resumeFee >= 0 && resumeFee <= 5000);
     }
 
     function cancel(sig senderSig, pubkey senderPubkey) {
         require(tx.outputs.length <= 3);
-        require(tx.time >= 0);
-        require(tx.locktime < 500_000_000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500_000_000);
 
         bytes c = tx.inputs[0].nftCommitment;
         int status        = int(c.split(1)[0]);
@@ -339,6 +339,6 @@ contract TrancheVestingCovenant(
         }
 
         int transferFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(transferFee >= 0 && transferFee <= 2000);
+        require(transferFee >= 0 && transferFee <= 5000);
     }
 }

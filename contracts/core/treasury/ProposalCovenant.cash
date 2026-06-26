@@ -88,7 +88,7 @@ contract ProposalCovenant(
         require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
 
         int approveFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(approveFee >= 0 && approveFee <= 2000);
+        require(approveFee >= 0 && approveFee <= 5000);
     }
 
     /**
@@ -106,15 +106,15 @@ contract ProposalCovenant(
         require(checkSig(executorSig, executorPubkey));
 
         require(status == 1); // APPROVED
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
         require(tx.locktime >= executionTimelock);
         require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(payoutHash));
         require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
 
         // Bound miner-fee skim.
         int executeFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(executeFee >= 0 && executeFee <= 2000);
+        require(executeFee >= 0 && executeFee <= 5000);
     }
 
     /**
@@ -149,7 +149,7 @@ contract ProposalCovenant(
         require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
 
         int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(cancelFee >= 0 && cancelFee <= 2000);
+        require(cancelFee >= 0 && cancelFee <= 5000);
     }
 
     /**
@@ -163,8 +163,8 @@ contract ProposalCovenant(
 
         require(status == 0); // PENDING
         require(votingEnd > 0);
-        require(tx.time >= 0);
-        require(tx.locktime < 500000000);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
         require(tx.locktime >= votingEnd);
 
         bytes newCommitment =
@@ -181,6 +181,6 @@ contract ProposalCovenant(
         // Bound miner-fee skim on the permissionless expire path so a miner
         // colluding with anyone cannot drain the proposal NFT's BCH dust.
         int expireFee = tx.inputs[0].value - tx.outputs[0].value;
-        require(expireFee >= 0 && expireFee <= 2000);
+        require(expireFee >= 0 && expireFee <= 5000);
     }
 }

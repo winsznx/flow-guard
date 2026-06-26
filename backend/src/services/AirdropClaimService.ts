@@ -173,11 +173,13 @@ export class AirdropClaimService {
     }
     const claimerHash = b.slice(3, 23);
 
-    const fee = 2500n;
-    const feePayerAddress = signer || claimer;
-    const feePayer = await resolveFeePayer(this.provider, this.network, feePayerAddress, fee);
+    // Airdrop.claim caps outputs at <= 2 (claimer + state) and claimFee =
+    // input - out0 - out1. An external fee payer would add a 3rd (fee-change)
+    // output and exceed the cap, so the fee is self-funded from the contract
+    // reserve. Fee 4000 is in [min relay ~3500, 5000 covenant cap].
+    const fee = 4000n;
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    const remainingAmount = contractBalance - recipientOutputSatoshis;
+    const remainingAmount = contractBalance - recipientOutputSatoshis - fee;
     const minimumStateOutput = 546n;
 
     if (remainingAmount < minimumStateOutput) {
@@ -193,11 +195,9 @@ export class AirdropClaimService {
         new SignatureTemplate(authPrivKey), // authority co-sig — server signs now
         authPubKey,                       // authority pubkey
       ),
-      { sequence: 0xffffffff },
+      // Non-final: windowed campaigns enforce tx.time CLTV, which rejects 0xffffffff.
+      { sequence: 0xfffffffe },
     );
-    for (const utxo of feePayer.utxos) {
-      txBuilder.addInput(utxo, feePayer.unlocker, { sequence: 0xffffffff });
-    }
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       txBuilder.addOutput({
@@ -232,14 +232,6 @@ export class AirdropClaimService {
         },
       });
     }
-    const feeChange = feePayer.total - fee;
-    if (feeChange > 546n) {
-      txBuilder.addOutput({
-        to: feePayer.address,
-        amount: feeChange,
-      });
-    }
-
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim airdrop allocation',
@@ -250,8 +242,8 @@ export class AirdropClaimService {
       claimAmount,
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
-      signer: feePayer.address,
-      feeSponsored: feePayer.sponsored,
+      fee: fee.toString(),
+      stateOutputSatoshis: remainingAmount.toString(),
       inputSatoshis: contractUtxo.satoshis.toString(),
       locktime: locktime.toString(),
     });
@@ -295,7 +287,8 @@ export class AirdropClaimService {
       throw new Error('Campaign claim window has ended');
     }
 
-    let locktime = now > 30n ? now - 30n : now;
+    // ~2h behind wall clock so nLockTime is already <= median-time-past (MTP lags ~1h).
+    let locktime = now > 7200n ? now - 7200n : now;
     if (startTimestamp > 0n && locktime < startTimestamp) {
       locktime = startTimestamp;
     }

@@ -172,8 +172,15 @@ export class StreamClaimService {
     }
     const commitmentHex = binToHex(commitment);
     const totalReleasedFromCommitment = Number(this.readUint64LEFromHex(commitmentHex, 2));
+    // Set the claim nLockTime below median-time-past so the tx is immediately
+    // mineable with the non-final sequence CLTV requires. Compute claimable with
+    // the SAME effective time so the covenant's locktime-based vested math equals
+    // the recipient output exactly.
+    const CLAIM_LOCKTIME_BUFFER = 7200;
+    const effectiveClaimTime = currentTime - CLAIM_LOCKTIME_BUFFER;
     const claimableAmount = this.calculateClaimableAmount({
       ...params,
+      currentTime: effectiveClaimTime,
       totalReleased: totalReleasedFromCommitment,
       currentCommitment: commitmentHex,
     });
@@ -189,39 +196,38 @@ export class StreamClaimService {
     dv.setBigUint64(0, newTotalReleased, true);
 
     const claimAmountBig = BigInt(claimableAmount);
-    const fee = 2500n;
+    // The covenant funds the claim entirely from the contract: outputs.length <= 2
+    // (recipient + state) and claimFee = contractInput - out0 - out1 in [0, 5000].
+    // No external fee payer — its change would be a 3rd output, and topping up the
+    // state output would drive claimFee negative. The stateful-contract reserve
+    // funded into the covenant covers this fee plus the state dust.
+    //
+    // The compiled covenant redeem script is ~3KB, so the claim tx is ~3.1KB and
+    // its min relay fee is ~3092-3500 (measured on chipnet: tx rejected at 3092,
+    // accepted at 3500). 1900 was below min relay and would be rejected on mainnet.
+    const CLAIM_FEE = 4000n; // in [min relay ~3500, 5000 covenant cap]
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
-    if (contractBalance < recipientOutputSatoshis) {
-      throw new Error('Insufficient contract balance to satisfy claim output');
+    const stateOutputSatoshis = contractBalance - recipientOutputSatoshis - CLAIM_FEE;
+    if (stateOutputSatoshis < 546n) {
+      throw new Error(
+        `Contract reserve too low to fund claim (balance ${contractBalance}, recipient ${recipientOutputSatoshis}, fee ${CLAIM_FEE})`,
+      );
     }
-    const minimumStateOutput = 546n;
-    const contractStateAmount = contractBalance - recipientOutputSatoshis;
-    const stateTopUpNeeded = contractStateAmount >= minimumStateOutput
-      ? 0n
-      : minimumStateOutput - contractStateAmount;
-    const requiredExternalSatoshis = fee + stateTopUpNeeded;
-    const resolvedFeePayerAddress = feePayerAddress || recipient;
-    const feePayer = await resolveFeePayer(
-      this.provider,
-      this.network,
-      resolvedFeePayerAddress,
-      requiredExternalSatoshis,
-    );
-    const stateOutputSatoshis = contractStateAmount + stateTopUpNeeded;
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(currentTime);
+    txBuilder.setLocktime(effectiveClaimTime);
 
+    // Non-final sequence on the covenant input so nLockTime is enforced; the
+    // covenant's require(tx.time >= 500000000) compiles to CHECKLOCKTIMEVERIFY,
+    // which rejects a final (0xffffffff) input.
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.claim(
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      { sequence: 0xfffffffe },
     );
-    for (const utxo of feePayer.utxos) {
-      txBuilder.addInput(utxo, feePayer.unlocker);
-    }
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       const tokenAmount = contractUtxo.token.amount ?? 0n;
@@ -259,14 +265,6 @@ export class StreamClaimService {
       });
     }
 
-    const feeChange = feePayer.total - requiredExternalSatoshis;
-    if (feeChange > 546n) {
-      txBuilder.addOutput({
-        to: feePayer.address,
-        amount: feeChange,
-      });
-    }
-
     const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
       userPrompt: 'Claim vested funds',
@@ -277,9 +275,8 @@ export class StreamClaimService {
       claimableAmount,
       tokenType: tokenType || 'BCH',
       tokenCategory: tokenCategory || null,
-      feePayerAddress: feePayer.address,
-      feeSponsored: feePayer.sponsored,
-      stateTopUpSatoshis: stateTopUpNeeded.toString(),
+      claimFee: CLAIM_FEE.toString(),
+      stateOutputSatoshis: stateOutputSatoshis.toString(),
       inputSatoshis: contractUtxo.satoshis.toString(),
     });
 

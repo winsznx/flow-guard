@@ -1,36 +1,22 @@
 import type { WcTransactionObject } from 'cashscript';
 
-const FINAL_SEQUENCE = 0xffffffff;
-
-type SequenceCarrier = {
-  sequenceNumber?: number;
-};
-
-function setFinalSequence(list: SequenceCarrier[] | undefined): void {
-  if (!Array.isArray(list)) return;
-  for (const item of list) {
-    item.sequenceNumber = FINAL_SEQUENCE;
-  }
-}
-
-function hasNonFinalSequence(list: SequenceCarrier[] | undefined): boolean {
-  if (!Array.isArray(list)) return false;
-  return list.some((item) => (item.sequenceNumber ?? FINAL_SEQUENCE) !== FINAL_SEQUENCE);
-}
-
 /**
- * Normalize every sequence to final to avoid mempool non-final rejections when locktime is used.
+ * Preserve the input sequences the tx builders set.
+ *
+ * Covenant spends that use `tx.time` compile to OP_CHECKLOCKTIMEVERIFY, which
+ * REQUIRES the spending input to be non-final (sequence < 0xffffffff). The
+ * builders set the covenant input to 0xfffffffe for exactly this reason.
+ *
+ * The previous implementation forced every sequence to final (0xffffffff) "to
+ * avoid mempool non-final rejections" — but that is backwards: a final sequence
+ * disables nLockTime enforcement, so CLTV fails and every time-gated spend
+ * (claim / complete / cancel / execute / period-spend) was rejected at
+ * broadcast. The correct way to keep a locktimed tx immediately mineable is to
+ * set its locktime at or below the chain's median-time-past, which the builders
+ * handle — not to finalize the sequence.
+ *
+ * Retained as a pass-through so existing call sites need no change.
  */
 export function finalizeWcTransactionSequences(wcTransaction: WcTransactionObject): WcTransactionObject {
-  setFinalSequence(wcTransaction.transaction.inputs as SequenceCarrier[] | undefined);
-  setFinalSequence(wcTransaction.sourceOutputs as SequenceCarrier[] | undefined);
-
-  if (
-    hasNonFinalSequence(wcTransaction.transaction.inputs as SequenceCarrier[] | undefined)
-    || hasNonFinalSequence(wcTransaction.sourceOutputs as SequenceCarrier[] | undefined)
-  ) {
-    throw new Error('Transaction contains non-final input sequence numbers after finalization');
-  }
-
   return wcTransaction;
 }

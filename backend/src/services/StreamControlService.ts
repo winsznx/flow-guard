@@ -97,6 +97,7 @@ export class StreamControlService {
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      { sequence: 0xfffffffe },
     );
     txBuilder.addOutput({
       to: contract.tokenAddress,
@@ -173,6 +174,7 @@ export class StreamControlService {
         placeholderSignature(),
         placeholderPublicKey(),
       ),
+      { sequence: 0xfffffffe },
     );
     txBuilder.addOutput({
       to: contract.tokenAddress,

@@ -66,7 +66,9 @@ export class BountyControlService {
     newCommitment.set(commitment.slice(1, 19), 1);
     newCommitment.fill(0, 19);
 
-    const feeReserve = 2000n;
+    // Bounty.pause caps outputs at <= 1 (state only); an external fee payer's
+    // change output would exceed the cap, so self-fund the fee. No CLTV on pause.
+    const feeReserve = 4000n; // ~3KB control tx; must clear min relay (~3500)
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
@@ -77,15 +79,7 @@ export class BountyControlService {
         placeholderPublicKey(),
       ),
     );
-    const feePayer = params.feePayerAddress
-      ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
-      : null;
-    if (feePayer) {
-      const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
-      for (const utxo of feePayer.utxos) {
-        txBuilder.addInput(utxo, unlocker);
-      }
-    }
+    const feePayer = null as { utxos: any[]; total: bigint } | null;
     const stateOutputSatoshis = feePayer
       ? contractUtxo.satoshis
       : contractUtxo.satoshis - feeReserve;
