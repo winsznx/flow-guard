@@ -1,0 +1,213 @@
+/**
+ * AirdropCovenantV2
+ *
+ * Same state, parameters and rules as AirdropCovenant, with these changes:
+ *   - A token payout output carries fungible tokens only, so it is compared against the
+ *     input's 32-byte category. The input holds the state NFT, whose category also
+ *     carries the capability byte, so the V1 comparison never matched.
+ *   - Paths that could only fund their fee from the contract allow one more output, so a
+ *     wallet can pay the fee and take its change. Each fee cap still bounds what leaves
+ *     the contract.
+ *   - cancel() returns unused fee reserve to the authority on output 1. The reserve can be
+ *     sized for every claim and control spend, so claimers need no BCH of their own.
+ * AirdropCovenant stays as it is: deployed contracts are rebuilt from its artifact.
+ */
+/**
+ * AirdropCovenant — Production Grade
+ *
+ * ENFORCEABILITY: [ENFORCEABLE-NOW]
+ *
+ * PURPOSE: Enforce mass token/BCH distribution campaigns.
+ *          Claims are permissionless to submit: no claimer signature is required.
+ *          The claim-authority is a backend-held key that enforces eligibility and
+ *          per-address limits off-chain before co-signing each claim.
+ *          Authority (admin key) controls administrative paths (pause/resume/cancel).
+ *
+ * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):
+ *   [0]:     status (uint8: 0=ACTIVE, 1=PAUSED, 2=CANCELLED, 3=COMPLETED)
+ *   [1]:     flags (uint8: bit0=cancelable, bit2=usesTokens)
+ *   [2-9]:   total_claimed (uint64)
+ *   [10-17]: claims_count (uint64)
+ *   [18-22]: last_claim_timestamp (5 bytes)
+ *   [23-39]: reserved (17 bytes)
+ *
+ * CONTRACT PARAMETERS (compiled into bytecode, immutable):
+ *   vaultId            — links campaign to source vault
+ *   authorityHash      — hash160(authority pubkey) used for pause/resume/cancel
+ *   claimAuthorityHash — hash160(claimAuthority pubkey); backend co-signs each claim
+ *                        to enforce eligibility and per-address limits
+ *   amountPerClaim     — satoshis or FT per claim (fixed)
+ *   totalPool          — total amount available
+ *   startTimestamp     — when claims open (0 = immediate)
+ *   endTimestamp       — when claims close (0 = no expiry)
+ */
+
+pragma cashscript ^0.13.0;
+
+contract AirdropCovenantV2(
+    bytes32 vaultId,
+    bytes20 authorityHash,
+    bytes20 claimAuthorityHash,
+    int amountPerClaim,
+    int totalPool,
+    int startTimestamp,
+    int endTimestamp
+) {
+    function claim(bytes20 claimerHash, sig claimAuthSig, pubkey claimAuthPubkey) {
+        require(tx.outputs.length <= 3);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int totalClaimed = int(c.split(2)[1].split(8)[0]);
+        int claimsCount  = int(c.split(10)[1].split(8)[0]);
+
+        // Claim-authority co-signature: backend validates eligibility + per-address limit
+        require(hash160(claimAuthPubkey) == claimAuthorityHash);
+        require(checkSig(claimAuthSig, claimAuthPubkey));
+        require(status == 0); // ACTIVE
+
+        if (startTimestamp > 0) { require(tx.locktime >= startTimestamp); }
+        if (endTimestamp > 0)   { require(tx.locktime <= endTimestamp); }
+
+        int newTotalClaimed = totalClaimed + amountPerClaim;
+        require(newTotalClaimed <= totalPool);
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(claimerHash));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+            require(tx.outputs[0].tokenAmount == amountPerClaim);
+        } else {
+            require(tx.outputs[0].value == amountPerClaim);
+        }
+
+        int newClaimsCount = claimsCount + 1;
+        int newStatus = 0;
+        if (newTotalClaimed >= totalPool) { newStatus = 3; } // COMPLETED
+
+        bytes newCommitment =
+            toPaddedBytes(newStatus, 1) +
+            flagsByte +
+            toPaddedBytes(newTotalClaimed, 8) +
+            toPaddedBytes(newClaimsCount, 8) +
+            toPaddedBytes(tx.locktime, 5) +
+            0x0000000000000000000000000000000000;
+
+        require(tx.outputs[1].nftCommitment == newCommitment);
+        require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - amountPerClaim);
+        }
+
+        // LIFT-pattern fee cap: cap the total BCH leaving the contract on each
+        // claim so the reserve cannot be drained to miners over many claims.
+        // outputs[0] is the recipient leg (dust in token mode, payout in BCH
+        // mode); outputs[1] is the self-preserved state UTXO. Anything not
+        // accounted for in those two outputs is the miner fee.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 5000);
+
+        require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
+
+    function pause(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(authPubkey) == authorityHash);
+        require(checkSig(authSig, authPubkey));
+        require((flagsByte & 0x01) == 0x01); // cancelable
+        require(status == 0); // ACTIVE
+
+        bytes newCommitment =
+            0x01 +
+            c.split(1)[1].split(22)[0] +
+            0x0000000000000000000000000000000000;
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
+        // Bound miner-fee skim on the control path.
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 5000);
+    }
+
+    function resume(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(authPubkey) == authorityHash);
+        require(checkSig(authSig, authPubkey));
+        require(status == 1); // PAUSED
+
+        bytes newCommitment =
+            0x00 +
+            c.split(1)[1].split(22)[0] +
+            0x0000000000000000000000000000000000;
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 5000);
+    }
+
+    function cancel(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int totalClaimed = int(c.split(2)[1].split(8)[0]);
+
+        require(hash160(authPubkey) == authorityHash);
+        require(checkSig(authSig, authPubkey));
+        require((flagsByte & 0x01) == 0x01); // cancelable
+        require(status == 0 || status == 1); // ACTIVE or PAUSED
+
+        int remainingPool = totalPool - totalClaimed;
+        require(remainingPool > 0);
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(authorityHash));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+            require(tx.outputs[0].tokenAmount == remainingPool);
+        } else {
+            require(tx.outputs[0].value == remainingPool);
+        }
+
+        // Bound miner-fee skim on cancel. With BCH refund this is the inputs
+        // value less the refund payment; with token refund the recipient gets
+        // dust BCH only — both expressions reduce to inputs - outputs[0].value.
+        // Unused fee reserve goes back to the authority on output 1, so the reserve can be
+        // sized for every claim and control spend without blocking cancel.
+        int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
+        if (tx.outputs.length > 1) {
+            require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(authorityHash));
+            cancelFee = cancelFee - tx.outputs[1].value;
+        }
+        require(cancelFee >= 0 && cancelFee <= 5000);
+    }
+}

@@ -1,0 +1,247 @@
+/**
+ * RecurringPaymentCovenantV2
+ *
+ * Same state, parameters and rules as RecurringPaymentCovenant, with these changes:
+ *   - A token payout output carries fungible tokens only, so it is compared against the
+ *     input's 32-byte category. The input holds the state NFT, whose category also carries
+ *     the capability byte, so the V1 comparison never matched.
+ *   - pay() takes its fee from both outputs, so a token payment's BCH only covers the fee and
+ *     the recipient's token dust (capped at 2000).
+ *   - refill() tells a token stream from a BCH one by the usesTokens flag. Every state UTXO
+ *     carries the NFT, so `tokenCategory != 0x` was always true and BCH top-ups always failed.
+ * RecurringPaymentCovenant stays as it is: deployed contracts are rebuilt from its artifact.
+ */
+/**
+ * RecurringPaymentCovenant — Production Grade
+ *
+ * ENFORCEABILITY: [ENFORCEABLE-NOW]
+ *
+ * PURPOSE: Enforce fixed-interval recurring payments.
+ *          Payroll, subscriptions, allowances.
+ *          Permissionless pay() — anyone can trigger when interval elapsed.
+ *
+ * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):
+ *   [0]:     status (uint8: 0=ACTIVE, 1=PAUSED, 2=CANCELLED, 3=COMPLETED)
+ *   [1]:     flags (uint8: bit0=cancelable, bit2=usesTokens)
+ *   [2-9]:   total_paid (uint64)
+ *   [10-17]: payment_count (uint64)
+ *   [18-22]: next_payment_timestamp (5 bytes)
+ *   [23-27]: pause_start (5 bytes, when current pause began; 0 if not paused)
+ *   [28-39]: reserved (12 bytes)
+ *
+ * CONTRACT PARAMETERS (compiled into bytecode, immutable):
+ *   vaultId         — links to source vault
+ *   senderHash      — hash160(sender pubkey) (controls pause/cancel)
+ *   recipientHash   — hash160 of recipient P2PKH (fixed)
+ *   amountPerInterval — satoshis or FT per payment
+ *   intervalSeconds — seconds between payments
+ *   totalAmount     — total pool (0 = unlimited until cancelled)
+ *   startTimestamp  — when first payment can occur
+ *   endTimestamp    — when stream expires (0 = no expiry)
+ */
+
+pragma cashscript ^0.13.0;
+
+contract RecurringPaymentCovenantV2(
+    bytes32 vaultId,
+    bytes20 senderHash,
+    bytes20 recipientHash,
+    int amountPerInterval,
+    int intervalSeconds,
+    int totalAmount,
+    int startTimestamp,
+    int endTimestamp
+) {
+    /**
+     * pay() — Execute one payment interval
+     *
+     * Permissionless: executor network can trigger when interval elapsed.
+     * Advances next_payment_timestamp by one interval.
+     */
+    function pay() {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status         = int(c.split(1)[0]);
+        bytes1 flagsByte   = c.split(1)[1].split(1)[0];
+        int totalPaid      = int(c.split(2)[1].split(8)[0]);
+        int paymentCount   = int(c.split(10)[1].split(8)[0]);
+        int nextPayment    = int(c.split(18)[1].split(5)[0]);
+
+        require(status == 0); // ACTIVE
+        require(tx.locktime >= nextPayment);
+
+        if (startTimestamp > 0) { require(tx.locktime >= startTimestamp); }
+        if (endTimestamp > 0)   { require(tx.locktime <= endTimestamp); }
+
+        int newTotalPaid = totalPaid + amountPerInterval;
+        if (totalAmount > 0) { require(newTotalPaid <= totalAmount); }
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipientHash));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+            require(tx.outputs[0].tokenAmount == amountPerInterval);
+            require(tx.outputs[0].value <= 2000);
+        } else {
+            require(tx.outputs[0].value == amountPerInterval);
+        }
+
+        int newPaymentCount   = paymentCount + 1;
+        int newNextPayment    = nextPayment + intervalSeconds;
+        int newStatus = 0;
+        if (totalAmount > 0) {
+            if (newTotalPaid >= totalAmount) { newStatus = 3; } // COMPLETED
+        }
+
+        bytes newCommitment =
+            toPaddedBytes(newStatus, 1) +
+            flagsByte +
+            toPaddedBytes(newTotalPaid, 8) +
+            toPaddedBytes(newPaymentCount, 8) +
+            toPaddedBytes(newNextPayment, 5) +
+            0x0000000000 +
+            0x000000000000000000000000;
+
+        int payFeeDelta = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(payFeeDelta >= 0 && payFeeDelta <= 5000);
+
+        require(tx.outputs[1].nftCommitment == newCommitment);
+        require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - amountPerInterval);
+        }
+        require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
+
+    /**
+     * pause() — Pause recurring payments
+     *
+     * Sender-only. Records pause_start.
+     */
+    function pause(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0); // ACTIVE
+
+        bytes newCommitment =
+            0x01 +
+            flagsByte +
+            c.split(2)[1].split(16)[0] +
+            toPaddedBytes(tx.locktime, 5) +
+            0x000000000000000000000000;
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+    }
+
+    /**
+     * resume() — Resume recurring payments
+     *
+     * Resets next_payment to now + interval (no backdated missed payments).
+     */
+    function resume(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require(status == 1); // PAUSED
+
+        int newNextPayment = tx.locktime + intervalSeconds;
+
+        bytes newCommitment =
+            0x00 +
+            flagsByte +
+            c.split(2)[1].split(8)[0] +
+            c.split(10)[1].split(8)[0] +
+            toPaddedBytes(newNextPayment, 5) +
+            0x0000000000 +
+            0x000000000000000000000000;
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+    }
+
+    /**
+     * refill() — Add more runway to an open-ended recurring stream
+     *
+     * Sender-only. Only valid for open-ended streams where totalAmount == 0.
+     * Preserves cadence, recipient, and state commitment while allowing the
+     * sender to add more BCH/tokens to the state UTXO.
+     */
+    function refill(sig senderSig, pubkey senderPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require(totalAmount == 0);
+        require(status == 0 || status == 1);
+
+        require(tx.outputs[0].nftCommitment == c);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount > tx.inputs[0].tokenAmount);
+        } else {
+            require(tx.outputs[0].value > tx.inputs[0].value);
+        }
+    }
+
+    /**
+     * cancel() — Cancel and return remaining pool to sender
+     *
+     * Sender-only. Entire remaining pool returns (no split — not earned like vesting).
+     */
+    function cancel(sig senderSig, pubkey senderPubkey) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status     = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int totalPaid  = int(c.split(2)[1].split(8)[0]);
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0 || status == 1);
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+
+        if (totalAmount > 0) {
+            int remainingPool = totalAmount - totalPaid;
+            require(remainingPool > 0);
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+                require(tx.outputs[0].tokenAmount == remainingPool);
+            } else {
+                require(tx.outputs[0].value == remainingPool);
+            }
+        } else {
+            int feeDelta = tx.inputs[0].value - tx.outputs[0].value;
+            require(feeDelta >= 0 && feeDelta <= 5000);
+        }
+    }
+}

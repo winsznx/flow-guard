@@ -47,6 +47,14 @@ jobs:
                    artifacts/distribution/RewardCovenant.json \
                    artifacts/distribution/BountyCovenant.json \
                    artifacts/distribution/GrantCovenant.json \
+                   artifacts/streaming/VestingCovenantV2.json \
+                   artifacts/streaming/HybridVestingCovenantV2.json \
+                   artifacts/streaming/RecurringPaymentCovenantV2.json \
+                   artifacts/streaming/TrancheVestingCovenantV2.json \
+                   artifacts/distribution/AirdropCovenantV2.json \
+                   artifacts/distribution/RewardCovenantV2.json \
+                   artifacts/distribution/BountyCovenantV2.json \
+                   artifacts/distribution/GrantCovenantV2.json \
                    artifacts/governance/VoteLockCovenant.json \
                    artifacts/governance/TallyCommitment_FixedMax.json \
                    artifacts/governance/TallyCommitment_Attested.json; do

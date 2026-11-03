@@ -1,6 +1,6 @@
 # FlowGuard Contracts
 
-CashScript covenants for FlowGuard treasuries, streaming, distributions, and governance.
+CashScript covenants for FlowGuard treasuries, streaming, and distributions.
 
 Each covenant is self-enforcing: once funded, the rules live on chain and neither
 FlowGuard nor the creator can move funds outside what the contract permits.
@@ -14,15 +14,25 @@ under `artifacts/` that the backend imports at runtime.
 core/
   treasury/     VaultCovenant, ProposalCovenant
   streaming/    VestingCovenant, FtVestingCovenant, HybridVestingCovenant,
-                RecurringPaymentCovenant, TrancheVestingCovenant
-  distribution/ AirdropCovenant, RewardCovenant, BountyCovenant, GrantCovenant
+                RecurringPaymentCovenant, TrancheVestingCovenant, and a V2 of each
+                except FtVestingCovenant
+  distribution/ AirdropCovenant, RewardCovenant, BountyCovenant, GrantCovenant,
+                and a V2 of each
   governance/   VoteLockCovenant, TallyCommitment_FixedMax, TallyCommitment_Attested
+                (kept for reference, the app no longer offers votes)
 artifacts/      compiled output, committed and consumed by the backend
 tests/          unit, streaming, integration, chipnet, and benchmarks
 ```
 
 `VestingCovenant` is the BCH single-UTXO form; `FtVestingCovenant` is the two-UTXO form
 for CashToken fungible tokens. They are separate contracts, not a mode switch.
+
+The V2 covenants keep V1's constructor parameters and commitment layout. They compare a
+token payout's category with the first 32 bytes of the input category, allow one extra
+output where the contract pays its own fee, return the unused reserve when a distribution
+is cancelled, and fix the token check in recurring `refill()`. New contracts deploy V2.
+Contracts already on chain keep the version their address was derived from, so V1 sources
+and artifacts must not change.
 
 ## Build
 

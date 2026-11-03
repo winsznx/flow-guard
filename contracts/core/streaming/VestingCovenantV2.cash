@@ -1,0 +1,362 @@
+/**
+ * VestingCovenantV2
+ *
+ * Same state, parameters and rules as VestingCovenant, with these changes:
+ *   - A token payout output carries fungible tokens only, so it is compared against the
+ *     input's 32-byte category. The input holds the state NFT, whose category also carries
+ *     the capability byte, so the V1 comparison never matched.
+ *   - cancel() allows a third output, so unused fee reserve goes back to the sender
+ *     instead of being burned when both the recipient and the sender are paid.
+ * VestingCovenant stays as it is: deployed contracts are rebuilt from its artifact.
+ */
+/**
+ * VestingCovenant — Production Grade
+ *
+ * ENFORCEABILITY: [ENFORCEABLE-NOW]
+ *
+ * PURPOSE: Enforce token/BCH vesting schedules.
+ *          Supports LINEAR_VESTING and STEP_VESTING with cliff.
+ *          Recipient can claim vested amount at any time.
+ *          Pause/resume shifts effective start forward by pause duration.
+ *
+ * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):
+ *   [0]:     status (uint8: 0=ACTIVE, 1=PAUSED, 2=CANCELLED, 3=COMPLETED)
+ *   [1]:     flags (uint8: bit0=cancelable, bit1=transferable, bit2=usesTokens)
+ *   [2-9]:   total_released (uint64)
+ *   [10-14]: cursor (5 bytes, adjusted start for pause accounting)
+ *   [15-19]: pause_start (5 bytes, when current pause began; 0 if not paused)
+ *   [20-39]: recipient_hash (bytes20)
+ *
+ * CONTRACT PARAMETERS (compiled into bytecode, immutable):
+ *   vaultId        — links schedule to source vault
+ *   senderHash     — hash160(sender pubkey) (controls pause/cancel)
+ *   scheduleType   — 1=LINEAR_VESTING, 2=STEP_VESTING
+ *   totalAmount    — total tokens/BCH to vest
+ *   startTimestamp — vesting start (may differ from cliff)
+ *   endTimestamp   — when full vesting completes
+ *   cliffTimestamp — no claims before this time (0 = no cliff)
+ *   stepInterval   — seconds per step (for STEP_VESTING; 0 for LINEAR)
+ *   stepAmount     — tokens per step (for STEP_VESTING; 0 for LINEAR)
+ */
+
+pragma cashscript ^0.13.0;
+
+contract VestingCovenantV2(
+    bytes32 vaultId,
+    bytes20 senderHash,
+    int scheduleType,
+    int totalAmount,
+    int startTimestamp,
+    int endTimestamp,
+    int cliffTimestamp,
+    int stepInterval,
+    int stepAmount
+) {
+    /**
+     * claim() — Recipient claims vested tokens
+     *
+     * For LINEAR: vestedNow = totalAmount * elapsed / duration - alreadyReleased
+     * For STEP: vestedNow = completedSteps * stepAmount - alreadyReleased
+     * Cliff enforced: no claims before cliffTimestamp.
+     */
+    function claim(sig recipientSig, pubkey recipientPubkey) {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        int totalReleased = int(c.split(2)[1].split(8)[0]);
+        int cursor        = int(c.split(10)[1].split(5)[0]);
+        bytes20 recipient = c.split(20)[1].split(20)[0];
+
+        require(hash160(recipientPubkey) == recipient);
+        require(checkSig(recipientSig, recipientPubkey));
+        require(status == 0); // ACTIVE
+
+        // Cliff enforcement
+        if (cliffTimestamp > 0) { require(tx.locktime >= cliffTimestamp); }
+
+        // Compute vested amount based on schedule type
+        int elapsed  = tx.locktime - cursor;
+        int duration = endTimestamp - startTimestamp;
+        int vestedTotal = 0;
+
+        if (scheduleType == 1) {
+            // LINEAR: proportional to elapsed time
+            if (elapsed >= duration) {
+                vestedTotal = totalAmount;
+            } else {
+                vestedTotal = (totalAmount * elapsed) / duration;
+            }
+        }
+
+        if (scheduleType == 2) {
+            // STEP: complete steps only
+            int completedSteps = elapsed / stepInterval;
+            vestedTotal = completedSteps * stepAmount;
+            if (vestedTotal > totalAmount) { vestedTotal = totalAmount; }
+        }
+
+        int claimable = vestedTotal - totalReleased;
+        require(claimable > 0);
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+            require(tx.outputs[0].tokenAmount == claimable);
+        } else {
+            require(tx.outputs[0].value == claimable);
+        }
+
+        int newTotalReleased = totalReleased + claimable;
+        int newStatus = 0;
+        if (newTotalReleased >= totalAmount) { newStatus = 3; } // COMPLETED
+
+        bytes newCommitment =
+            toPaddedBytes(newStatus, 1) +
+            flagsByte +
+            toPaddedBytes(newTotalReleased, 8) +
+            toPaddedBytes(cursor, 5) +
+            0x0000000000 +
+            recipient;
+
+        require(tx.outputs[1].nftCommitment == newCommitment);
+        require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - claimable);
+        }
+
+        // Cap miner fee so the claimer cannot drain the contract's BCH reserve.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 5000);
+    }
+
+    /**
+     * complete() — Force complete after end time (permissionless cleanup)
+     *
+     * Returns any unvested remainder to sender.
+     */
+    function complete() {
+        require(tx.outputs.length <= 2);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        int totalReleased = int(c.split(2)[1].split(8)[0]);
+        bytes20 recipient = c.split(20)[1].split(20)[0];
+
+        require(status == 0 || status == 1); // ACTIVE or PAUSED
+        require(tx.locktime >= endTimestamp);
+
+        int remaining = totalAmount - totalReleased;
+
+        if (remaining > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+                require(tx.outputs[0].tokenAmount == remaining);
+            } else {
+                require(tx.outputs[0].value == remaining);
+            }
+        }
+
+        int completeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(completeFee >= 0 && completeFee <= 5000);
+        require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
+
+    /**
+     * pause() — Pause vesting (paused time does not vest)
+     *
+     * Sender-only. Requires cancelable flag.
+     * Records pause_start in state.
+     */
+    function pause(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0); // ACTIVE
+
+        bytes newCommitment =
+            0x01 +
+            flagsByte +
+            c.split(2)[1].split(8)[0] +
+            c.split(10)[1].split(5)[0] +
+            toPaddedBytes(tx.locktime, 5) +
+            c.split(20)[1].split(20)[0];
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 5000);
+    }
+
+    /**
+     * resume() — Resume vesting
+     *
+     * Sender-only. Advances cursor by pause duration so paused time doesn't vest.
+     */
+    function resume(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 1);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status      = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int cursor      = int(c.split(10)[1].split(5)[0]);
+        int pauseStart  = int(c.split(15)[1].split(5)[0]);
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require(status == 1); // PAUSED
+        require(pauseStart > 0);
+
+        // Advance cursor by the pause duration
+        require(tx.locktime > pauseStart);
+        int pauseDuration = tx.locktime - pauseStart;
+        int newCursor = cursor + pauseDuration;
+
+        bytes newCommitment =
+            0x00 +
+            flagsByte +
+            c.split(2)[1].split(8)[0] +
+            toPaddedBytes(newCursor, 5) +
+            0x0000000000 +
+            c.split(20)[1].split(20)[0];
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 5000);
+    }
+
+    /**
+     * cancel() — Cancel vesting and split vested/unvested
+     *
+     * Sender-only. Requires cancelable flag.
+     * Vested portion goes to recipient, unvested returns to sender.
+     */
+    function cancel(sig senderSig, pubkey senderPubkey) {
+        require(tx.outputs.length <= 3);
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        int totalReleased = int(c.split(2)[1].split(8)[0]);
+        int cursor        = int(c.split(10)[1].split(5)[0]);
+        bytes20 recipient = c.split(20)[1].split(20)[0];
+
+        require(hash160(senderPubkey) == senderHash);
+        require(checkSig(senderSig, senderPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0 || status == 1);
+
+        // Compute vested at cancel time
+        int elapsed  = tx.locktime - cursor;
+        int duration = endTimestamp - startTimestamp;
+        int vestedAtCancel = 0;
+
+        if (scheduleType == 1) {
+            if (elapsed >= duration) {
+                vestedAtCancel = totalAmount;
+            } else {
+                vestedAtCancel = (totalAmount * elapsed) / duration;
+            }
+        }
+
+        if (scheduleType == 2) {
+            int completedSteps = elapsed / stepInterval;
+            vestedAtCancel = completedSteps * stepAmount;
+            if (vestedAtCancel > totalAmount) { vestedAtCancel = totalAmount; }
+        }
+
+        int claimableNow = vestedAtCancel - totalReleased;
+        int unvested = totalAmount - vestedAtCancel;
+
+        if (claimableNow > 0 && unvested > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+            require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+                require(tx.outputs[0].tokenAmount == claimableNow);
+                require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+                require(tx.outputs[1].tokenAmount == unvested);
+            } else {
+                require(tx.outputs[0].value == claimableNow);
+                require(tx.outputs[1].value == unvested);
+            }
+        } else if (claimableNow > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(recipient));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+                require(tx.outputs[0].tokenAmount == claimableNow);
+            } else {
+                require(tx.outputs[0].value == claimableNow);
+            }
+        } else if (unvested > 0) {
+            require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(senderHash));
+            if ((flagsByte & 0x04) == 0x04) {
+                require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+                require(tx.outputs[0].tokenAmount == unvested);
+            } else {
+                require(tx.outputs[0].value == unvested);
+            }
+        }
+    }
+
+    /**
+     * transfer() — Recipient reassigns vesting to new address
+     *
+     * Requires FLAG_TRANSFERABLE. Current recipient must sign.
+     */
+    function transfer(sig recipientSig, pubkey recipientPubkey, bytes20 newRecipientHash) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status        = int(c.split(1)[0]);
+        bytes1 flagsByte  = c.split(1)[1].split(1)[0];
+        bytes20 current   = c.split(20)[1].split(20)[0];
+
+        require(hash160(recipientPubkey) == current);
+        require(checkSig(recipientSig, recipientPubkey));
+        require((flagsByte & 0x02) == 0x02); // transferable
+        require(status == 0); // ACTIVE
+
+        bytes newCommitment = c.split(20)[0] + newRecipientHash;
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Bound miner fee so the signed recipient cannot burn the contract reserve during handover.
+        int transferFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(transferFee >= 0 && transferFee <= 5000);
+    }
+}

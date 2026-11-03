@@ -1,0 +1,216 @@
+/**
+ * BountyCovenantV2
+ *
+ * Same state, parameters and rules as BountyCovenant, with these changes:
+ *   - A token payout output carries fungible tokens only, so it is compared against the
+ *     input's 32-byte category. The input holds the state NFT, whose category also
+ *     carries the capability byte, so the V1 comparison never matched.
+ *   - Paths that could only fund their fee from the contract allow one more output, so a
+ *     wallet can pay the fee and take its change. Each fee cap still bounds what leaves
+ *     the contract.
+ *   - cancel() returns unused fee reserve to the authority on output 1. The reserve can be
+ *     sized for every claim and control spend, so claimers need no BCH of their own.
+ * BountyCovenant stays as it is: deployed contracts are rebuilt from its artifact.
+ */
+/**
+ * BountyCovenant — Production Grade
+ *
+ * ENFORCEABILITY: [ENFORCEABLE-NOW]
+ *
+ * PURPOSE: Enforce proof-based bounty competition payouts.
+ *          Contestants submit work proofs. Authority verifies off-chain,
+ *          co-signs valid claims. First maxWinners claimants win.
+ *
+ * AUTHORITY MODEL:
+ *   - `authorityHash` is the creator's BCH wallet pubkey-hash. It controls
+ *     pause / resume / cancel. cancel() pays remaining pool to the creator's
+ *     P2PKH(authorityHash), so a backend compromise cannot redirect funds.
+ *   - `claimAuthorityHash` is a backend-held co-signer key. It only authorises
+ *     the claim path (after off-chain proof verification). It cannot pause,
+ *     resume, or cancel, so a backend compromise cannot drain the pool.
+ *   - To run without a backend co-signer, deploy with
+ *     `claimAuthorityHash == authorityHash`. Then both paths are
+ *     creator-wallet-gated.
+ *
+ * NFT COMMITMENT (40 bytes — within CashTokens 40-byte limit):
+ *   [0]:     status (uint8: 0=ACTIVE, 1=PAUSED, 2=CANCELLED, 3=COMPLETED)
+ *   [1]:     flags (uint8: bit0=cancelable, bit2=usesTokens)
+ *   [2-9]:   total_paid (uint64)
+ *   [10-13]: winners_count (uint32)
+ *   [14-18]: last_claim_timestamp (5 bytes)
+ *   [19-39]: reserved (21 bytes)
+ *
+ * CONTRACT PARAMETERS (compiled into bytecode, immutable):
+ *   vaultId            — links bounty to source vault
+ *   authorityHash      — hash160 of creator wallet pubkey (admin: pause/resume/cancel; cancel-refund target)
+ *   claimAuthorityHash — hash160 of claim co-signer pubkey (claim-only)
+ *   rewardPerWinner    — satoshis or FT per winner (fixed equal prize)
+ *   maxWinners         — maximum number of prizes available
+ *   startTimestamp     — when competition opens (0 = immediate)
+ *   endTimestamp       — competition deadline (0 = no deadline)
+ */
+
+pragma cashscript ^0.13.0;
+
+contract BountyCovenantV2(
+    bytes32 vaultId,
+    bytes20 authorityHash,
+    bytes20 claimAuthorityHash,
+    int rewardPerWinner,
+    int maxWinners,
+    int startTimestamp,
+    int endTimestamp
+) {
+    function claim(sig authSig, pubkey authPubkey, bytes20 winnerHash, bytes32 proofHash) {
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int totalPaid    = int(c.split(2)[1].split(8)[0]);
+        int winnersCount = int(c.split(10)[1].split(4)[0]);
+
+        require(tx.outputs.length <= 3);
+
+        require(hash160(authPubkey) == claimAuthorityHash);
+        require(checkSig(authSig, authPubkey));
+        require(status == 0); // ACTIVE
+
+        require(tx.time >= 500000000);
+        require(tx.locktime >= 500000000);
+        if (startTimestamp > 0) { require(tx.locktime >= startTimestamp); }
+        if (endTimestamp > 0)   { require(tx.locktime <= endTimestamp); }
+
+        require(winnersCount < maxWinners);
+        require(proofHash != 0x0000000000000000000000000000000000000000000000000000000000000000);
+
+        int newTotalPaid    = totalPaid + rewardPerWinner;
+        int newWinnersCount = winnersCount + 1;
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(winnerHash));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+            require(tx.outputs[0].tokenAmount == rewardPerWinner);
+        } else {
+            require(tx.outputs[0].value == rewardPerWinner);
+        }
+
+        int newStatus = 0;
+        if (newWinnersCount >= maxWinners) { newStatus = 3; } // COMPLETED
+
+        bytes newCommitment =
+            toPaddedBytes(newStatus, 1) +
+            flagsByte +
+            toPaddedBytes(newTotalPaid, 8) +
+            toPaddedBytes(newWinnersCount, 4) +
+            toPaddedBytes(tx.locktime, 5) +
+            0x000000000000000000000000000000000000000000;
+
+        require(tx.outputs[1].nftCommitment == newCommitment);
+        require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[1].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[1].tokenAmount == tx.inputs[0].tokenAmount - rewardPerWinner);
+        }
+
+        // LIFT-pattern fee cap on claim. Keeps BCH reserve solvent across
+        // many sequential bounty payouts.
+        int claimFee = tx.inputs[0].value - tx.outputs[0].value - tx.outputs[1].value;
+        require(claimFee >= 0 && claimFee <= 5000);
+
+        require(vaultId != 0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
+
+    function pause(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(authPubkey) == authorityHash);
+        require(checkSig(authSig, authPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0); // ACTIVE
+
+        bytes newCommitment =
+            0x01 +
+            c.split(1)[1].split(18)[0] +
+            0x000000000000000000000000000000000000000000;
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
+        int pauseFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(pauseFee >= 0 && pauseFee <= 5000);
+    }
+
+    function resume(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+
+        require(hash160(authPubkey) == authorityHash);
+        require(checkSig(authSig, authPubkey));
+        require(status == 1); // PAUSED
+
+        bytes newCommitment =
+            0x00 +
+            c.split(1)[1].split(18)[0] +
+            0x000000000000000000000000000000000000000000;
+
+        require(tx.outputs[0].nftCommitment == newCommitment);
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);
+        }
+
+        int resumeFee = tx.inputs[0].value - tx.outputs[0].value;
+        require(resumeFee >= 0 && resumeFee <= 5000);
+    }
+
+    function cancel(sig authSig, pubkey authPubkey) {
+        require(tx.outputs.length <= 2);
+
+        bytes c = tx.inputs[0].nftCommitment;
+        int status       = int(c.split(1)[0]);
+        bytes1 flagsByte = c.split(1)[1].split(1)[0];
+        int winnersCount = int(c.split(10)[1].split(4)[0]);
+
+        require(hash160(authPubkey) == authorityHash);
+        require(checkSig(authSig, authPubkey));
+        require((flagsByte & 0x01) == 0x01);
+        require(status == 0 || status == 1);
+
+        int remainingPrizes = maxWinners - winnersCount;
+        require(remainingPrizes > 0);
+        int remainingPool = remainingPrizes * rewardPerWinner;
+
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(authorityHash));
+
+        if ((flagsByte & 0x04) == 0x04) {
+            require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);
+            require(tx.outputs[0].tokenAmount == remainingPool);
+        } else {
+            require(tx.outputs[0].value == remainingPool);
+        }
+
+        // Unused fee reserve goes back to the authority on output 1, so the reserve can be
+        // sized for every claim and control spend without blocking cancel.
+        int cancelFee = tx.inputs[0].value - tx.outputs[0].value;
+        if (tx.outputs.length > 1) {
+            require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(authorityHash));
+            cancelFee = cancelFee - tx.outputs[1].value;
+        }
+        require(cancelFee >= 0 && cancelFee <= 5000);
+    }
+}
