@@ -3,6 +3,8 @@ export enum ProposalStatus {
   APPROVED = 'approved',
   EXECUTED = 'executed',
   REJECTED = 'rejected',
+  // Pulled by its creator before the create tx confirmed. Kept for covenant recovery.
+  ABANDONED = 'abandoned',
 }
 
 export interface Proposal {
@@ -21,6 +23,7 @@ export interface Proposal {
   txHash?: string; // Transaction hash when executed
   contractAddress?: string;
   constructorParams?: string;
+  creator?: string; // Wallet that created the request; unset on rows before migration 014
 }
 
 export interface CreateProposalDto {

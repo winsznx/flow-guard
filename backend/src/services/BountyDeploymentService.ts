@@ -19,6 +19,7 @@ export interface BountyDeploymentParams {
   cancelable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface BountyDeploymentParamsWithHash {
@@ -31,6 +32,7 @@ export interface BountyDeploymentParamsWithHash {
   cancelable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface BountyDeployment {
@@ -104,10 +106,11 @@ export class BountyDeploymentService {
     return id;
   }
 
-  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'): number {
+  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN', tokenDecimals = 0): number {
     return displayAmountToOnChain(
       amount,
       tokenType === 'FUNGIBLE_TOKEN' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenDecimals,
     );
   }
 
@@ -144,7 +147,7 @@ export class BountyDeploymentService {
     startTimestamp: bigint,
     endTimestamp: bigint,
   ) {
-    const artifact = ContractFactory.getArtifact('BountyCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('BountyCovenant'));
 
     // Two distinct authority slots: authorityHash = creator (admin + cancel refund), claimAuthorityHash = backend co-signer (claim only).
     const constructorArgs = [
@@ -183,7 +186,7 @@ export class BountyDeploymentService {
     const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
-    const rewardPerWinnerSat = BigInt(this.toOnChainAmount(params.rewardPerWinner, params.tokenType));
+    const rewardPerWinnerSat = BigInt(this.toOnChainAmount(params.rewardPerWinner, params.tokenType, params.tokenDecimals));
     const maxWinners = BigInt(params.maxWinners);
     const startTimestamp = BigInt(params.startTime || 0);
     const endTimestamp = BigInt(params.endTime || 0);
@@ -237,7 +240,7 @@ export class BountyDeploymentService {
     const campaignId = new Uint8Array(32);
     campaignId.set(h, 12);
 
-    const rewardPerWinnerSat = BigInt(this.toOnChainAmount(params.rewardPerWinner, params.tokenType));
+    const rewardPerWinnerSat = BigInt(this.toOnChainAmount(params.rewardPerWinner, params.tokenType, params.tokenDecimals));
     const maxWinners = BigInt(params.maxWinners);
     const startTimestamp = BigInt(params.startTime || 0);
     const endTimestamp = BigInt(params.endTime || 0);

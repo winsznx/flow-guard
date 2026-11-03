@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'crypto';
 import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 import db from '../database/schema.js';
 import { PaymentDeploymentService } from '../services/PaymentDeploymentService.js';
-import { PaymentFundingService } from '../services/PaymentFundingService.js';
+import { PaymentFundingService, getPaymentContractFundingSatoshis } from '../services/PaymentFundingService.js';
 import { PaymentClaimService } from '../services/PaymentClaimService.js';
 import { PaymentControlService } from '../services/PaymentControlService.js';
 import { ContractService } from '../services/contract-service.js';
@@ -26,7 +26,7 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
-import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { resolveTokenDecimals } from '../utils/tokenMeta.js';
 import { requireWalletAuth, callerAddress } from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
 
@@ -134,10 +134,14 @@ router.post('/payments/create', requireWalletAuth, async (req: Request, res: Res
       cancelable,
       pausable,
       vaultId,
+      tokenDecimals: tokenDecimalsHint,
     } = req.body;
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
+    const tokenDecimals = normalizedTokenType === 'FUNGIBLE_TOKEN'
+      ? await resolveTokenDecimals(tokenCategory, resolveBchNetwork(), tokenDecimalsHint)
+      : 0;
 
     if (!recipient) {
       return res.status(400).json({ error: 'Recipient is required' });
@@ -191,20 +195,21 @@ router.post('/payments/create', requireWalletAuth, async (req: Request, res: Res
       pausable: pausable !== false,
       tokenType: normalizedTokenType,
       tokenCategory,
+      tokenDecimals,
     });
 
     // Store with PENDING status - becomes ACTIVE after funding
     await db!.prepare(`
       INSERT INTO payments (id, payment_id, vault_id, sender, recipient, recipient_name,
-        token_type, token_category, amount_per_period, interval, interval_seconds,
+        token_type, token_category, token_decimals, amount_per_period, interval, interval_seconds,
         start_date, end_date, next_payment_date, total_paid, payment_count, status,
         pausable, created_at, updated_at, contract_address, constructor_params,
         nft_commitment, nft_capability)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, paymentId, vaultId || null, sender, recipient,
       recipientName || null,
-      normalizedTokenType, tokenCategory || null,
+      normalizedTokenType, tokenCategory || null, tokenDecimals,
       amountPerPeriod, interval, intervalSeconds,
       start, endDate || null, start + intervalSeconds,
       pausable !== false ? 1 : 0,
@@ -584,7 +589,7 @@ router.post('/payments/:id/confirm-cancel', requireWalletAuth, async (req: Reque
     const senderHash = readBytes20(constructorParams[1], 'senderHash');
     const senderReturnAddress = hashToP2pkhAddress(senderHash);
     const totalAmount = toBigIntParam(constructorParams[5], 'totalAmount');
-    const totalPaid = BigInt(displayAmountToOnChain(Number(payment.total_paid || 0), payment.token_type));
+    const totalPaid = BigInt(displayAmountToOnChain(Number(payment.total_paid || 0), payment.token_type, Number(payment.token_decimals || 0)));
     const remainingPool = totalAmount > 0n ? (totalAmount - totalPaid > 0n ? totalAmount - totalPaid : 0n) : 0n;
 
     if (remainingPool > 0n) {
@@ -620,7 +625,7 @@ router.post('/payments/:id/confirm-cancel', requireWalletAuth, async (req: Reque
       actor: payment.sender,
       status: 'CANCELLED',
       txHash,
-      amount: Number(onChainAmountToDisplay(Number(remainingPool), payment.token_type)),
+      amount: Number(onChainAmountToDisplay(Number(remainingPool), payment.token_type, Number(payment.token_decimals || 0))),
       details: {
         senderReturnAddress,
       },
@@ -672,6 +677,7 @@ router.get('/payments/:id/funding-info', async (req: Request, res: Response) => 
         tokenCategory: payment.token_category,
         nftCommitment: payment.nft_commitment || '',
         nftCapability: 'mutable',
+        fundedPeriods: fundingExpectation.fundedPeriods,
       });
 
       res.json({
@@ -697,7 +703,7 @@ router.get('/payments/:id/funding-info', async (req: Request, res: Response) => 
             success: false,
             requiresPreparation: true,
             preparationTransaction: serializeWcTransaction(prepResult.wcTransaction),
-            message: 'Your wallet needs a consolidation transaction before funding. Please sign to proceed.',
+            message: 'Your wallet needs one setup step before funding. Approve it in your wallet, then approve the funding.',
           });
         }
       }
@@ -752,10 +758,10 @@ router.post('/payments/:id/confirm-funding', requireWalletAuth, async (req: Requ
     const fundedPeriods = fundingExpectation.fundedPeriods;
     const fundingAmountOnChain = fundingExpectation.fundingAmountOnChain;
     const isTokenPayment = isFungibleTokenType(payment.token_type);
-    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
-      'payment',
+    const minimumContractSatoshis = getPaymentContractFundingSatoshis(
       isTokenPayment ? 'FUNGIBLE_TOKEN' : 'BCH',
       BigInt(fundingAmountOnChain),
+      fundedPeriods,
     );
 
     const expectedContractOutput = await transactionHasExpectedOutput(
@@ -916,7 +922,7 @@ router.post('/payments/:id/claim', requireWalletAuth, async (req: Request, res: 
       currentCommitment,
     });
 
-    const claimedDisplayAmount = onChainAmountToDisplay(claimTx.claimableAmount, payment.token_type);
+    const claimedDisplayAmount = onChainAmountToDisplay(claimTx.claimableAmount, payment.token_type, Number(payment.token_decimals || 0));
 
     res.json({
       success: true,
@@ -993,7 +999,7 @@ router.post('/payments/:id/confirm-claim', requireWalletAuth, async (req: Reques
     }
 
     const claimedAmountNumber = Number(claimedAmount);
-    const claimedAmountOnChain = displayAmountToOnChain(claimedAmountNumber, payment.token_type);
+    const claimedAmountOnChain = displayAmountToOnChain(claimedAmountNumber, payment.token_type, Number(payment.token_decimals || 0));
     const isTokenPayment = isFungibleTokenType(payment.token_type);
 
     const expectedRecipientOutput = await transactionHasExpectedOutput(
@@ -1161,7 +1167,7 @@ function resolvePaymentFundingExpectation(payment: any): {
         return {
           fundedPeriods: Math.max(1, toSafeNumber(periods, 'fundedPeriods')),
           fundingAmountOnChain,
-          fundingAmountDisplay: Number(onChainAmountToDisplay(fundingAmountOnChain, payment.token_type)),
+          fundingAmountDisplay: Number(onChainAmountToDisplay(fundingAmountOnChain, payment.token_type, Number(payment.token_decimals || 0))),
         };
       }
     }
@@ -1183,7 +1189,7 @@ function resolvePaymentFundingExpectation(payment: any): {
     fundedPeriods = Math.max(1, Math.ceil(duration / intervalSec));
   }
   const fundingAmountDisplay = Number(payment.amount_per_period || 0) * fundedPeriods;
-  const fundingAmountOnChain = displayAmountToOnChain(fundingAmountDisplay, payment.token_type);
+  const fundingAmountOnChain = displayAmountToOnChain(fundingAmountDisplay, payment.token_type, Number(payment.token_decimals || 0));
   return { fundedPeriods, fundingAmountOnChain, fundingAmountDisplay };
 }
 
@@ -1197,7 +1203,7 @@ function hashToP2pkhAddress(hash20: Uint8Array): string {
   lockingBytecode[24] = 0xac;
   const encoded = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
-    prefix: 'bchtest',
+    prefix: resolveBchNetwork() === 'mainnet' ? 'bitcoincash' : 'bchtest',
   });
   if (typeof encoded === 'string') {
     throw new Error(`Failed to encode sender P2PKH address: ${encoded}`);

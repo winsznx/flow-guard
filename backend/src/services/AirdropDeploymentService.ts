@@ -19,6 +19,7 @@ export interface AirdropDeploymentParams {
   cancelable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string; // hex-encoded 32-byte category ID for CashTokens
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface AirdropDeploymentParamsWithHash {
@@ -31,6 +32,7 @@ export interface AirdropDeploymentParamsWithHash {
   cancelable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface AirdropDeployment {
@@ -116,10 +118,11 @@ export class AirdropDeploymentService {
     return id;
   }
 
-  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'): number {
+  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN', tokenDecimals = 0): number {
     return displayAmountToOnChain(
       amount,
       tokenType === 'FUNGIBLE_TOKEN' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenDecimals,
     );
   }
 
@@ -161,7 +164,7 @@ export class AirdropDeploymentService {
     startTimestamp: bigint,
     endTimestamp: bigint,
   ) {
-    const artifact = ContractFactory.getArtifact('AirdropCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('AirdropCovenant'));
 
     const constructorArgs = [
       vaultId,
@@ -201,8 +204,8 @@ export class AirdropDeploymentService {
     const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateClaimAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
-    const amountPerClaimSat = BigInt(this.toOnChainAmount(params.amountPerClaim, params.tokenType));
-    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType));
+    const amountPerClaimSat = BigInt(this.toOnChainAmount(params.amountPerClaim, params.tokenType, params.tokenDecimals));
+    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType, params.tokenDecimals));
     const startTimestamp = BigInt(params.startTime || 0);
     const endTimestamp = BigInt(params.endTime || 0);
 
@@ -255,8 +258,8 @@ export class AirdropDeploymentService {
     const campaignId = new Uint8Array(32);
     campaignId.set(h, 12);
 
-    const amountPerClaimSat = BigInt(this.toOnChainAmount(params.amountPerClaim, params.tokenType));
-    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType));
+    const amountPerClaimSat = BigInt(this.toOnChainAmount(params.amountPerClaim, params.tokenType, params.tokenDecimals));
+    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType, params.tokenDecimals));
     const startTimestamp = BigInt(params.startTime || 0);
     const endTimestamp = BigInt(params.endTime || 0);
 

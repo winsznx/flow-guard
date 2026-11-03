@@ -157,6 +157,19 @@ router.get('/vaults/:id/transactions', async (req, res) => {
 });
 
 /**
+ * GET /api/transactions/pending
+ * Get all pending transactions
+ */
+router.get('/transactions/pending', async (req, res) => {
+  try {
+    const transactions = await TransactionService.getPendingTransactions();
+    res.json({ transactions });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * GET /api/transactions/:txHash
  * Get transaction by hash
  */
@@ -170,19 +183,6 @@ router.get('/transactions/:txHash', async (req, res) => {
     }
 
     res.json({ transaction });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * GET /api/transactions/pending
- * Get all pending transactions
- */
-router.get('/transactions/pending', async (req, res) => {
-  try {
-    const transactions = await TransactionService.getPendingTransactions();
-    res.json({ transactions });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

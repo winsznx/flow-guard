@@ -1,6 +1,6 @@
 /**
  * Bounty Control Service
- * Handles pause and cancel operations for BountyCovenant contracts
+ * Handles pause, resume and cancel operations for BountyCovenant contracts
  */
 
 import {
@@ -18,6 +18,8 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
+import { addV2CampaignCancelOutputs } from '../utils/campaignCancel.js';
 
 export interface BountyControlBuildParams {
   contractAddress: string;
@@ -30,7 +32,7 @@ export interface BountyControlBuildParams {
 
 export interface BountyControlBuildResult {
   wcTransaction: WcTransactionObject;
-  nextStatus: 'PAUSED' | 'CANCELLED';
+  nextStatus: 'PAUSED' | 'ACTIVE' | 'CANCELLED';
   cancelReturnAddress?: string;
   remainingPool?: bigint;
 }
@@ -45,14 +47,33 @@ export class BountyControlService {
   }
 
   async buildPauseTransaction(params: BountyControlBuildParams): Promise<BountyControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('BountyCovenant');
+    return this.buildStatusChange(params, 'pause');
+  }
+
+  async buildResumeTransaction(params: BountyControlBuildParams): Promise<BountyControlBuildResult> {
+    return this.buildStatusChange(params, 'resume');
+  }
+
+  /**
+   * BountyCovenant.pause() and resume() keep the first 19 bytes of the state commitment, set the
+   * status byte and zero the rest. Both allow only the state output, so the fee comes out of
+   * the contract balance. No CLTV on either.
+   */
+  private async buildStatusChange(
+    params: BountyControlBuildParams,
+    action: 'pause' | 'resume',
+  ): Promise<BountyControlBuildResult> {
+    const artifact = ContractFactory.artifactForAddress('BountyCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
     const status = commitment[0] ?? 0;
     const flags = commitment[1] ?? 0;
-    if (status !== 0) {
+    if (action === 'pause' && status !== 0) {
       throw new Error('Bounty must be ACTIVE to pause');
+    }
+    if (action === 'resume' && status !== 1) {
+      throw new Error('Bounty must be PAUSED to resume');
     }
     if ((flags & 0x01) !== 0x01) {
       throw new Error('Bounty is not configured as cancelable/pausable');
@@ -62,31 +83,18 @@ export class BountyControlService {
     }
 
     const newCommitment = new Uint8Array(40);
-    newCommitment[0] = 1; // PAUSED
+    newCommitment[0] = action === 'pause' ? 1 : 0;
     newCommitment.set(commitment.slice(1, 19), 1);
-    newCommitment.fill(0, 19);
 
-    // Bounty.pause caps outputs at <= 1 (state only); an external fee payer's
-    // change output would exceed the cap, so self-fund the fee. No CLTV on pause.
     const feeReserve = 4000n; // ~3KB control tx; must clear min relay (~3500)
+    const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
+    if (stateOutputSatoshis < 546n) {
+      throw new Error(`Insufficient contract balance to ${action} bounty`);
+    }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
-    txBuilder.addInput(
-      contractUtxo,
-      contract.unlock.pause(
-        placeholderSignature(),
-        placeholderPublicKey(),
-      ),
-    );
-    const feePayer = null as { utxos: any[]; total: bigint } | null;
-    const stateOutputSatoshis = feePayer
-      ? contractUtxo.satoshis
-      : contractUtxo.satoshis - feeReserve;
-    if (stateOutputSatoshis < 546n) {
-      throw new Error('Insufficient contract balance to pause bounty');
-    }
-
+    txBuilder.addInput(contractUtxo, contract.unlock[action](placeholderSignature(), placeholderPublicKey()));
     txBuilder.addOutput({
       to: contract.tokenAddress,
       amount: stateOutputSatoshis,
@@ -99,29 +107,20 @@ export class BountyControlService {
         },
       },
     });
-    if (feePayer) {
-      const feeChange = feePayer.total - feeReserve;
-      if (feeChange > 546n) {
-        txBuilder.addOutput({
-          to: params.feePayerAddress!,
-          amount: feeChange,
-        });
-      }
-    }
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
-        broadcast: true,
-        userPrompt: 'Pause bounty campaign',
-      }));
+      broadcast: true,
+      userPrompt: action === 'pause' ? 'Pause this bounty' : 'Resume this bounty',
+    }));
 
     return {
       wcTransaction,
-      nextStatus: 'PAUSED',
+      nextStatus: action === 'pause' ? 'PAUSED' : 'ACTIVE',
     };
   }
 
   async buildCancelTransaction(params: BountyControlBuildParams): Promise<BountyControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('BountyCovenant');
+    const artifact = ContractFactory.artifactForAddress('BountyCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -159,85 +158,70 @@ export class BountyControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 2500n;
-    const feePayer = params.feePayerAddress
-      ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
-      : null;
-    if (feePayer) {
-      const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
-      for (const utxo of feePayer.utxos) {
-        txBuilder.addInput(utxo, unlocker);
-      }
-    }
-
-    let spentSatoshis = 0n;
-    if (params.tokenType === 'FUNGIBLE_TOKEN') {
-      if (!contractUtxo.token?.category) {
+    if (ContractFactory.isV2(ContractFactory.typeForAddress('BountyCovenant', params.constructorParams, params.contractAddress))) {
+      addV2CampaignCancelOutputs({
+        txBuilder,
+        contractUtxo,
+        tokenType: params.tokenType,
+        remainingPool: remainingPool,
+        returnAddress: cancelReturnAddress,
+      });
+    } else {
+      // BountyCovenant.cancel() allows two outputs and caps contractInput - outputs[0] at
+      // 5000, so whatever the contract holds above the refund output is either change on
+      // output 1 or fee, and can't exceed 5000. When that leftover can't pay the fee, the
+      // creator's wallet pays it and its change takes output 1.
+      const fee = 4000n;
+      const refundSatoshis = params.tokenType === 'FUNGIBLE_TOKEN' ? 1000n : remainingPool;
+      if (params.tokenType === 'FUNGIBLE_TOKEN' && !contractUtxo.token?.category) {
         throw new Error('Cancel requires tokenized covenant UTXO with token category');
       }
-      if (contractUtxo.satoshis < 1000n) {
-        throw new Error('Insufficient contract satoshis to build token cancel output');
-      }
-      txBuilder.addOutput({
-        to: cancelReturnAddress,
-        amount: 1000n,
-        token: {
-          category: contractUtxo.token.category,
-          amount: remainingPool,
-        },
-      });
-      spentSatoshis += 1000n;
-    } else {
-      if (remainingPool < 546n) {
+      if (params.tokenType !== 'FUNGIBLE_TOKEN' && remainingPool < 546n) {
         throw new Error('Remaining BCH pool is below dust and cannot be cancelled');
       }
-      if (contractUtxo.satoshis < remainingPool) {
+      const leftover = contractUtxo.satoshis - refundSatoshis;
+      if (leftover < 0n) {
         throw new Error('Contract balance is below remaining BCH pool; cannot build valid cancel transaction');
       }
-      txBuilder.addOutput({
-        to: cancelReturnAddress,
-        amount: remainingPool,
-      });
-      spentSatoshis += remainingPool;
-    }
-
-    if (feePayer) {
-      const contractChange = contractUtxo.satoshis - spentSatoshis;
-      if (contractChange < 0n) {
-        throw new Error('Contract balance is insufficient for required cancel outputs');
-      }
-      if (contractChange > 546n) {
-        txBuilder.addOutput({
-          to: cancelReturnAddress,
-          amount: contractChange,
-        });
+      if (leftover > 5000n) {
+        throw new Error('This bounty holds more BCH than its cancel can return. Pay the remaining winners instead.');
       }
 
-      const feeChange = feePayer.total - feeReserve;
-      if (feeChange > 546n) {
-        txBuilder.addOutput({
-          to: params.feePayerAddress!,
-          amount: feeChange,
-        });
+      const feePayer = leftover < fee && params.feePayerAddress
+        ? await this.selectFeePayerInputs(params.feePayerAddress, fee - leftover)
+        : null;
+      if (leftover < fee && !feePayer) {
+        throw new Error('Cancel requires an additional fee-paying input. Provide signer address with spendable BCH.');
       }
-    } else {
-      const contractChange = contractUtxo.satoshis - spentSatoshis - feeReserve;
-      if (contractChange < 0n) {
-        throw new Error(
-          'Cancel requires an additional fee-paying input. Provide signer address with spendable BCH.'
-        );
+      if (feePayer) {
+        const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
+        for (const utxo of feePayer.utxos) {
+          txBuilder.addInput(utxo, unlocker);
+        }
       }
-      if (contractChange > 546n) {
-        txBuilder.addOutput({
-          to: cancelReturnAddress,
-          amount: contractChange,
-        });
+
+      txBuilder.addOutput(params.tokenType === 'FUNGIBLE_TOKEN'
+        ? {
+            to: toTokenAwareAddress(cancelReturnAddress),
+            amount: refundSatoshis,
+            token: { category: contractUtxo.token.category, amount: remainingPool },
+          }
+        : { to: cancelReturnAddress, amount: remainingPool });
+
+      if (feePayer) {
+        const feeChange = feePayer.total - (fee - leftover);
+        if (feeChange > 546n) {
+          txBuilder.addOutput({ to: params.feePayerAddress!, amount: feeChange });
+        }
+      } else if (leftover - fee > 546n) {
+        txBuilder.addOutput({ to: cancelReturnAddress, amount: leftover - fee });
       }
+
     }
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Cancel bounty campaign and recover remaining funds',
+        userPrompt: 'Cancel this bounty and return the rest to you',
       }));
 
     return {

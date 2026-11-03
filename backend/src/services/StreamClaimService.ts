@@ -11,6 +11,7 @@ import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
 import { finalizeWcTransactionSequences } from './txFinality.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface ClaimTransactionParams {
   streamId: string;
@@ -40,6 +41,37 @@ export interface ClaimTransactionParams {
 export interface ClaimTransaction {
   claimableAmount: number;
   wcTransaction: WcTransactionObject;
+}
+
+// Set the claim nLockTime below median-time-past so the tx is immediately
+// mineable with the non-final sequence CLTV requires.
+const CLAIM_LOCKTIME_BUFFER = 7200;
+// The compiled covenant redeem script is ~3KB, so the claim tx is ~3.1KB and
+// its min relay fee is ~3092-3500 (measured on chipnet: tx rejected at 3092,
+// accepted at 3500). 1900 was below min relay and would be rejected on mainnet.
+const CLAIM_FEE = 4000n; // in [min relay ~3500, 5000 covenant cap]
+const TOKEN_CLAIM_OUTPUT_SATOSHIS = 1000n;
+const STATE_DUST_SATOSHIS = 546n;
+
+export class StreamClaimReserveError extends Error {
+  constructor(readonly claimableFrom: number) {
+    super("This stream only has enough BCH left for the network fee on one more claim. Claim the rest in one go once it has all been released.");
+  }
+}
+
+/**
+ * Every claim pays its fee from the BCH the contract holds above the principal still
+ * owed. A partial claim is refused once that reserve can't cover this claim and the
+ * final one, so the last claim always goes through.
+ */
+export function isStreamClaimReserveLimited(reserveSatoshis: bigint, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'): boolean {
+  const spendCost = CLAIM_FEE + (tokenType === 'FUNGIBLE_TOKEN' ? TOKEN_CLAIM_OUTPUT_SATOSHIS : 0n);
+  return reserveSatoshis - spendCost < spendCost + STATE_DUST_SATOSHIS;
+}
+
+/** When the whole amount is claimable, shifted by pauses, matching the claim locktime. */
+export function getStreamFullyReleasedAt(cursor: number, startTime: number, endTime: number): number {
+  return (cursor || startTime) + (endTime - startTime) + CLAIM_LOCKTIME_BUFFER;
 }
 
 export class StreamClaimService {
@@ -122,6 +154,36 @@ export class StreamClaimService {
     return Math.max(0, vestedTotal - totalReleased);
   }
 
+  /**
+   * When a reserve-limited stream can be claimed in one go, or null when a claim
+   * can go through now (or the live state can't be read).
+   */
+  async getClaimDeferredUntil(params: {
+    contractAddress: string;
+    totalAmount: number;
+    startTime: number;
+    endTime: number;
+    currentTime: number;
+    tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
+  }): Promise<number | null> {
+    const contractUtxos = await this.provider.getUtxos(params.contractAddress);
+    const contractUtxo = contractUtxos.find(u => u.token?.nft != null);
+    const commitmentHex = contractUtxo?.token?.nft?.commitment;
+    if (!contractUtxo || typeof commitmentHex !== 'string' || commitmentHex.length < 80 || !commitmentHex.startsWith('00')) {
+      return null;
+    }
+    const fullyReleasedAt = getStreamFullyReleasedAt(
+      this.readUint40LEFromHex(commitmentHex, 10),
+      params.startTime,
+      params.endTime,
+    );
+    if (params.currentTime >= fullyReleasedAt) return null;
+    const reserve = params.tokenType === 'FUNGIBLE_TOKEN'
+      ? contractUtxo.satoshis
+      : contractUtxo.satoshis - (BigInt(params.totalAmount) - this.readUint64LEFromHex(commitmentHex, 2));
+    return isStreamClaimReserveLimited(reserve, params.tokenType) ? fullyReleasedAt : null;
+  }
+
   async buildClaimTransaction(params: ClaimTransactionParams): Promise<ClaimTransaction> {
     const {
       contractAddress,
@@ -134,12 +196,14 @@ export class StreamClaimService {
       currentTime,
     } = params;
 
-    const artifact = ContractFactory.getArtifact(
+    const artifact = ContractFactory.artifactForAddress(
       params.streamType === 'TRANCHE'
         ? 'TrancheVestingCovenant'
         : params.streamType === 'HYBRID'
           ? 'HybridVestingCovenant'
           : 'VestingCovenant',
+      constructorParams,
+      contractAddress,
     );
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
@@ -172,11 +236,8 @@ export class StreamClaimService {
     }
     const commitmentHex = binToHex(commitment);
     const totalReleasedFromCommitment = Number(this.readUint64LEFromHex(commitmentHex, 2));
-    // Set the claim nLockTime below median-time-past so the tx is immediately
-    // mineable with the non-final sequence CLTV requires. Compute claimable with
-    // the SAME effective time so the covenant's locktime-based vested math equals
-    // the recipient output exactly.
-    const CLAIM_LOCKTIME_BUFFER = 7200;
+    // Compute claimable with the SAME effective time as the claim nLockTime so the
+    // covenant's locktime-based vested math equals the recipient output exactly.
     const effectiveClaimTime = currentTime - CLAIM_LOCKTIME_BUFFER;
     const claimableAmount = this.calculateClaimableAmount({
       ...params,
@@ -184,7 +245,8 @@ export class StreamClaimService {
       totalReleased: totalReleasedFromCommitment,
       currentCommitment: commitmentHex,
     });
-    if (claimableAmount <= 0) {
+    // A BCH payout below dust can't be an output, so it waits until more is released.
+    if (claimableAmount <= 0 || (tokenType !== 'FUNGIBLE_TOKEN' && claimableAmount < 546)) {
       throw new Error('No funds available to claim at this time');
     }
 
@@ -201,17 +263,25 @@ export class StreamClaimService {
     // No external fee payer — its change would be a 3rd output, and topping up the
     // state output would drive claimFee negative. The stateful-contract reserve
     // funded into the covenant covers this fee plus the state dust.
-    //
-    // The compiled covenant redeem script is ~3KB, so the claim tx is ~3.1KB and
-    // its min relay fee is ~3092-3500 (measured on chipnet: tx rejected at 3092,
-    // accepted at 3500). 1900 was below min relay and would be rejected on mainnet.
-    const CLAIM_FEE = 4000n; // in [min relay ~3500, 5000 covenant cap]
-    const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : claimAmountBig;
+    const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? TOKEN_CLAIM_OUTPUT_SATOSHIS : claimAmountBig;
     const stateOutputSatoshis = contractBalance - recipientOutputSatoshis - CLAIM_FEE;
     if (stateOutputSatoshis < 546n) {
       throw new Error(
         `Contract reserve too low to fund claim (balance ${contractBalance}, recipient ${recipientOutputSatoshis}, fee ${CLAIM_FEE})`,
       );
+    }
+    // The reserve covers a fixed claim budget, not one claim per step or tranche.
+    // Refuse a partial claim that would strand the rest, so it stays claimable in
+    // one go at the end.
+    if (newStatus !== 3) {
+      const reserve = tokenType === 'FUNGIBLE_TOKEN'
+        ? contractBalance
+        : contractBalance - (BigInt(params.totalAmount) - BigInt(totalReleasedFromCommitment));
+      if (isStreamClaimReserveLimited(reserve, tokenType)) {
+        throw new StreamClaimReserveError(
+          getStreamFullyReleasedAt(this.readUint40LEFromHex(commitmentHex, 10), params.startTime, params.endTime),
+        );
+      }
     }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
@@ -237,7 +307,7 @@ export class StreamClaimService {
       }
 
       txBuilder.addOutput({
-        to: recipient,
+        to: toTokenAwareAddress(recipient),
         amount: 1000n,
         token: { category: tokenCategory, amount: claimAmountBig },
       });
@@ -252,7 +322,7 @@ export class StreamClaimService {
         },
       });
     } else {
-      txBuilder.addOutput({ to: recipient, amount: claimAmountBig });
+      txBuilder.addOutput({ to: toTokenAwareAddress(recipient), amount: claimAmountBig });
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
@@ -267,7 +337,7 @@ export class StreamClaimService {
 
     const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Claim vested funds',
+      userPrompt: tokenType === 'FUNGIBLE_TOKEN' ? 'Claim tokens from this stream' : 'Claim money from this stream',
     }));
 
     console.log('[StreamClaimService] Built claim transaction', {

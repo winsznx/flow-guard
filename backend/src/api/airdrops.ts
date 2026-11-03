@@ -6,7 +6,14 @@
 import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
-import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import {
+  binToHex,
+  encodeTransaction,
+  hashTransaction,
+  hexToBin,
+  lockingBytecodeToCashAddress,
+} from '@bitauth/libauth';
+import { ElectrumNetworkProvider } from 'cashscript';
 import db from '../database/schema.js';
 import { AirdropDeploymentService } from '../services/AirdropDeploymentService.js';
 import { MerkleTreeService } from '../services/MerkleTreeService.js';
@@ -26,10 +33,12 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
-import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { campaignContractSatoshis } from '../utils/campaignFunding.js';
+import { resolveTokenDecimals } from '../utils/tokenMeta.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
 import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
+import { omitSecretColumns } from '../utils/responseSanitizers.js';
 
 
 const router = Router();
@@ -79,14 +88,16 @@ router.get('/airdrops/claimable', async (req: Request, res: Response) => {
     const rows = await db!.prepare(`
       SELECT a.* FROM airdrops a
       WHERE a.status = 'ACTIVE'
+        AND (a.start_date IS NULL OR a.start_date <= ?)
         AND (a.end_date IS NULL OR a.end_date > ?)
         AND (
           SELECT COUNT(1) FROM airdrop_claims c
           WHERE c.campaign_id = a.id AND c.claimer = ?
         ) < COALESCE(a.max_claims_per_address, 1)
-    `).all(now, address);
+    `).all(now, now, address);
+    const claimableRows = (rows as any[]).filter((row: any) => isClaimableBy(row, String(address)));
     const campaigns = await attachLatestAirdropEvents(
-      (rows as any[]).map((row: any) => normalizeCampaignForResponse(req, row)),
+      claimableRows.map((row: any) => normalizeCampaignForResponse(req, row)),
     );
 
     res.json({
@@ -181,10 +192,14 @@ router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Res
       requireKyc,
       maxClaimsPerAddress,
       vaultId,
+      tokenDecimals: tokenDecimalsHint,
     } = req.body;
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
+    const tokenDecimals = normalizedTokenType === 'FUNGIBLE_TOKEN'
+      ? await resolveTokenDecimals(tokenCategory, resolveBchNetwork(), tokenDecimalsHint)
+      : 0;
 
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
@@ -195,8 +210,8 @@ router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Res
     if (!amountPerClaim || amountPerClaim <= 0) {
       return res.status(400).json({ error: 'Amount per claim must be greater than 0' });
     }
-    const totalAmountOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
-    const amountPerClaimOnChain = displayAmountToOnChain(Number(amountPerClaim), normalizedTokenType);
+    const totalAmountOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType, tokenDecimals);
+    const amountPerClaimOnChain = displayAmountToOnChain(Number(amountPerClaim), normalizedTokenType, tokenDecimals);
     if (amountPerClaimOnChain <= 0 || totalAmountOnChain <= 0) {
       return res.status(400).json({
         error: 'Amounts are below on-chain minimum precision',
@@ -208,8 +223,8 @@ router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Res
     if (amountPerClaimOnChain > totalAmountOnChain) {
       return res.status(400).json({ error: 'Amount per claim cannot exceed total amount' });
     }
-    const normalizedTotalAmount = onChainAmountToDisplay(totalAmountOnChain, normalizedTokenType);
-    const normalizedAmountPerClaim = onChainAmountToDisplay(amountPerClaimOnChain, normalizedTokenType);
+    const normalizedTotalAmount = onChainAmountToDisplay(totalAmountOnChain, normalizedTokenType, tokenDecimals);
+    const normalizedAmountPerClaim = onChainAmountToDisplay(amountPerClaimOnChain, normalizedTokenType, tokenDecimals);
 
     const totalRecipients = Array.isArray(recipients)
       ? recipients.length
@@ -249,20 +264,21 @@ router.post('/airdrops/create', requireWalletAuth, async (req: Request, res: Res
       endTime: endDate || 0,
       tokenType: normalizedTokenType,
       tokenCategory,
+      tokenDecimals,
     });
 
     // Store with PENDING status - becomes ACTIVE after funding tx confirmed
     await db!.prepare(`
       INSERT INTO airdrops (id, campaign_id, vault_id, creator, title, description,
-        campaign_type, token_type, token_category, total_amount, amount_per_claim,
+        campaign_type, token_type, token_category, token_decimals, total_amount, amount_per_claim,
         total_recipients, claimed_count, claim_link, start_date, end_date, status,
         require_kyc, max_claims_per_address, created_at, updated_at,
         contract_address, constructor_params, nft_commitment, nft_capability,
         claim_authority_privkey)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, campaignId, vaultId || null, creator, title, description || null,
-      campaignType || 'AIRDROP', normalizedTokenType, tokenCategory || null,
+      campaignType || 'AIRDROP', normalizedTokenType, tokenCategory || null, tokenDecimals,
       normalizedTotalAmount, normalizedAmountPerClaim, totalRecipients, claimLink,
       startDate || now, endDate || null,
       requireKyc === true ? 1 : 0, maxClaimsPerAddress || 1,
@@ -393,7 +409,7 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
       });
     }
 
-    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_amount, campaign.token_type);
+    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_amount, campaign.token_type, Number(campaign.token_decimals || 0));
     const nftCommitment = campaign.nft_commitment || '';
 
     const fundingService = new AirdropFundingService(resolveBchNetwork());
@@ -408,6 +424,7 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
         tokenCategory: campaign.token_category,
         nftCommitment,
         nftCapability: 'mutable',
+        contractSatoshis: campaignContractSatoshis('airdrop', campaign, BigInt(fundingAmountOnChain)),
       });
 
       res.json({
@@ -435,7 +452,7 @@ router.get('/airdrops/:id/funding-info', async (req: Request, res: Response) => 
             success: false,
             requiresPreparation: true,
             preparationTransaction: serializeWcTransaction(prepResult.wcTransaction),
-            message: 'Your wallet needs a consolidation transaction before funding. Please sign to proceed.',
+            message: 'Your wallet needs one setup step before funding. Approve it in your wallet, then approve the funding.',
           });
         }
       }
@@ -480,13 +497,9 @@ router.post('/airdrops/:id/confirm-funding', requireWalletAuth, async (req: Requ
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_amount, campaign.token_type);
+    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_amount, campaign.token_type, Number(campaign.token_decimals || 0));
     const isTokenAirdrop = isFungibleTokenType(campaign.token_type);
-    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
-      'airdrop',
-      isTokenAirdrop ? 'FUNGIBLE_TOKEN' : 'BCH',
-      BigInt(fundingAmountOnChain),
-    );
+    const minimumContractSatoshis = campaignContractSatoshis('airdrop', campaign, BigInt(fundingAmountOnChain));
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
@@ -641,10 +654,10 @@ router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: 
       });
     }
 
-    const claimCountRow = db!
+    const claimCountRow = await db!
       .prepare('SELECT COUNT(1) as cnt FROM airdrop_claims WHERE campaign_id = ? AND claimer = ?')
       .get(id, claimerAddress) as any;
-    const claimCount = Number(claimCountRow?.cnt || 0);
+    let claimCount = Number(claimCountRow?.cnt || 0);
     const maxClaimsPerAddress = Math.max(1, Number(campaign.max_claims_per_address || 1));
     if (claimCount >= maxClaimsPerAddress) {
       return res.status(409).json({ error: 'Claim limit reached for this address' });
@@ -675,7 +688,7 @@ router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: 
       }
       if (recipient.amount !== undefined && Number(recipient.amount) > 0) {
         const recipientAmountOnChain = BigInt(
-          displayAmountToOnChain(Number(recipient.amount), campaign.token_type),
+          displayAmountToOnChain(Number(recipient.amount), campaign.token_type, Number(campaign.token_decimals || 0)),
         );
         if (recipientAmountOnChain !== constructorAmountPerClaim) {
           return res.status(422).json({
@@ -693,6 +706,43 @@ router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: 
     }
 
     const now = Math.floor(Date.now() / 1000);
+    const claimAmountOnChain = bigIntToSafeNumber(
+      constructorAmountPerClaim,
+      'amountPerClaim',
+    );
+    const claimedDisplayAmount = onChainAmountToDisplay(claimAmountOnChain, campaign.token_type, Number(campaign.token_decimals || 0));
+
+    const reservation = await db!
+      .prepare('SELECT * FROM airdrop_claim_reservations WHERE campaign_id = ? AND claimer = ?')
+      .get(id, claimerAddress) as any;
+    let heldTxHash: string | null = reservation ? String(reservation.tx_hash) : null;
+    if (reservation) {
+      // Read the state UTXO before asking whether the held claim is on chain. If the held
+      // claim lands in between, the state read still matches and the same claim is handed back.
+      const liveOutpoint = await readAirdropStateOutpoint(campaign.contract_address);
+      if (!liveOutpoint) {
+        return res.status(503).json({
+          error: 'Could not read the airdrop contract state',
+          message: 'Try again in a moment.',
+          retryable: true,
+        });
+      }
+      if (await transactionExists(reservation.tx_hash, resolveBchNetwork())) {
+        await recordAirdropClaim(campaign, claimerAddress, claimedDisplayAmount, reservation.tx_hash, now);
+        heldTxHash = null;
+        claimCount += 1;
+        if (claimCount >= maxClaimsPerAddress) {
+          return res.status(409).json({ error: 'Claim limit reached for this address' });
+        }
+      } else if (liveOutpoint === reservation.state_outpoint) {
+        return res.json({
+          success: true,
+          claimAmount: claimedDisplayAmount,
+          wcTransaction: JSON.parse(reservation.wc_transaction),
+        });
+      }
+      // Otherwise the state UTXO the held claim spends is gone, so that claim can never confirm.
+    }
 
     const contractService = new ContractService(resolveBchNetwork());
     const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
@@ -700,10 +750,6 @@ router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: 
       || '00'.repeat(40);
 
     const claimService = new AirdropClaimService(resolveBchNetwork());
-    const claimAmountOnChain = bigIntToSafeNumber(
-      constructorAmountPerClaim,
-      'amountPerClaim',
-    );
     const claimTx = await claimService.buildClaimTransaction({
       airdropId: campaign.campaign_id,
       contractAddress: campaign.contract_address,
@@ -718,12 +764,33 @@ router.post('/airdrops/:id/claim', requireWalletAuth, async (req: Request, res: 
       claimAuthorityPrivKey: decryptPrivateKey(campaign.claim_authority_privkey),
     });
 
-    const claimedDisplayAmount = onChainAmountToDisplay(claimTx.claimAmount, campaign.token_type);
+    const wcTransaction = serializeWcTransaction(claimTx.wcTransaction);
+    const claimTxHash = hashTransaction(encodeTransaction(claimTx.wcTransaction.transaction));
+    const spentState = claimTx.wcTransaction.transaction.inputs[0];
+    const stateOutpoint = `${binToHex(spentState.outpointTransactionHash)}:${spentState.outpointIndex}`;
+    const held = heldTxHash
+      ? await db!.prepare(`
+          UPDATE airdrop_claim_reservations
+          SET tx_hash = ?, state_outpoint = ?, wc_transaction = ?, created_at = ?
+          WHERE campaign_id = ? AND claimer = ? AND tx_hash = ?
+        `).run(claimTxHash, stateOutpoint, JSON.stringify(wcTransaction), now, id, claimerAddress, heldTxHash)
+      : await db!.prepare(`
+          INSERT INTO airdrop_claim_reservations (campaign_id, claimer, tx_hash, state_outpoint, wc_transaction, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT (campaign_id, claimer) DO NOTHING
+        `).run(id, claimerAddress, claimTxHash, stateOutpoint, JSON.stringify(wcTransaction), now);
+    if (held.changes === 0) {
+      return res.status(409).json({
+        error: 'Another claim for this address is in progress',
+        message: 'Try again in a moment.',
+        retryable: true,
+      });
+    }
 
     res.json({
       success: true,
       claimAmount: claimedDisplayAmount,
-      wcTransaction: serializeWcTransaction(claimTx.wcTransaction),
+      wcTransaction,
     });
   } catch (error: any) {
     console.error(`POST /airdrops/${req.params.id}/claim error:`, error);
@@ -763,7 +830,7 @@ router.post('/airdrops/:id/confirm-claim', requireWalletAuth, async (req: Reques
     }
 
     const claimedAmountNumber = Number(claimedAmount);
-    const claimedAmountOnChain = displayAmountToOnChain(claimedAmountNumber, campaign.token_type);
+    const claimedAmountOnChain = displayAmountToOnChain(claimedAmountNumber, campaign.token_type, Number(campaign.token_decimals || 0));
     const isTokenAirdrop = isFungibleTokenType(campaign.token_type);
 
     const expectedClaimOutput = await transactionHasExpectedOutput(
@@ -789,28 +856,13 @@ router.post('/airdrops/:id/confirm-claim', requireWalletAuth, async (req: Reques
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Record claim
-    await db!.prepare(`
-      INSERT INTO airdrop_claims (id, campaign_id, claimer, amount, claimed_at, tx_hash)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(randomUUID(), id, claimerAddress, claimedAmountNumber, now, txHash);
-
-    // Update campaign statistics
-    await db!.prepare(`
-      UPDATE airdrops
-      SET claimed_count = claimed_count + 1, updated_at = ?
-      WHERE id = ?
-    `).run(now, id);
-    await recordActivityEvent({
-      entityType: 'airdrop',
-      entityId: id,
-      eventType: 'claim',
-      actor: claimerAddress,
-      amount: claimedAmountNumber,
-      txHash,
-      status: String(campaign.status || 'ACTIVE'),
-      createdAt: now,
-    });
+    // POST /claim records a held claim itself once it finds it on chain.
+    const alreadyRecorded = await db!
+      .prepare('SELECT 1 FROM airdrop_claims WHERE campaign_id = ? AND tx_hash = ?')
+      .get(id, txHash);
+    if (!alreadyRecorded) {
+      await recordAirdropClaim(campaign, claimerAddress, claimedAmountNumber, txHash, now);
+    }
 
     res.json({
       success: true,
@@ -952,6 +1004,134 @@ router.post('/airdrops/:id/confirm-pause', requireWalletAuth, async (req: Reques
     console.error(`POST /airdrops/${req.params.id}/confirm-pause error:`, error);
     res.status(500).json({
       error: 'Failed to confirm pause',
+      message: error.message,
+      state: 'failed',
+      retryable: false,
+      errorCode: 'CONFIRM_FAILED',
+    });
+  }
+});
+
+/**
+ * POST /api/airdrops/:id/resume
+ * Build on-chain resume transaction for a campaign
+ */
+router.post('/airdrops/:id/resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+    if (campaign.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only paused campaigns can be resumed' });
+    }
+    if (String(campaign.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the campaign creator can resume this campaign' });
+    }
+    if (!campaign.contract_address || !campaign.constructor_params) {
+      return res.status(400).json({ error: 'Campaign contract is not fully configured' });
+    }
+
+    const controlService = new AirdropControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
+    const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
+      || campaign.nft_commitment
+      || '';
+    const constructorParams = deserializeConstructorParams(campaign.constructor_params);
+    const built = await controlService.buildResumeTransaction({
+      contractAddress: campaign.contract_address,
+      constructorParams,
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: normalizeAirdropTokenType(campaign.token_type),
+      feePayerAddress: signerAddress,
+    });
+
+    res.json({
+      success: true,
+      nextStatus: built.nextStatus,
+      wcTransaction: serializeWcTransaction(built.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /airdrops/${req.params.id}/resume error:`, error);
+    res.status(500).json({ error: 'Failed to build resume transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/airdrops/:id/confirm-resume
+ * Confirm on-chain resume transaction and update DB state
+ */
+router.post('/airdrops/:id/confirm-resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
+      return res.status(409).json({
+        error: 'Transaction hash not found on chipnet',
+        message: 'Transaction is not indexed yet. Retry confirmation shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    const campaign = await db!.prepare('SELECT * FROM airdrops WHERE id = ?').get(id) as any;
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+    if (String(campaign.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the campaign creator can confirm resume' });
+    }
+
+    const hasExpectedState = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: campaign.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 35,
+      },
+      resolveBchNetwork(),
+    );
+    if (!hasExpectedState) {
+      return res.status(400).json({
+        error: 'Resume transaction does not include expected campaign covenant state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    await db!.prepare('UPDATE airdrops SET status = ?, updated_at = ? WHERE id = ?')
+      .run('ACTIVE', now, id);
+    await recordActivityEvent({
+      entityType: 'airdrop',
+      entityId: id,
+      eventType: 'resumed',
+      actor: signerAddress,
+      status: 'ACTIVE',
+      txHash,
+      createdAt: now,
+    });
+
+    res.json({ success: true, txHash, status: 'ACTIVE', state: 'confirmed', retryable: false });
+  } catch (error: any) {
+    console.error(`POST /airdrops/${req.params.id}/confirm-resume error:`, error);
+    res.status(500).json({
+      error: 'Failed to confirm resume',
       message: error.message,
       state: 'failed',
       retryable: false,
@@ -1116,6 +1296,81 @@ router.post('/airdrops/:id/confirm-cancel', requireWalletAuth, async (req: Reque
 
 export default router;
 
+/**
+ * Mirrors the checks POST /airdrops/:id/claim and the covenant apply, so the list only
+ * offers airdrops a claim can actually be built for: pool not used up, and the address
+ * on the recipient list when one exists (KYC airdrops without one refuse everyone).
+ */
+function isClaimableBy(campaign: any, address: string): boolean {
+  const decimals = Number(campaign.token_decimals || 0);
+  const amountPerClaimOnChain = displayAmountToOnChain(Number(campaign.amount_per_claim), campaign.token_type, decimals);
+  const totalAmountOnChain = displayAmountToOnChain(Number(campaign.total_amount), campaign.token_type, decimals);
+  const claimedCount = Number(campaign.claimed_count || 0);
+  if (amountPerClaimOnChain <= 0 || (claimedCount + 1) * amountPerClaimOnChain > totalAmountOnChain) {
+    return false;
+  }
+
+  if (!campaign.merkle_data) {
+    return !campaign.require_kyc;
+  }
+  try {
+    const merkleData = JSON.parse(campaign.merkle_data);
+    const proofsMap = new Map(merkleData.proofs);
+    return proofsMap.has(address)
+      && Array.isArray(merkleData.recipients)
+      && merkleData.recipients.some((r: any) => r.address === address);
+  } catch (error) {
+    console.warn('[airdrops] Unreadable merkle_data, hiding from claimable list', {
+      campaignId: campaign.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+async function recordAirdropClaim(
+  campaign: any,
+  claimer: string,
+  amount: number,
+  txHash: string,
+  now: number,
+): Promise<void> {
+  await db!.prepare(`
+    INSERT INTO airdrop_claims (id, campaign_id, claimer, amount, claimed_at, tx_hash)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(randomUUID(), campaign.id, claimer, amount, now, txHash);
+
+  await db!.prepare(`
+    UPDATE airdrops
+    SET claimed_count = claimed_count + 1, updated_at = ?
+    WHERE id = ?
+  `).run(now, campaign.id);
+  await db!
+    .prepare('DELETE FROM airdrop_claim_reservations WHERE campaign_id = ? AND claimer = ? AND tx_hash = ?')
+    .run(campaign.id, claimer, txHash);
+  await recordActivityEvent({
+    entityType: 'airdrop',
+    entityId: campaign.id,
+    eventType: 'claim',
+    actor: claimer,
+    amount,
+    txHash,
+    status: String(campaign.status || 'ACTIVE'),
+    createdAt: now,
+  });
+}
+
+async function readAirdropStateOutpoint(contractAddress: string): Promise<string | null> {
+  try {
+    const utxos = await new ElectrumNetworkProvider(resolveBchNetwork()).getUtxos(contractAddress);
+    const state = utxos.find((utxo) => utxo.token?.nft != null);
+    return state ? `${state.txid}:${state.vout}` : null;
+  } catch (error) {
+    console.warn('[airdrops] Failed to read state UTXO', { contractAddress, error });
+    return null;
+  }
+}
+
 function normalizeAirdropTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN' {
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
@@ -1152,7 +1407,7 @@ function hashToP2pkhAddress(hash20: Uint8Array): string {
   lockingBytecode[24] = 0xac;
   const encoded = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
-    prefix: 'bchtest',
+    prefix: resolveBchNetwork() === 'mainnet' ? 'bitcoincash' : 'bchtest',
   });
   if (typeof encoded === 'string') {
     throw new Error(`Failed to encode authority P2PKH address: ${encoded}`);
@@ -1222,7 +1477,7 @@ function normalizeCampaignForResponse(req: Request, campaign: any): any {
     return campaign;
   }
   return {
-    ...campaign,
+    ...omitSecretColumns(campaign),
     claim_link: normalizeClaimLinkForResponse(req, campaign.claim_link),
   };
 }

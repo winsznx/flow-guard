@@ -11,6 +11,8 @@ import { buildFundingWcTransaction } from '../utils/wcFundingBuilder.js';
 import { toNonNegativeBigInt } from '../utils/bigint.js';
 import {
   getRequiredContractFundingSatoshis,
+  getStatefulContractReserveSatoshis,
+  getTokenFundingSatoshis,
   getTokenOutputDustSatoshis,
 } from '../utils/fundingConfig.js';
 import {
@@ -27,6 +29,7 @@ export interface FundingTransactionParams {
   tokenCategory?: string; // hex-encoded 32-byte category ID
   nftCommitment: string; // hex-encoded NFT commitment
   nftCapability: 'minting' | 'mutable' | 'none';
+  contractSatoshis?: bigint; // BCH locked in the contract output; defaults to the module funding config
   // Contract constructor params (from StreamDeploymentService)
   constructorParams?: {
     vaultId: string; // hex
@@ -48,6 +51,7 @@ export interface BatchFundingItem {
   tokenCategory?: string;
   nftCommitment: string;
   nftCapability: 'minting' | 'mutable' | 'none';
+  contractSatoshis?: bigint;
 }
 
 export interface BatchFundingTransactionParams {
@@ -93,6 +97,46 @@ export interface UnsignedFundingTransaction {
   }>;
   requiredSignatures: string[]; // Addresses that need to sign
   wcTransaction: WcTransactionObject;
+}
+
+// Every claim, pause and resume pays its network fee out of the contract's own BCH
+// (the covenants cap outputs at 2, so no outside fee input fits), so the reserve has
+// to cover every spend the schedule can need, not just one.
+const STREAM_SPEND_FEE_SATOSHIS = 4_000n;
+const TOKEN_STREAM_SPEND_SATOSHIS = 5_000n; // 1,000-sat recipient token output + fee
+const STREAM_STATE_DUST_SATOSHIS = 546n;
+const STREAM_CONTROL_SPENDS = 2; // one pause and one resume
+// Unused reserve is never returned: a BCH split cancel can't add a change output and
+// burns it as fee, and a completed stream strands it in the state UTXO. So vesting
+// schedules get a fixed claim budget (one claim can take any number of steps or
+// tranches, and the claim builder refuses a partial claim that would strand the rest),
+// and recurring, which pays exactly one interval per claim, is capped at create.
+export const CONTINUOUS_STREAM_CLAIM_BUDGET = 12;
+export const MAX_RECURRING_STREAM_PAYMENTS = 120;
+
+export function getStreamSpendBudget(maxClaims: number): bigint {
+  const claims = Number.isFinite(maxClaims) && maxClaims > 0 ? Math.ceil(maxClaims) : CONTINUOUS_STREAM_CLAIM_BUDGET;
+  return BigInt(Math.min(claims, MAX_RECURRING_STREAM_PAYMENTS) + STREAM_CONTROL_SPENDS);
+}
+
+/**
+ * BCH to lock in a single-UTXO stream contract: the principal (BCH streams) plus a
+ * fee reserve sized by the schedule's claim count. Never below the module default.
+ */
+export function getStreamContractFundingSatoshis(
+  tokenType: 'BCH' | 'FUNGIBLE_TOKEN' | undefined,
+  principalSatoshis: bigint,
+  maxClaims: number,
+): bigint {
+  const spends = getStreamSpendBudget(maxClaims);
+  if (tokenType === 'FUNGIBLE_TOKEN') {
+    const sized = spends * TOKEN_STREAM_SPEND_SATOSHIS + STREAM_STATE_DUST_SATOSHIS;
+    const configured = getTokenFundingSatoshis('stream');
+    return sized > configured ? sized : configured;
+  }
+  const sized = spends * STREAM_SPEND_FEE_SATOSHIS + STREAM_STATE_DUST_SATOSHIS;
+  const configured = getStatefulContractReserveSatoshis();
+  return principalSatoshis + (sized > configured ? sized : configured);
 }
 
 export class StreamFundingService {
@@ -149,7 +193,8 @@ export class StreamFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis(); // Minimum BCH for token outputs
     const amountOnChain = toNonNegativeBigInt(amount, 'amount');
-    const contractOutput = getRequiredContractFundingSatoshis('stream', tokenType, amountOnChain);
+    const contractOutput = params.contractSatoshis
+      ?? getRequiredContractFundingSatoshis('stream', tokenType, amountOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
     let authorityChangeOutput: TransactionOutput | null = null;
 
@@ -338,7 +383,7 @@ export class StreamFundingService {
       inputOwnerAddress: senderAddress,
       inputs: sourceOutputs,
       outputs,
-      userPrompt: `Fund stream contract ${contractAddress}`,
+      userPrompt: 'Fund this stream',
       broadcast: false,
     });
 
@@ -411,7 +456,8 @@ export class StreamFundingService {
       const stateTokenCategory = categoryAnchor.txid;
       for (const item of items) {
         const amountOnChain = toNonNegativeBigInt(item.amount, 'batch stream amount');
-        const requiredSatoshis = getRequiredContractFundingSatoshis('stream', 'BCH', amountOnChain);
+        const requiredSatoshis = item.contractSatoshis
+          ?? getRequiredContractFundingSatoshis('stream', 'BCH', amountOnChain);
         contractOutputs.push({
           to: item.contractAddress,
           amount: requiredSatoshis.toString(),
@@ -477,7 +523,8 @@ export class StreamFundingService {
 
       for (const item of items) {
         const amountOnChain = toNonNegativeBigInt(item.amount, 'batch token stream amount');
-        const requiredSatoshis = getRequiredContractFundingSatoshis('stream', 'FUNGIBLE_TOKEN', amountOnChain);
+        const requiredSatoshis = item.contractSatoshis
+          ?? getRequiredContractFundingSatoshis('stream', 'FUNGIBLE_TOKEN', amountOnChain);
         contractOutputs.push({
           to: item.contractAddress,
           amount: requiredSatoshis.toString(),
@@ -569,7 +616,7 @@ export class StreamFundingService {
       inputOwnerAddress: senderAddress,
       inputs: sourceOutputs,
       outputs,
-      userPrompt: `Fund ${items.length} stream contracts`,
+      userPrompt: `Fund ${items.length} streams`,
       broadcast: false,
     });
 

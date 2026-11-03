@@ -6,10 +6,8 @@
 import { ElectrumNetworkProvider, type WcTransactionObject } from 'cashscript';
 import { buildFundingWcTransaction } from '../utils/wcFundingBuilder.js';
 import { toNonNegativeBigInt } from '../utils/bigint.js';
-import {
-  getRequiredContractFundingSatoshis,
-  getTokenOutputDustSatoshis,
-} from '../utils/fundingConfig.js';
+import { getTokenOutputDustSatoshis } from '../utils/fundingConfig.js';
+import { getStreamContractFundingSatoshis } from './StreamFundingService.js';
 import {
   getAuthorityCommitmentHex,
   selectTokenFundingInputs,
@@ -36,6 +34,21 @@ export interface FundingTransactionParams {
   tokenCategory?: string;
   nftCommitment: string;
   nftCapability: 'minting' | 'mutable' | 'none';
+  /** Payments the schedule funds; sizes the BCH fee reserve. */
+  fundedPeriods: number;
+}
+
+/**
+ * A recurring payment runs on the same covenant as a recurring stream: every claim,
+ * pause and resume pays its fee from the contract's BCH, so a BCH payment locks the
+ * same reserve a recurring stream with that many payments does.
+ */
+export function getPaymentContractFundingSatoshis(
+  tokenType: 'BCH' | 'FUNGIBLE_TOKEN' | undefined,
+  principalSatoshis: bigint,
+  fundedPeriods: number,
+): bigint {
+  return getStreamContractFundingSatoshis(tokenType, principalSatoshis, fundedPeriods);
 }
 
 export interface UnsignedFundingTransaction {
@@ -80,6 +93,7 @@ export class PaymentFundingService {
       tokenCategory,
       nftCommitment,
       nftCapability,
+      fundedPeriods,
     } = params;
 
     // Get UTXOs for sender
@@ -94,7 +108,7 @@ export class PaymentFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis();
     const amountOnChain = toNonNegativeBigInt(amount, 'amount');
-    const contractOutput = getRequiredContractFundingSatoshis('payment', tokenType, amountOnChain);
+    const contractOutput = getPaymentContractFundingSatoshis(tokenType, amountOnChain, fundedPeriods);
     let stateTokenCategory: string | undefined = tokenCategory;
     let authorityChangeOutput: TransactionOutput | null = null;
 
@@ -277,7 +291,7 @@ export class PaymentFundingService {
       inputOwnerAddress: senderAddress,
       inputs: sourceOutputs,
       outputs,
-      userPrompt: `Fund recurring payment contract ${contractAddress}`,
+      userPrompt: 'Fund your recurring payment',
       broadcast: false,
     });
 

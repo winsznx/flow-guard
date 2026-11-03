@@ -9,7 +9,8 @@ import {
 } from 'cashscript';
 import { binToHex, cashAddressToLockingBytecode, hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
-import { finalizeWcTransactionSequences } from './txFinality.js';
+import { finalizeWcTransactionSequences, mineableLocktime } from './txFinality.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface PaymentControlBuildParams {
   contractAddress: string;
@@ -42,7 +43,7 @@ export class PaymentControlService {
   }
 
   async buildPauseTransaction(params: PaymentControlBuildParams): Promise<PaymentControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.artifactForAddress('RecurringPaymentCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -101,14 +102,14 @@ export class PaymentControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Pause recurring payment',
+        userPrompt: 'Pause payments',
       })),
       nextStatus: 'PAUSED',
     };
   }
 
   async buildResumeTransaction(params: PaymentControlBuildParams): Promise<PaymentControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.artifactForAddress('RecurringPaymentCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -167,14 +168,14 @@ export class PaymentControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Resume recurring payment',
+        userPrompt: 'Resume payments',
       })),
       nextStatus: 'ACTIVE',
     };
   }
 
   async buildCancelTransaction(params: PaymentControlBuildParams): Promise<PaymentControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.artifactForAddress('RecurringPaymentCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -195,7 +196,7 @@ export class PaymentControlService {
     const senderReturnAddress = this.p2pkhFromHash(senderHash);
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(mineableLocktime(params.currentTime));
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.cancel(
@@ -210,7 +211,7 @@ export class PaymentControlService {
       if (params.tokenType === 'FUNGIBLE_TOKEN') {
         const tokenCategory = contractUtxo.token.category;
         txBuilder.addOutput({
-          to: senderReturnAddress,
+          to: toTokenAwareAddress(senderReturnAddress),
           amount: 1000n,
           token: {
             category: tokenCategory,
@@ -241,7 +242,7 @@ export class PaymentControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Cancel recurring payment and recover remaining funds',
+        userPrompt: 'Cancel this recurring payment and return the rest to you',
       })),
       nextStatus: 'CANCELLED',
       senderReturnAddress,
@@ -254,7 +255,7 @@ export class PaymentControlService {
       throw new Error('Refill amount must be greater than zero');
     }
 
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.artifactForAddress('RecurringPaymentCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -282,7 +283,7 @@ export class PaymentControlService {
     const feeReserve = 2000n;
     const senderUnlocker = placeholderP2PKHUnlocker(params.senderAddress);
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(mineableLocktime(params.currentTime));
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.refill(
@@ -358,7 +359,7 @@ export class PaymentControlService {
 
       if (tokenChange > 0n) {
         txBuilder.addOutput({
-          to: params.senderAddress,
+          to: toTokenAwareAddress(params.senderAddress),
           amount: tokenChangeDust,
           token: {
             category: tokenCategory,
@@ -414,7 +415,7 @@ export class PaymentControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Refill recurring stream runway',
+        userPrompt: 'Add funds to this recurring payment',
       })),
       nextStatus: status === 1 ? 'PAUSED' : 'ACTIVE',
     };

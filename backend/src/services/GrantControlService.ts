@@ -19,6 +19,8 @@ import {
   cashAddressToLockingBytecode,
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
+import { addV2CampaignCancelOutputs } from '../utils/campaignCancel.js';
 
 export interface GrantControlBuildParams {
   contractAddress: string;
@@ -35,7 +37,7 @@ export interface GrantTransferBuildParams extends GrantControlBuildParams {
 
 export interface GrantControlBuildResult {
   wcTransaction: WcTransactionObject;
-  nextStatus: 'PAUSED' | 'CANCELLED';
+  nextStatus: 'ACTIVE' | 'PAUSED' | 'CANCELLED';
   cancelReturnAddress?: string;
   remainingAmount?: bigint;
 }
@@ -55,7 +57,7 @@ export class GrantControlService {
   }
 
   async buildPauseTransaction(params: GrantControlBuildParams): Promise<GrantControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('GrantCovenant');
+    const artifact = ContractFactory.artifactForAddress('GrantCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -118,7 +120,7 @@ export class GrantControlService {
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Pause grant program',
+      userPrompt: 'Pause this grant',
     }));
 
     return {
@@ -127,8 +129,65 @@ export class GrantControlService {
     };
   }
 
+  async buildResumeTransaction(params: GrantControlBuildParams): Promise<GrantControlBuildResult> {
+    const artifact = ContractFactory.artifactForAddress('GrantCovenant', params.constructorParams, params.contractAddress);
+    const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
+    const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
+
+    const status = commitment[0] ?? 0;
+    if (status !== 1) {
+      throw new Error('Grant must be PAUSED to resume');
+    }
+
+    const newCommitment = new Uint8Array(40);
+    newCommitment[0] = 0; // ACTIVE
+    newCommitment.set(commitment.slice(1, 36), 1);
+    newCommitment.fill(0, 36);
+
+    // Grant.resume caps outputs at <= 1 like pause, so the fee comes out of the
+    // contract balance. No CLTV on resume.
+    const feeReserve = 4000n;
+
+    const txBuilder = new TransactionBuilder({ provider: this.provider });
+    txBuilder.setLocktime(0);
+    txBuilder.addInput(
+      contractUtxo,
+      contract.unlock.resume(
+        placeholderSignature(),
+        placeholderPublicKey(),
+      ),
+    );
+    const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
+    if (stateOutputSatoshis < 546n) {
+      throw new Error('Insufficient contract balance to resume grant');
+    }
+
+    txBuilder.addOutput({
+      to: contract.tokenAddress,
+      amount: stateOutputSatoshis,
+      token: {
+        category: contractUtxo.token.category,
+        amount: contractUtxo.token.amount ?? 0n,
+        nft: {
+          capability: contractUtxo.token.nft.capability as 'none' | 'mutable' | 'minting',
+          commitment: binToHex(newCommitment),
+        },
+      },
+    });
+
+    const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
+      broadcast: true,
+      userPrompt: 'Resume this grant',
+    }));
+
+    return {
+      wcTransaction,
+      nextStatus: 'ACTIVE',
+    };
+  }
+
   async buildCancelTransaction(params: GrantControlBuildParams): Promise<GrantControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('GrantCovenant');
+    const artifact = ContractFactory.artifactForAddress('GrantCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -161,78 +220,89 @@ export class GrantControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 2500n;
-    const feePayer = params.feePayerAddress
-      ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
-      : null;
-    if (feePayer) {
-      const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
-      for (const utxo of feePayer.utxos) {
-        txBuilder.addInput(utxo, unlocker);
+    if (ContractFactory.isV2(ContractFactory.typeForAddress('GrantCovenant', params.constructorParams, params.contractAddress))) {
+      addV2CampaignCancelOutputs({
+        txBuilder,
+        contractUtxo,
+        tokenType: params.tokenType,
+        remainingPool: remainingAmount,
+        returnAddress: cancelReturnAddress,
+      });
+    } else {
+      const feeReserve = 2500n;
+      const feePayer = params.feePayerAddress
+        ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
+        : null;
+      if (feePayer) {
+        const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
+        for (const utxo of feePayer.utxos) {
+          txBuilder.addInput(utxo, unlocker);
+        }
       }
-    }
 
-    let spentSatoshis = 0n;
-    if (params.tokenType === 'FUNGIBLE_TOKEN') {
-      if (!contractUtxo.token?.category) {
-        throw new Error('Cancel requires tokenized covenant UTXO with token category');
-      }
-      txBuilder.addOutput({
-        to: cancelReturnAddress,
-        amount: 1000n,
-        token: {
-          category: contractUtxo.token.category,
+      let spentSatoshis = 0n;
+      if (params.tokenType === 'FUNGIBLE_TOKEN') {
+        if (!contractUtxo.token?.category) {
+          throw new Error('Cancel requires tokenized covenant UTXO with token category');
+        }
+        txBuilder.addOutput({
+          to: toTokenAwareAddress(cancelReturnAddress),
+          amount: 1000n,
+          token: {
+            category: contractUtxo.token.category,
+            amount: remainingAmount,
+          },
+        });
+        spentSatoshis += 1000n;
+      } else {
+        if (remainingAmount < 546n) {
+          throw new Error('Remaining BCH amount is below dust and cannot be cancelled');
+        }
+        if (contractUtxo.satoshis < remainingAmount) {
+          throw new Error('Contract balance is below remaining BCH amount');
+        }
+        txBuilder.addOutput({
+          to: cancelReturnAddress,
           amount: remainingAmount,
-        },
-      });
-      spentSatoshis += 1000n;
-    } else {
-      if (remainingAmount < 546n) {
-        throw new Error('Remaining BCH amount is below dust and cannot be cancelled');
+        });
+        spentSatoshis += remainingAmount;
       }
-      if (contractUtxo.satoshis < remainingAmount) {
-        throw new Error('Contract balance is below remaining BCH amount');
-      }
-      txBuilder.addOutput({
-        to: cancelReturnAddress,
-        amount: remainingAmount,
-      });
-      spentSatoshis += remainingAmount;
-    }
 
-    if (feePayer) {
-      const contractChange = contractUtxo.satoshis - spentSatoshis;
-      if (contractChange > 546n) {
-        txBuilder.addOutput({
-          to: cancelReturnAddress,
-          amount: contractChange,
-        });
+      if (feePayer) {
+        const contractChange = contractUtxo.satoshis - spentSatoshis;
+        if (contractChange > 546n) {
+          txBuilder.addOutput({
+            to: cancelReturnAddress,
+            amount: contractChange,
+          });
+        }
+        const feeChange = feePayer.total - feeReserve;
+        if (feeChange > 546n) {
+          txBuilder.addOutput({
+            to: params.feePayerAddress!,
+            amount: feeChange,
+          });
+        }
+      } else {
+        const contractChange = contractUtxo.satoshis - spentSatoshis - feeReserve;
+        if (contractChange < 0n) {
+          throw new Error(
+            'Cancel requires an additional fee-paying input. Provide signer address with spendable BCH.'
+          );
+        }
+        if (contractChange > 546n) {
+          txBuilder.addOutput({
+            to: cancelReturnAddress,
+            amount: contractChange,
+          });
+        }
       }
-      const feeChange = feePayer.total - feeReserve;
-      if (feeChange > 546n) {
-        txBuilder.addOutput({
-          to: params.feePayerAddress!,
-          amount: feeChange,
-        });
-      }
-    } else {
-      const contractChange = contractUtxo.satoshis - spentSatoshis - feeReserve;
-      if (contractChange < 0n) {
-        throw new Error(
-          'Cancel requires an additional fee-paying input. Provide signer address with spendable BCH.'
-        );
-      }
-      if (contractChange > 546n) {
-        txBuilder.addOutput({
-          to: cancelReturnAddress,
-          amount: contractChange,
-        });
-      }
+
     }
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Cancel grant program and recover remaining funds',
+      userPrompt: 'Cancel this grant and return the rest to you',
     }));
 
     return {
@@ -244,7 +314,7 @@ export class GrantControlService {
   }
 
   async buildTransferTransaction(params: GrantTransferBuildParams): Promise<GrantTransferBuildResult> {
-    const artifact = ContractFactory.getArtifact('GrantCovenant');
+    const artifact = ContractFactory.artifactForAddress('GrantCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -315,7 +385,7 @@ export class GrantControlService {
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Transfer grant to new recipient',
+      userPrompt: 'Move this grant to a new recipient',
     }));
 
     return {

@@ -66,6 +66,8 @@ interface PublicStatusPayload {
    * Recent incidents. Empty until an `incidents` table exists.
    * TODO(status-phase-2): backfill from incidents/incident_updates tables.
    */
+  /** `false` until an incidents store exists, so clients can tell "none recorded" from "not tracked". */
+  incidentsTracked: boolean;
   incidents: Array<{
     id: string;
     title: string;
@@ -166,11 +168,14 @@ async function probeChainTip(network: NetworkName): Promise<{
   const startedAt = Date.now();
 
   try {
-    const height = await Promise.race<number>([
-      provider.getBlockHeight(),
-      new Promise<number>((_, reject) => setTimeout(() => reject(new Error('electrum timeout')), ELECTRUM_TIMEOUT_MS)),
-    ]);
+    const tip = await Promise.race([
+      provider.performRequest('blockchain.headers.subscribe'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('electrum timeout')), ELECTRUM_TIMEOUT_MS)),
+    ]) as unknown as { height: number; hex?: unknown };
+    const height = tip.height;
     const latencyMs = Date.now() - startedAt;
+    const headerTime = headerTimestampSeconds(tip.hex);
+    const ageSeconds = headerTime === null ? null : Math.max(0, Math.floor(Date.now() / 1000) - headerTime);
 
     // Build a tiny synthetic sparkline of the last 12 block heights so the UI has
     // something deterministic to render. Real per-block timestamps belong in
@@ -183,7 +188,7 @@ async function probeChainTip(network: NetworkName): Promise<{
     return {
       status: 'operational',
       height,
-      ageSeconds: null,
+      ageSeconds,
       latencyMs,
       recentHeights,
       error: null,
@@ -200,6 +205,12 @@ async function probeChainTip(network: NetworkName): Promise<{
   } finally {
     await provider.disconnect().catch(() => undefined);
   }
+}
+
+/** Block header timestamp: bytes 68-71 of the 80-byte header, little-endian. */
+function headerTimestampSeconds(hex: unknown): number | null {
+  if (typeof hex !== 'string' || !/^[0-9a-fA-F]{160}$/.test(hex)) return null;
+  return Buffer.from(hex, 'hex').readUInt32LE(68);
 }
 
 async function probeFrontendEdge(url: string | undefined, name: string, group: PublicComponent['group'], id: string, description: string): Promise<PublicComponent> {
@@ -316,7 +327,8 @@ async function buildPublicStatus(): Promise<PublicStatusPayload> {
     id: 'api',
     name: 'API',
     group: 'API',
-    status: 'operational',
+    // Nearly every endpoint needs the database, so a DB outage degrades the API.
+    status: database.status === 'outage' ? 'degraded' : 'operational',
     description: 'api.flowguard.cash — backend REST surface',
     latencyMs: null,
     uptime90d: null,
@@ -456,6 +468,7 @@ async function buildPublicStatus(): Promise<PublicStatusPayload> {
     },
     components,
     summary,
+    incidentsTracked: false,
     incidents: [],
   };
 }
@@ -489,9 +502,8 @@ router.get('/status', async (_req: Request, res: Response) => {
 /**
  * GET /api/status/incidents
  *
- * Placeholder. Returns an empty list until the `incidents` and `incident_updates`
- * tables exist. The public StatusPage reads this endpoint and renders an
- * empty-state when no incidents are returned.
+ * No incidents store exists yet, so this reports `tracked: false` with an empty
+ * list. Clients must not read the empty list as "no incidents happened".
  *
  * TODO(status-phase-2): back this with a real incidents store + RSS/Atom feeds.
  */
@@ -499,7 +511,7 @@ router.get('/status/incidents', (_req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'public, max-age=60');
   res.json({
     incidents: [],
-    note: 'Incidents API not yet backed by a persistent store. Returns an empty list.',
+    tracked: false,
   });
 });
 

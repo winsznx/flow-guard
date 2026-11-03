@@ -20,3 +20,20 @@ import type { WcTransactionObject } from 'cashscript';
 export function finalizeWcTransactionSequences(wcTransaction: WcTransactionObject): WcTransactionObject {
   return wcTransaction;
 }
+
+/**
+ * Median-time-past trails wall time by up to about an hour, and a transaction whose
+ * nLockTime is ahead of it is rejected as non-final. Every builder that writes
+ * `tx.locktime` (and any state derived from it) uses this value instead of the raw clock.
+ */
+export const MEDIAN_TIME_PAST_BUFFER_SECONDS = 7200;
+
+export function mineableLocktime(nowSeconds: number): number {
+  return Math.max(0, nowSeconds - MEDIAN_TIME_PAST_BUFFER_SECONDS);
+}
+
+/**
+ * Token covenants measure vesting from `tx.locktime`, so a cancel can only be built once
+ * the mineable lock time has passed the stream's start.
+ */
+export const TOKEN_CANCEL_TOO_EARLY = 'A token stream can be cancelled about 2 hours after it starts. Try again later.';

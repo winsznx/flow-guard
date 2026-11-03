@@ -8,7 +8,8 @@ import {
 } from 'cashscript';
 import { binToHex, hexToBin } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
-import { finalizeWcTransactionSequences } from './txFinality.js';
+import { StreamControlService } from './StreamControlService.js';
+import { finalizeWcTransactionSequences, mineableLocktime } from './txFinality.js';
 
 export interface BudgetControlBuildParams {
   contractAddress: string;
@@ -19,18 +20,29 @@ export interface BudgetControlBuildParams {
 
 export interface BudgetControlBuildResult {
   wcTransaction: WcTransactionObject;
-  nextStatus: 'PAUSED';
+  nextStatus: 'PAUSED' | 'ACTIVE';
 }
 
 export class BudgetControlService {
   private provider: ElectrumNetworkProvider;
 
-  constructor(network: 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet' = 'chipnet') {
+  constructor(private readonly network: 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet' = 'chipnet') {
     this.provider = new ElectrumNetworkProvider(network);
   }
 
+  /** A budget plan is a VestingCovenant, so resuming moves its cursor past the pause exactly as a stream's. */
+  async buildResumeTransaction(params: BudgetControlBuildParams): Promise<BudgetControlBuildResult> {
+    const built = await new StreamControlService(this.network).buildResumeTransaction({
+      ...params,
+      streamType: 'STEP',
+      tokenType: 'BCH',
+      userPrompt: 'Resume budget plan',
+    });
+    return { wcTransaction: built.wcTransaction, nextStatus: 'ACTIVE' };
+  }
+
   async buildPauseTransaction(params: BudgetControlBuildParams): Promise<BudgetControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('VestingCovenant');
+    const artifact = ContractFactory.artifactForAddress('VestingCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -52,17 +64,17 @@ export class BudgetControlService {
     newCommitment[1] = flags;
     newCommitment.set(commitment.slice(2, 10), 2);  // total_released
     newCommitment.set(commitment.slice(10, 15), 10); // cursor
-    this.setUint40LE(newCommitment, 15, params.currentTime); // pause_start
+    this.setUint40LE(newCommitment, 15, mineableLocktime(params.currentTime)); // pause_start
     newCommitment.set(commitment.slice(20, 40), 20); // recipient hash
 
-    const feeReserve = 900n;
+    const feeReserve = 4000n; // must clear min relay and stay under the covenant's 5000 cap
     const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error('Insufficient contract balance to pause budget plan');
     }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(mineableLocktime(params.currentTime));
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.pause(

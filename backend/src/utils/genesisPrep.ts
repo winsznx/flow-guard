@@ -64,7 +64,7 @@ export async function checkAndPrepareGenesisUtxo(
         inputOwnerAddress: address,
         inputs: sourceOutputs,
         outputs,
-        userPrompt: 'Prepare wallet for token creation (consolidation)',
+        userPrompt: 'Get your wallet ready to fund. This sends BCH back to your own wallet.',
     });
 
     return {

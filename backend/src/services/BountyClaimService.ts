@@ -16,6 +16,7 @@ import {
 import { hexToBin, binToHex, hash160, secp256k1 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface ClaimTransactionParams {
   bountyId: string;
@@ -94,7 +95,7 @@ export class BountyClaimService {
       throw new Error('proofHash must be non-zero');
     }
 
-    const artifact = ContractFactory.getArtifact('BountyCovenant');
+    const artifact = ContractFactory.artifactForAddress('BountyCovenant', constructorParams, contractAddress);
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     const contractUtxos = await this.provider.getUtxos(contractAddress);
@@ -225,7 +226,7 @@ export class BountyClaimService {
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       txBuilder.addOutput({
-        to: winnerAddress,
+        to: toTokenAwareAddress(winnerAddress),
         amount: 1000n,
         token: { category: tokenCategory, amount: rewardPerWinner },
       });
@@ -244,7 +245,7 @@ export class BountyClaimService {
         },
       });
     } else {
-      txBuilder.addOutput({ to: winnerAddress, amount: rewardPerWinner });
+      txBuilder.addOutput({ to: toTokenAwareAddress(winnerAddress), amount: rewardPerWinner });
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
@@ -266,7 +267,7 @@ export class BountyClaimService {
 
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Claim bounty reward',
+      userPrompt: 'Pay this bounty winner',
     });
 
     console.log('[BountyClaimService] Built claim transaction', {

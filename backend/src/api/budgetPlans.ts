@@ -6,7 +6,7 @@ import {
   hexToBin,
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
-import { callerAddress } from '../middleware/auth.js';
+import { callerAddress, requireWalletAuth } from '../middleware/auth.js';
 import db from '../database/schema.js';
 import { BudgetDeploymentService } from '../services/BudgetDeploymentService.js';
 import { BudgetReleaseService } from '../services/BudgetReleaseService.js';
@@ -21,7 +21,9 @@ import {
   isFungibleTokenType,
   onChainAmountToDisplay,
 } from '../utils/amounts.js';
-import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { ElectrumNetworkProvider } from 'cashscript';
+import { checkAndPrepareGenesisUtxo } from '../utils/genesisPrep.js';
+import { getStreamContractFundingSatoshis } from '../services/StreamFundingService.js';
 
 const router = Router();
 
@@ -210,15 +212,29 @@ router.get('/budget-plans/:id/funding-info', async (req, res) => {
 
     // Build funding transaction using BudgetFundingService
     const fundingService = new BudgetFundingService(resolveBchNetwork());
-    const fundingTx = await fundingService.buildFundingTransaction({
-      contractAddress: plan.contract_address,
-      senderAddress,
-      totalAmount: fundingAmountOnChain,
-      tokenType: normalizeBudgetTokenType(plan.token_type),
-      tokenCategory: plan.token_category,
-      nftCommitment,
-      nftCapability: 'mutable',
-    });
+    let fundingTx: Awaited<ReturnType<BudgetFundingService['buildFundingTransaction']>>;
+    try {
+      fundingTx = await fundingService.buildFundingTransaction({
+        contractAddress: plan.contract_address,
+        senderAddress,
+        totalAmount: fundingAmountOnChain,
+        tokenType: normalizeBudgetTokenType(plan.token_type),
+        tokenCategory: plan.token_category,
+        nftCommitment,
+        nftCapability: 'mutable',
+        contractSatoshis: budgetContractSatoshis(plan, BigInt(fundingAmountOnChain)),
+      });
+    } catch (fundingError: any) {
+      // The state NFT's category comes from a coin at output index 0; offer the self-send that makes one.
+      if (!String(fundingError?.message || '').includes('outpoint index 0')) throw fundingError;
+      const prep = await checkAndPrepareGenesisUtxo(new ElectrumNetworkProvider(resolveBchNetwork()), senderAddress);
+      if (!prep.required || !prep.wcTransaction) throw fundingError;
+      return res.json({
+        success: true,
+        requiresPreparation: true,
+        preparationTransaction: serializeWcTransaction(prep.wcTransaction),
+      });
+    }
 
     res.json({
       success: true,
@@ -272,11 +288,7 @@ router.post('/budget-plans/:id/confirm-funding', async (req, res) => {
 
     const fundingAmountOnChain = displayAmountToOnChain(plan.total_amount, plan.token_type);
     const isTokenBudget = isFungibleTokenType(plan.token_type);
-    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
-      'budget',
-      isTokenBudget ? 'FUNGIBLE_TOKEN' : 'BCH',
-      BigInt(fundingAmountOnChain),
-    );
+    const minimumContractSatoshis = budgetContractSatoshis(plan, BigInt(fundingAmountOnChain));
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
@@ -552,13 +564,10 @@ router.get('/budget-plans/:id', async (req, res) => {
 });
 
 // Pause budget plan
-router.post('/budget-plans/:id/pause', async (req, res) => {
+router.post('/budget-plans/:id/pause', requireWalletAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const signerAddress = callerAddress(req);
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
+    const signerAddress = req.verifiedUser!.address;
 
     const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
@@ -606,14 +615,11 @@ router.post('/budget-plans/:id/pause', async (req, res) => {
 });
 
 // Confirm budget pause
-router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
+router.post('/budget-plans/:id/confirm-pause', requireWalletAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = callerAddress(req);
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
+    const signerAddress = req.verifiedUser!.address;
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
@@ -676,15 +682,131 @@ router.post('/budget-plans/:id/confirm-pause', async (req, res) => {
   }
 });
 
-// Cancel budget plan
-router.post('/budget-plans/:id/cancel', async (req, res) => {
+// Resume a paused budget plan
+router.post('/budget-plans/:id/resume', requireWalletAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const signerAddress = callerAddress(req);
-    const allowUnsafeRecovery = req.body?.allowUnsafeRecovery === true;
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
+    const signerAddress = req.verifiedUser!.address;
+
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    if (!plan) {
+      return res.status(404).json({ error: 'Budget plan not found' });
     }
+    if (plan.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only paused budget plans can be resumed' });
+    }
+    if (!plan.contract_address || !plan.constructor_params) {
+      return res.status(400).json({ error: 'Budget plan contract is not fully configured' });
+    }
+
+    const constructorParams = deserializeConstructorParams(plan.constructor_params);
+    const senderHash = readBytes20(constructorParams[1], 'senderHash');
+    const controllerAddress = hashToP2pkhAddress(senderHash);
+    if (controllerAddress.toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({
+        error: 'Only the budget controller address can resume this plan',
+        controllerAddress,
+      });
+    }
+
+    const controlService = new BudgetControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
+    const currentCommitment = await contractService.getNFTCommitment(plan.contract_address)
+      || plan.nft_commitment
+      || '00'.repeat(40);
+    const built = await controlService.buildResumeTransaction({
+      contractAddress: plan.contract_address,
+      constructorParams,
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+    });
+
+    res.json({
+      success: true,
+      nextStatus: built.nextStatus,
+      controllerAddress,
+      wcTransaction: serializeWcTransaction(built.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /budget-plans/${req.params.id}/resume error:`, error);
+    res.status(500).json({ error: 'Failed to build resume transaction', message: error.message });
+  }
+});
+
+// Confirm budget resume
+router.post('/budget-plans/:id/confirm-resume', requireWalletAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = req.verifiedUser!.address;
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
+      return res.status(409).json({
+        error: 'Transaction hash not found on chipnet',
+        message: 'Transaction is not indexed yet. Retry confirmation shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
+    if (!plan) {
+      return res.status(404).json({ error: 'Budget plan not found' });
+    }
+
+    const constructorParams = deserializeConstructorParams(plan.constructor_params || '[]');
+    const senderHash = readBytes20(constructorParams[1], 'senderHash');
+    const controllerAddress = hashToP2pkhAddress(senderHash);
+    if (controllerAddress.toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({
+        error: 'Only the budget controller address can confirm resume',
+        controllerAddress,
+      });
+    }
+
+    const hasExpectedState = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: plan.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 35,
+      },
+      resolveBchNetwork(),
+    );
+    if (!hasExpectedState) {
+      return res.status(400).json({
+        error: 'Resume transaction does not include expected budget covenant state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    await db!.prepare('UPDATE budget_plans SET status = ?, updated_at = ? WHERE id = ?')
+      .run('ACTIVE', now, id);
+
+    res.json({ success: true, txHash, status: 'ACTIVE', state: 'confirmed', retryable: false });
+  } catch (error: any) {
+    console.error(`POST /budget-plans/${req.params.id}/confirm-resume error:`, error);
+    res.status(500).json({
+      error: 'Failed to confirm resume',
+      message: error.message,
+      state: 'failed',
+      retryable: false,
+      errorCode: 'CONFIRM_FAILED',
+    });
+  }
+});
+
+// Cancel budget plan
+router.post('/budget-plans/:id/cancel', requireWalletAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = req.verifiedUser!.address;
+    const allowUnsafeRecovery = req.body?.allowUnsafeRecovery === true;
 
     const plan = await db!.prepare('SELECT * FROM budget_plans WHERE id = ?').get(id) as any;
     if (!plan) {
@@ -755,14 +877,11 @@ router.post('/budget-plans/:id/cancel', async (req, res) => {
 });
 
 // Confirm budget cancel
-router.post('/budget-plans/:id/confirm-cancel', async (req, res) => {
+router.post('/budget-plans/:id/confirm-cancel', requireWalletAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
-    const signerAddress = callerAddress(req);
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
+    const signerAddress = req.verifiedUser!.address;
     if (!txHash) {
       return res.status(400).json({ error: 'Transaction hash is required' });
     }
@@ -859,6 +978,16 @@ function mapBudgetPlanRow(row: any) {
   };
 }
 
+/**
+ * A budget plan runs on the vesting covenant, which pays every release, pause and resume
+ * from its own BCH (its claim allows no fee payer), so it holds a reserve sized for its
+ * releases, like a stream with that many claims.
+ */
+function budgetContractSatoshis(plan: any, principalOnChain: bigint): bigint {
+  const tokenType = isFungibleTokenType(plan.token_type) ? 'FUNGIBLE_TOKEN' : 'BCH';
+  return getStreamContractFundingSatoshis(tokenType, principalOnChain, Number(plan.total_milestones || 0));
+}
+
 export default router;
 
 function deserializeConstructorParams(raw: string): any[] {
@@ -891,7 +1020,7 @@ function hashToP2pkhAddress(hash20: Uint8Array): string {
   lockingBytecode[24] = 0xac;
   const encoded = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
-    prefix: 'bchtest',
+    prefix: resolveBchNetwork() === 'mainnet' ? 'bitcoincash' : 'bchtest',
   });
   if (typeof encoded === 'string') {
     throw new Error(`Failed to encode sender P2PKH address: ${encoded}`);

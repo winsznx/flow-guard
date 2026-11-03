@@ -15,6 +15,7 @@ export interface GrantDeploymentParams {
   transferable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface GrantDeploymentParamsWithHash {
@@ -28,6 +29,7 @@ export interface GrantDeploymentParamsWithHash {
   transferable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface GrantDeployment {
@@ -101,10 +103,11 @@ export class GrantDeploymentService {
     return id;
   }
 
-  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'): number {
+  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN', tokenDecimals = 0): number {
     return displayAmountToOnChain(
       amount,
       tokenType === 'FUNGIBLE_TOKEN' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenDecimals,
     );
   }
 
@@ -147,7 +150,7 @@ export class GrantDeploymentService {
     amountPerMilestoneSat: bigint,
     totalAmountSat: bigint,
   ) {
-    const artifact = ContractFactory.getArtifact('GrantCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('GrantCovenant'));
 
     // authorityHash = creator wallet (admin: pause/resume/cancel/transfer); claimAuthorityHash = backend co-signer (releaseMilestone only)
     const constructorArgs = [
@@ -187,8 +190,8 @@ export class GrantDeploymentService {
     const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
-    const amountPerMilestoneSat = BigInt(this.toOnChainAmount(params.amountPerMilestone, params.tokenType));
-    const totalAmountSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType));
+    const amountPerMilestoneSat = BigInt(this.toOnChainAmount(params.amountPerMilestone, params.tokenType, params.tokenDecimals));
+    const totalAmountSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType, params.tokenDecimals));
     const milestonesTotal = BigInt(params.milestonesTotal);
 
     const { contract, constructorParams } = this.buildContract(
@@ -244,8 +247,8 @@ export class GrantDeploymentService {
     const campaignId = new Uint8Array(32);
     campaignId.set(h, 12);
 
-    const amountPerMilestoneSat = BigInt(this.toOnChainAmount(params.amountPerMilestone, params.tokenType));
-    const totalAmountSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType));
+    const amountPerMilestoneSat = BigInt(this.toOnChainAmount(params.amountPerMilestone, params.tokenType, params.tokenDecimals));
+    const totalAmountSat = BigInt(this.toOnChainAmount(params.totalAmount, params.tokenType, params.tokenDecimals));
     const milestonesTotal = BigInt(params.milestonesTotal);
 
     const { contract, constructorParams } = this.buildContract(

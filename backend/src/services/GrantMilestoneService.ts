@@ -8,6 +8,7 @@ import {
 import { hexToBin, binToHex, hash160, secp256k1 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface MilestoneReleaseParams {
   grantId: string;
@@ -73,7 +74,7 @@ export class GrantMilestoneService {
       );
     }
 
-    const artifact = ContractFactory.getArtifact('GrantCovenant');
+    const artifact = ContractFactory.artifactForAddress('GrantCovenant', constructorParams, contractAddress);
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     const contractUtxos = await this.provider.getUtxos(contractAddress);
@@ -168,7 +169,7 @@ export class GrantMilestoneService {
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       txBuilder.addOutput({
-        to: recipientAddress,
+        to: toTokenAwareAddress(recipientAddress),
         amount: 1000n,
         token: { category: tokenCategory, amount: amountPerMilestone },
       });
@@ -187,7 +188,7 @@ export class GrantMilestoneService {
         },
       });
     } else {
-      txBuilder.addOutput({ to: recipientAddress, amount: amountPerMilestone });
+      txBuilder.addOutput({ to: toTokenAwareAddress(recipientAddress), amount: amountPerMilestone });
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
@@ -201,7 +202,7 @@ export class GrantMilestoneService {
     }
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Release grant milestone payment',
+      userPrompt: 'Pay the next grant milestone',
     });
 
     console.log('[GrantMilestoneService] Built release transaction', {

@@ -367,7 +367,9 @@ export class DeploymentRegistryService {
         constructorParamsError = parsed.error;
       } else {
         try {
-          const artifact = ContractFactory.getArtifact(row.contractType);
+          const artifact = row.contractAddress
+            ? ContractFactory.artifactForAddress(row.contractType, parsed.args ?? [], row.contractAddress)
+            : ContractFactory.getArtifact(ContractFactory.latest(row.contractType));
           const contract = new Contract(artifact, parsed.args ?? [], { provider: this.provider });
           expectedAddress = contract.address;
           if (row.contractAddress) {

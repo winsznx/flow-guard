@@ -24,11 +24,11 @@ router.get('/explorer/stats', async (req, res) => {
     // FlowGuard stats
     const vaultCount = (await db!.prepare('SELECT COUNT(*) as n FROM vaults').get() as any).n;
     const streamCount = (await db!.prepare('SELECT COUNT(*) as n FROM streams').get() as any).n;
-    const proposalCount = (await db!.prepare('SELECT COUNT(*) as n FROM proposals').get() as any).n;
+    const proposalCount = (await db!.prepare("SELECT COUNT(*) as n FROM proposals WHERE status <> 'abandoned'").get() as any).n;
 
     // Activity counts
     const activeStreams = (await db!.prepare('SELECT COUNT(*) as n FROM streams WHERE status = ?').get('ACTIVE') as any).n;
-    const activeProposals = (await db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE status = ?').get('PENDING') as any).n;
+    const activeProposals = (await db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE UPPER(status) = ?').get('PENDING') as any).n;
 
     // Volume calculations
     const totalVaultValue = (await db!.prepare('SELECT SUM(total_deposit) as s FROM vaults').get() as any)?.s || 0;
@@ -36,14 +36,14 @@ router.get('/explorer/stats', async (req, res) => {
     // in token units, not BCH, and summing them mixes incomparable units.
     const totalStreamVolume = (await db!.prepare("SELECT SUM(total_amount) as s FROM streams WHERE COALESCE(token_type, 'BCH') = 'BCH'").get() as any)?.s || 0;
     const tokenStreamCount = (await db!.prepare("SELECT COUNT(*) as n FROM streams WHERE COALESCE(token_type, 'BCH') <> 'BCH'").get() as any)?.n || 0;
-    const totalProposalAmount = (await db!.prepare('SELECT SUM(amount) as s FROM proposals').get() as any)?.s || 0;
+    const totalProposalAmount = (await db!.prepare("SELECT SUM(amount) as s FROM proposals WHERE status <> 'abandoned'").get() as any)?.s || 0;
 
     // Recent activity (24h) — vaults/proposals use TIMESTAMPTZ, streams uses BIGINT epoch seconds
     const oneDayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const oneDayAgoEpoch = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
     const recentVaults = (await db!.prepare('SELECT COUNT(*) as n FROM vaults WHERE created_at >= ?').get(oneDayAgoIso) as any).n;
     const recentStreams = (await db!.prepare('SELECT COUNT(*) as n FROM streams WHERE created_at >= ?').get(oneDayAgoEpoch) as any).n;
-    const recentProposals = (await db!.prepare('SELECT COUNT(*) as n FROM proposals WHERE created_at >= ?').get(oneDayAgoIso) as any).n;
+    const recentProposals = (await db!.prepare("SELECT COUNT(*) as n FROM proposals WHERE created_at >= ? AND status <> 'abandoned'").get(oneDayAgoIso) as any).n;
 
     res.json({
       network: {
@@ -133,6 +133,10 @@ router.get('/explorer/transactions', async (req, res) => {
         sql += ' AND v.creator = ?';
         params.push(address);
       }
+      if (status) {
+        sql += " AND (CASE WHEN v.contract_address IS NOT NULL THEN 'DEPLOYED' ELSE 'CREATED' END) = UPPER(?)";
+        params.push(status);
+      }
       if (minAmount) {
         sql += ' AND v.total_deposit >= ?';
         params.push(Number(minAmount));
@@ -165,6 +169,7 @@ router.get('/explorer/transactions', async (req, res) => {
         s.total_amount as amount,
         s.stream_type as name,
         s.token_type,
+        s.token_category,
         'STREAM' as tx_type,
         s.status,
         s.created_at,
@@ -211,6 +216,7 @@ router.get('/explorer/transactions', async (req, res) => {
         p.amount_per_period as amount,
         p.interval as name,
         p.token_type,
+        p.token_category,
         'PAYMENT' as tx_type,
         p.status,
         p.created_at,
@@ -257,6 +263,7 @@ router.get('/explorer/transactions', async (req, res) => {
         a.total_amount as amount,
         a.title as name,
         a.token_type,
+        a.token_category,
         'AIRDROP' as tx_type,
         a.status,
         a.created_at,
@@ -304,17 +311,17 @@ router.get('/explorer/transactions', async (req, res) => {
         p.reason as name,
         'BCH' as token_type, NULL as token_category,
         'PROPOSAL' as tx_type,
-        p.status,
+        UPPER(p.status) as status,
         p.created_at,
         p.tx_hash
-      FROM proposals p WHERE 1=1`;
+      FROM proposals p WHERE p.status <> 'abandoned'`;
 
       if (address) {
         sql += ' AND p.recipient = ?';
         params.push(address);
       }
       if (status) {
-        sql += ' AND p.status = ?';
+        sql += ' AND UPPER(p.status) = UPPER(?)';
         params.push(status);
       }
       if (minAmount) {
@@ -430,19 +437,29 @@ router.get('/explorer/address/:address', async (req, res) => {
     // Get vaults created
     const vaults = await db!.prepare('SELECT * FROM vaults WHERE creator = ? ORDER BY created_at DESC').all(address) as any[];
 
-    // Get vaults where user is signer
-    const signerVaults = await db!.prepare(`
+    // signer_pubkeys holds pubkey hex; addresses live in the signers JSON array.
+    // LIKE is only a prefilter, exact membership is checked on the parsed array.
+    const signerCandidates = await db!.prepare(`
       SELECT * FROM vaults
-      WHERE signer_pubkeys LIKE ?
+      WHERE LOWER(signers) LIKE ?
       ORDER BY created_at DESC
-    `).all(`%${address}%`) as any[];
+    `).all(`%${JSON.stringify(address.toLowerCase()).slice(1, -1)}%`) as any[];
+    const signerVaults = signerCandidates.filter((row) => {
+      try {
+        const parsed = JSON.parse(row.signers);
+        if (!Array.isArray(parsed)) return false;
+        return parsed.some((s) => typeof s === 'string' && s.toLowerCase() === address.toLowerCase());
+      } catch {
+        return false;
+      }
+    });
 
     // Get streams (sent + received)
     const streamsSent = await db!.prepare('SELECT * FROM streams WHERE sender = ? ORDER BY created_at DESC').all(address) as any[];
     const streamsReceived = await db!.prepare('SELECT * FROM streams WHERE recipient = ? ORDER BY created_at DESC').all(address) as any[];
 
     // Get proposals (created + received)
-    const proposalsReceived = await db!.prepare('SELECT * FROM proposals WHERE recipient = ? ORDER BY created_at DESC').all(address) as any[];
+    const proposalsReceived = await db!.prepare("SELECT * FROM proposals WHERE recipient = ? AND status <> 'abandoned' ORDER BY created_at DESC").all(address) as any[];
 
     // Calculate totals — BCH only; CashToken total_amount is in token units and
     // cannot be summed into a BCH figure.
@@ -505,7 +522,8 @@ router.get('/explorer/contract/:address', async (req, res) => {
     }
 
     // Get proposals for this vault
-    const proposals = await db!.prepare('SELECT * FROM proposals WHERE vault_id = ? ORDER BY created_at DESC').all(vault.vault_id) as any[];
+    // Proposals are keyed by vaults.id; legacy rows may hold the logical vault_id.
+    const proposals = await db!.prepare("SELECT * FROM proposals WHERE (vault_id = ? OR vault_id = ?) AND status <> 'abandoned' ORDER BY created_at DESC").all(vault.id, vault.vault_id) as any[];
 
     // Get cycles
     const cycles = await db!.prepare('SELECT * FROM cycles WHERE vault_id = ? ORDER BY cycle_number DESC').all(vault.vault_id) as any[];
@@ -515,8 +533,8 @@ router.get('/explorer/contract/:address', async (req, res) => {
 
     // Calculate contract stats
     const totalProposed = proposals.reduce((sum, p) => sum + p.amount, 0);
-    const totalExecuted = proposals.filter(p => p.status === 'EXECUTED').reduce((sum, p) => sum + p.amount, 0);
-    const pendingProposals = proposals.filter(p => p.status === 'PENDING').length;
+    const totalExecuted = proposals.filter(p => String(p.status).toUpperCase() === 'EXECUTED').reduce((sum, p) => sum + p.amount, 0);
+    const pendingProposals = proposals.filter(p => String(p.status).toUpperCase() === 'PENDING').length;
 
     res.json({
       contract: {
@@ -570,39 +588,63 @@ router.get('/explorer/search', async (req, res) => {
       streams: [],
       proposals: [],
       addresses: [],
+      transactions: [],
     };
+
+    const isTxHash = /^[0-9a-f]{64}$/.test(query);
 
     // Search vaults by name, ID, or address
     results.vaults = await db!.prepare(`
       SELECT vault_id, name, contract_address, creator, total_deposit, created_at
       FROM vaults
       WHERE LOWER(name) LIKE ? OR LOWER(vault_id) LIKE ? OR LOWER(contract_address) LIKE ?
+      ${isTxHash ? 'OR LOWER(tx_hash) = ? OR LOWER(deployment_tx_hash) = ?' : ''}
       LIMIT 10
-    `).all(`%${query}%`, `%${query}%`, `%${query}%`);
+    `).all(`%${query}%`, `%${query}%`, `%${query}%`, ...(isTxHash ? [query, query] : []));
 
     // Search streams by ID or addresses
     results.streams = await db!.prepare(`
-      SELECT stream_id, sender, recipient, total_amount, status, created_at
+      SELECT id, stream_id, sender, recipient, total_amount, token_type, token_category, status, created_at
       FROM streams
       WHERE LOWER(stream_id) LIKE ? OR LOWER(sender) LIKE ? OR LOWER(recipient) LIKE ?
+      ${isTxHash ? "OR LOWER(tx_hash) = ? OR id IN (SELECT entity_id FROM activity_events WHERE entity_type = 'stream' AND LOWER(tx_hash) = ?)" : ''}
       LIMIT 10
-    `).all(`%${query}%`, `%${query}%`, `%${query}%`);
+    `).all(`%${query}%`, `%${query}%`, `%${query}%`, ...(isTxHash ? [query, query] : []));
 
     // Search proposals by reason
     results.proposals = await db!.prepare(`
       SELECT id, vault_id, recipient, amount, reason, status, created_at
       FROM proposals
-      WHERE LOWER(reason) LIKE ? OR LOWER(recipient) LIKE ?
+      WHERE status <> 'abandoned'
+        AND (LOWER(reason) LIKE ? OR LOWER(recipient) LIKE ?
+        ${isTxHash ? 'OR LOWER(tx_hash) = ?' : ''})
       LIMIT 10
-    `).all(`%${query}%`, `%${query}%`);
+    `).all(`%${query}%`, `%${query}%`, ...(isTxHash ? [query] : []));
 
     // If query looks like an address, add it to results
     if (query.startsWith('bchtest:') || query.startsWith('bitcoincash:')) {
       results.addresses.push({ address: q });
     }
 
+    if (isTxHash) {
+      results.transactions = await db!.prepare(`
+        SELECT tx_hash, entity_type, entity_id, event_type, created_at
+        FROM activity_events WHERE LOWER(tx_hash) = ?
+        UNION ALL
+        SELECT tx_hash, 'payment' as entity_type, id as entity_id, 'funded' as event_type, created_at
+        FROM payments WHERE LOWER(tx_hash) = ?
+          AND NOT EXISTS (SELECT 1 FROM activity_events e WHERE e.entity_type = 'payment' AND e.entity_id = payments.id AND LOWER(e.tx_hash) = LOWER(payments.tx_hash))
+        UNION ALL
+        SELECT tx_hash, 'airdrop' as entity_type, id as entity_id, 'funded' as event_type, created_at
+        FROM airdrops WHERE LOWER(tx_hash) = ?
+          AND NOT EXISTS (SELECT 1 FROM activity_events e WHERE e.entity_type = 'airdrop' AND e.entity_id = airdrops.id AND LOWER(e.tx_hash) = LOWER(airdrops.tx_hash))
+        LIMIT 10
+      `).all(query, query, query);
+    }
+
     const totalResults = results.vaults.length + results.streams.length +
-                        results.proposals.length + results.addresses.length;
+                        results.proposals.length + results.addresses.length +
+                        results.transactions.length;
 
     res.json({
       query: q,
@@ -647,7 +689,7 @@ router.get('/explorer/timeline', async (req, res) => {
     }));
 
     // Get recent proposals
-    const proposals = await db!.prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?').all(Number(limit)) as any[];
+    const proposals = await db!.prepare("SELECT * FROM proposals WHERE status <> 'abandoned' ORDER BY created_at DESC LIMIT ?").all(Number(limit)) as any[];
     proposals.forEach(p => timeline.push({
       type: 'PROPOSAL_CREATED',
       id: p.id,
@@ -659,7 +701,7 @@ router.get('/explorer/timeline', async (req, res) => {
     }));
 
     // Sort by timestamp desc
-    timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    timeline.sort((a, b) => (toUnixMs(b.timestamp) ?? 0) - (toUnixMs(a.timestamp) ?? 0));
 
     // Apply pagination
     const paginated = timeline.slice(Number(offset), Number(offset) + Number(limit));
@@ -675,7 +717,11 @@ router.get('/explorer/timeline', async (req, res) => {
   }
 });
 
-function toUnixMs(value: unknown): number {
+function toUnixMs(value: unknown): number | null {
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value > 1_000_000_000_000 ? value : value * 1000;
   }
@@ -689,7 +735,7 @@ function toUnixMs(value: unknown): number {
       return parsed;
     }
   }
-  return Date.now();
+  return null;
 }
 
 export default router;

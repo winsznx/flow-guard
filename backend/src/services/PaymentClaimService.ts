@@ -9,6 +9,7 @@ import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
 import { finalizeWcTransactionSequences } from './txFinality.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface ClaimTransactionParams {
   paymentId: string;
@@ -33,6 +34,16 @@ export interface ClaimTransaction {
   wcTransaction: WcTransactionObject;
 }
 
+// pay() needs nLockTime >= 500000000 and the tx must be mineable now, so nLockTime
+// sits ~2h behind the clock (below median-time-past). Claimability uses the same time.
+const CLAIM_LOCKTIME_BUFFER = 7200;
+
+export function getRecurringClaimLocktime(currentTime: number, endTime?: number): number {
+  const lagged = Math.max(0, currentTime - CLAIM_LOCKTIME_BUFFER);
+  // pay() also needs locktime <= endTimestamp, and the last payment falls due exactly at the end.
+  return endTime && endTime > 0 ? Math.min(lagged, endTime) : lagged;
+}
+
 export class PaymentClaimService {
   private provider: ElectrumNetworkProvider;
   private network: 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet';
@@ -44,9 +55,10 @@ export class PaymentClaimService {
 
   calculateClaimable(params: ClaimTransactionParams): { intervals: number; amount: number } {
     const { nextPaymentTime, currentTime, amountPerInterval, endTime } = params;
+    const locktime = getRecurringClaimLocktime(currentTime, endTime);
 
     // RecurringPaymentCovenant.pay() executes exactly one interval per spend.
-    if (currentTime < nextPaymentTime) {
+    if (locktime < nextPaymentTime) {
       return { intervals: 0, amount: 0 };
     }
     if (endTime && endTime > 0 && nextPaymentTime > endTime) {
@@ -69,7 +81,7 @@ export class PaymentClaimService {
       currentTime,
     } = params;
 
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.artifactForAddress('RecurringPaymentCovenant', constructorParams, contractAddress);
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     const contractUtxos = await this.provider.getUtxos(contractAddress);
@@ -154,10 +166,8 @@ export class PaymentClaimService {
     }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    // pay() enforces tx.time/tx.locktime >= 500000000 (CHECKLOCKTIMEVERIFY). Set
-    // nLockTime ~2h back so it is <= median-time-past (immediately mineable) and
-    // keep the input non-final so the network enforces it.
-    txBuilder.setLocktime(Math.max(0, currentTime - 7200));
+    // Keep the input non-final so the network enforces nLockTime (CHECKLOCKTIMEVERIFY).
+    txBuilder.setLocktime(getRecurringClaimLocktime(currentTime, params.endTime));
     txBuilder.addInput(contractUtxo, contract.unlock.pay(), { sequence: 0xfffffffe });
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
@@ -168,7 +178,7 @@ export class PaymentClaimService {
       }
 
       txBuilder.addOutput({
-        to: recipient,
+        to: toTokenAwareAddress(recipient),
         amount: 1000n,
         token: { category: tokenCategory, amount: claimAmountBig },
       });
@@ -183,7 +193,7 @@ export class PaymentClaimService {
         },
       });
     } else {
-      txBuilder.addOutput({ to: recipient, amount: claimAmountBig });
+      txBuilder.addOutput({ to: toTokenAwareAddress(recipient), amount: claimAmountBig });
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
@@ -198,7 +208,7 @@ export class PaymentClaimService {
 
     const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Claim recurring payment',
+      userPrompt: 'Claim your payment',
     }));
 
     console.log('[PaymentClaimService] Built claim transaction', {

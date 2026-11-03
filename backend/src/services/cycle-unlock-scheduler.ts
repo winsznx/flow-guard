@@ -11,6 +11,7 @@ import { StateService } from './state-service.js';
 import { ContractService } from './contract-service.js';
 import { Contract, ElectrumNetworkProvider, TransactionBuilder, placeholderPublicKey, placeholderSignature } from 'cashscript';
 import { ContractFactory } from './ContractFactory.js';
+import { mineableLocktime } from './txFinality.js';
 import { binToHex, hexToBin } from '@bitauth/libauth';
 import { registerWorker, recordWorkerTick, recordWorkerError, deregisterWorker } from './worker-heartbeats.js';
 
@@ -280,8 +281,7 @@ export class CycleUnlockScheduler {
     }
 
     // Build on-chain unlock transaction using VaultCovenant.unlockPeriod
-    const network: 'chipnet' = 'chipnet';
-    const provider = new ElectrumNetworkProvider(network);
+    const provider = new ElectrumNetworkProvider(resolveBchNetwork());
     const artifact = ContractFactory.getArtifact('VaultCovenant');
     const rawParams = (vault as any).constructorParamsJson || (vault as any).constructor_params;
     const constructorParams = this.parseConstructorParams(rawParams);
@@ -301,7 +301,7 @@ export class CycleUnlockScheduler {
     const lastUpdate = this.readUint64BE(commitment, 17);
     const periodDuration = this.toBigIntParam(constructorParams[5], 'periodDuration');
 
-    const now = Math.floor(Date.now() / 1000);
+    const now = mineableLocktime(Math.floor(Date.now() / 1000));
     const earliest = Number(lastUpdate + periodDuration);
     if (periodDuration > 0n && now < earliest) {
       throw new Error(`Cycle unlock not yet allowed; earliest ${new Date(earliest * 1000).toISOString()}`);

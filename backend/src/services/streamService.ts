@@ -68,17 +68,21 @@ export interface StreamWithVested extends Stream {
   progress_percentage: number;
 }
 
+// Claim transactions set nLockTime this far behind the clock so they are mineable
+// right away, and the covenants measure the schedule at nLockTime. Claimable amounts
+// use the same lag so Claim isn't offered before the chain will accept it.
+export const CLAIM_LOCKTIME_LAG_SECONDS = 7200;
+
 export class StreamService {
   /**
    * Compute vested amount for a stream based on current time
    * Uses linear vesting formula: vested = total * (elapsed / duration)
    */
-  computeVestedAmount(stream: Stream): number {
+  computeVestedAmount(stream: Stream, now: number = Math.floor(Date.now() / 1000)): number {
     if (stream.status === 'PENDING' || stream.status === 'FAILED') {
       return 0;
     }
 
-    const now = Math.floor(Date.now() / 1000); // Current Unix timestamp
     const effectiveStart = stream.effective_start_time ?? stream.start_time;
     const vestingNow = stream.status === 'PAUSED'
       ? Math.max(effectiveStart, stream.pause_started_at ?? now)
@@ -195,18 +199,21 @@ export class StreamService {
     if (stream.status !== 'ACTIVE') {
       return 0;
     }
+    const claimTime = Math.floor(Date.now() / 1000) - CLAIM_LOCKTIME_LAG_SECONDS;
 
     if (
       stream.stream_type === 'RECURRING' &&
       stream.interval_seconds &&
       stream.amount_per_interval !== undefined
     ) {
-      const now = Math.floor(Date.now() / 1000);
       const nextPaymentTime = stream.next_payment_time
         ?? (stream.start_time + stream.interval_seconds);
       const remainingFundedPool = Math.max(0, stream.total_amount - stream.withdrawn_amount);
+      const claimLocktime = stream.end_time && stream.end_time > 0
+        ? Math.min(claimTime, stream.end_time)
+        : claimTime;
 
-      if (now < nextPaymentTime) {
+      if (claimLocktime < nextPaymentTime) {
         return 0;
       }
       if (stream.end_time && stream.end_time > 0 && nextPaymentTime > stream.end_time) {
@@ -218,7 +225,7 @@ export class StreamService {
         : 0;
     }
 
-    const vested = this.computeVestedAmount(stream);
+    const vested = this.computeVestedAmount(stream, claimTime);
     const claimable = vested - stream.withdrawn_amount;
     return Math.max(0, claimable); // Never negative
   }

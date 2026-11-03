@@ -56,16 +56,14 @@ export class ProposalService {
       throw new Error('Vault not found');
     }
 
-    // Get next proposal ID for this vault (on-chain proposal ID)
-    const vaultStmt = db!.prepare('SELECT COUNT(*) as count FROM proposals WHERE vault_id = ?');
-    const vaultRow = await vaultStmt.get(dto.vaultId) as any;
-    const proposalId = (vaultRow?.count || 0) + 1;
-
-    // Verify proposal can be created on-chain
-    const currentState = vault.state || 0;
-    if (StateService.getProposalStatus(currentState, proposalId) !== 0) {
-      throw new Error(`Proposal ID ${proposalId} already exists on-chain`);
-    }
+    // Next on-chain proposal ID. Rows are stored under vaults.id, but rows created
+    // before the routes resolved the vault can carry the logical vault_id, so number
+    // across both forms. Abandoned rows stay in the table, so MAX never hands their
+    // number to a new request.
+    const vaultRow = await db!
+      .prepare('SELECT COALESCE(MAX(proposal_id), 0) as max_id FROM proposals WHERE vault_id IN (?, ?)')
+      .get(vault.id, vault.vaultId || vault.id) as { max_id: number | string } | undefined;
+    const proposalId = Number(vaultRow?.max_id ?? 0) + 1;
 
     // Verify amount doesn't exceed spending cap
     const amountSatoshis = displayAmountToOnChain(dto.amount, 'BCH');
@@ -75,19 +73,19 @@ export class ProposalService {
     }
     
     const payoutHash = createHash('sha256')
-      .update(`${dto.vaultId}:${proposalId}:${dto.recipient}:${dto.amount}:${dto.reason ?? ''}`)
+      .update(`${vault.id}:${proposalId}:${dto.recipient}:${dto.amount}:${dto.reason ?? ''}`)
       .digest('hex');
 
     // Store proposal in database (off-chain metadata)
     const stmt = db!.prepare(`
       INSERT INTO proposals (
-        id, vault_id, proposal_id, recipient, amount, reason, status, approval_count, approvals, payout_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, vault_id, proposal_id, recipient, amount, reason, status, approval_count, approvals, payout_hash, creator
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     await stmt.run(
       id,
-      dto.vaultId,
+      vault.id,
       proposalId,
       dto.recipient,
       dto.amount,
@@ -95,12 +93,13 @@ export class ProposalService {
       ProposalStatus.PENDING,
       0,
       JSON.stringify([]),
-      payoutHash
+      payoutHash,
+      creator
     );
 
-    // Mirror proposal lifecycle in vault state bitfield for compatibility with existing APIs.
-    const newState = StateService.setProposalPending(currentState, proposalId);
-    await VaultService.updateVaultState(dto.vaultId, newState);
+    // vault.state is left alone: its proposal bits sit at 32-63, past what the 32-bit
+    // JS bit operators (and the INTEGER column) can hold, so writing them would flip the
+    // spending-period flags in bits 0-15. proposals.status is the record of the lifecycle.
 
     const proposal = await this.getProposalById(id);
     if (!proposal) {
@@ -185,12 +184,32 @@ export class ProposalService {
       txHash: row.tx_hash,
       contractAddress: row.contract_address || undefined,
       constructorParams: row.constructor_params || undefined,
+      creator: row.creator || undefined,
     };
   }
-  
-  static async getVaultProposals(vaultId: string): Promise<Proposal[]> {
-    const stmt = db!.prepare('SELECT * FROM proposals WHERE vault_id = ? ORDER BY created_at DESC');
-    const rows = await stmt.all(vaultId) as any[];
+
+  /**
+   * Marks a pending request whose on-chain create never landed as abandoned. The
+   * UPDATE re-checks the never-confirmed conditions so a confirm-create racing this
+   * call wins. False when nothing was changed.
+   */
+  static async abandonPendingProposal(proposal: Proposal): Promise<boolean> {
+    // Soft delete: the create tx may still be propagating, and constructor_params is
+    // the only way to rebuild the covenant if it lands.
+    const result = await db!.prepare(`
+      UPDATE proposals
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = ? AND tx_hash IS NULL AND approval_count = 0
+    `).run(ProposalStatus.ABANDONED, proposal.id, ProposalStatus.PENDING);
+    return result.changes > 0;
+  }
+
+  /** Lists a vault's proposals under both id forms (see createProposal). */
+  static async getVaultProposals(vault: { id: string; vaultId: string }): Promise<Proposal[]> {
+    const stmt = db!.prepare(
+      'SELECT * FROM proposals WHERE vault_id IN (?, ?) AND status <> ? ORDER BY created_at DESC',
+    );
+    const rows = await stmt.all(vault.id, vault.vaultId || vault.id, ProposalStatus.ABANDONED) as any[];
     
     return rows.map(row => ({
       id: row.id,
@@ -239,23 +258,10 @@ export class ProposalService {
       throw new Error('Only designated vault signers can approve proposals');
     }
 
-    const currentState = vault.state || 0;
-
-    // Verify proposal is pending on-chain
-    if (!StateService.isProposalPending(currentState, proposal.proposalId)) {
-      throw new Error('Proposal is not pending on-chain');
-    }
-
-    // Increment approval with state check
-    const { newState, isApproved } = StateService.incrementApprovalWithCheck(
-      currentState,
-      proposal.proposalId,
-      vault.approvalThreshold
-    );
-
-    // Update database
+    // The approval count and status come from the proposal row, not vault.state (see createProposal).
     const newApprovals = [...proposal.approvals, dto.approver];
     const newApprovalCount = newApprovals.length;
+    const isApproved = newApprovalCount >= vault.approvalThreshold;
     
     const stmt = db!.prepare(`
       UPDATE proposals
@@ -269,9 +275,6 @@ export class ProposalService {
       isApproved ? ProposalStatus.APPROVED : ProposalStatus.PENDING,
       dto.proposalId
     );
-
-    // Update vault state in database
-    await VaultService.updateVaultState(proposal.vaultId, newState);
 
     return await this.getProposalById(dto.proposalId);
   }
@@ -402,7 +405,9 @@ export class ProposalService {
 
     const selectedInputs: typeof walletUtxos = [];
     let totalInputSatoshis = 0n;
-    const fundingSatoshis = 2000n;
+    // Every approval (and a final cancel or expire) pays its ~4000-sat fee from this UTXO,
+    // so it holds one fee per approval the vault needs plus one, and the state dust.
+    const fundingSatoshis = BigInt(Math.max(1, Number(vault.approvalThreshold) || 1) + 1) * 4000n + 546n;
     const feeReserve = 3500n;
     const candidates = [
       categoryAnchor,
@@ -618,17 +623,6 @@ export class ProposalService {
       throw new Error('Proposal not found');
     }
 
-    // Get vault to update state
-    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
-    if (!vault) {
-      throw new Error('Vault not found');
-    }
-
-    const currentState = vault.state || 0;
-
-    // Update state to mark proposal as executed
-    const newState = StateService.setProposalExecuted(currentState, proposal.proposalId);
-
     // Update database
     const stmt = db!.prepare(`
       UPDATE proposals
@@ -636,9 +630,6 @@ export class ProposalService {
       WHERE id = ?
     `);
     await stmt.run(ProposalStatus.EXECUTED, txHash, proposalId);
-
-    // Update vault state
-    await VaultService.updateVaultState(proposal.vaultId, newState);
   }
 
   /**

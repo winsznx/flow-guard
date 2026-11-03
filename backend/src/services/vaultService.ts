@@ -310,9 +310,15 @@ export class VaultService {
 
     // Log the transaction
     if (txid) {
+      // The broadcast route already logged this tx as pending; confirm it in place.
       const txStmt = db!.prepare(`
         INSERT INTO transactions (id, tx_hash, vault_id, tx_type, amount, to_address, status)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (tx_hash) DO UPDATE SET
+          status = EXCLUDED.status,
+          vault_id = COALESCE(transactions.vault_id, EXCLUDED.vault_id),
+          amount = COALESCE(transactions.amount, EXCLUDED.amount),
+          to_address = COALESCE(transactions.to_address, EXCLUDED.to_address)
       `);
       await txStmt.run(
         randomUUID(),

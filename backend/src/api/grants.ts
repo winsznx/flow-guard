@@ -7,6 +7,7 @@ import { resolveBchNetwork } from '../utils/network.js';
 import { Router, Request, Response } from 'express';
 import { createHash, randomUUID } from 'crypto';
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import { ElectrumNetworkProvider } from 'cashscript';
 import db from '../database/schema.js';
 import { GrantDeploymentService } from '../services/GrantDeploymentService.js';
 import { GrantFundingService } from '../services/GrantFundingService.js';
@@ -25,10 +26,12 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
-import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { campaignContractSatoshis } from '../utils/campaignFunding.js';
+import { resolveTokenDecimals } from '../utils/tokenMeta.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
 import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
+import { omitSecretColumns } from '../utils/responseSanitizers.js';
 
 
 const router = Router();
@@ -36,25 +39,27 @@ router.param('id', uuidParam);
 
 /**
  * GET /api/grants
- * List grant programs created by address
+ * List grants created by `creator`, or paid to `recipient` when no creator is given
  */
 router.get('/grants', async (req: Request, res: Response) => {
   try {
-    const { creator } = req.query;
+    const { creator, recipient } = req.query;
 
-    if (!creator) {
-      return res.status(400).json({ error: 'Creator address is required' });
+    if (!creator && !recipient) {
+      return res.status(400).json({ error: 'Creator or recipient address is required' });
     }
 
+    const column = creator ? 'creator' : 'recipient';
+    const address = creator || recipient;
     const showDeprecated = String(req.query.showDeprecated ?? '').toLowerCase() === 'true';
     const rows = showDeprecated
-      ? await db!.prepare('SELECT * FROM grants WHERE creator = ? ORDER BY created_at DESC').all(creator)
-      : await db!.prepare('SELECT * FROM grants WHERE creator = ? AND is_deprecated = false ORDER BY created_at DESC').all(creator);
+      ? await db!.prepare(`SELECT * FROM grants WHERE ${column} = ? ORDER BY created_at DESC`).all(address)
+      : await db!.prepare(`SELECT * FROM grants WHERE ${column} = ? AND is_deprecated = false ORDER BY created_at DESC`).all(address);
     const grants = await attachLatestGrantEvents(rows);
 
     res.json({
       success: true,
-      grants,
+      grants: grants.map(omitSecretColumns),
       total: grants.length,
     });
   } catch (error: any) {
@@ -82,7 +87,7 @@ router.get('/grants/:id', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      grant,
+      grant: omitSecretColumns(grant),
       milestones,
       events,
     });
@@ -113,10 +118,14 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
       cancelable,
       transferable,
       milestones,
+      tokenDecimals: tokenDecimalsHint,
     } = req.body;
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
+    const tokenDecimals = normalizedTokenType === 'FUNGIBLE_TOKEN'
+      ? await resolveTokenDecimals(tokenCategory, resolveBchNetwork(), tokenDecimalsHint)
+      : 0;
     if (!recipient) {
       return res.status(400).json({ error: 'Recipient address is required' });
     }
@@ -136,7 +145,7 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
       return res.status(400).json({ error: 'Milestones array is required and must not be empty' });
     }
 
-    const amountPerMilestoneOnChain = displayAmountToOnChain(Number(amountPerMilestone), normalizedTokenType);
+    const amountPerMilestoneOnChain = displayAmountToOnChain(Number(amountPerMilestone), normalizedTokenType, tokenDecimals);
     if (amountPerMilestoneOnChain <= 0) {
       return res.status(400).json({
         error: 'Amount per milestone is below on-chain minimum precision',
@@ -145,10 +154,10 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
           : 'Use at least 1 token base unit per milestone',
       });
     }
-    const normalizedAmountPerMilestone = onChainAmountToDisplay(amountPerMilestoneOnChain, normalizedTokenType);
+    const normalizedAmountPerMilestone = onChainAmountToDisplay(amountPerMilestoneOnChain, normalizedTokenType, tokenDecimals);
 
-    const totalAmountOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType);
-    const normalizedTotalAmount = onChainAmountToDisplay(totalAmountOnChain, normalizedTokenType);
+    const totalAmountOnChain = displayAmountToOnChain(Number(totalAmount), normalizedTokenType, tokenDecimals);
+    const normalizedTotalAmount = onChainAmountToDisplay(totalAmountOnChain, normalizedTokenType, tokenDecimals);
     const normalizedMilestonesTotal = Number(milestonesTotal);
 
     const id = randomUUID();
@@ -180,18 +189,19 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
       transferable: transferable === true,
       tokenType: normalizedTokenType,
       tokenCategory,
+      tokenDecimals,
     });
 
     await db!.prepare(`
-      INSERT INTO grants (id, grant_number, vault_id, creator, recipient, title, description,
-        token_type, token_category, milestones_total, amount_per_milestone, total_amount,
+      INSERT INTO grants (id, grant_number, campaign_id, vault_id, creator, recipient, title, description,
+        token_type, token_category, token_decimals, milestones_total, amount_per_milestone, total_amount,
         milestones_completed, total_released, cancelable, transferable,
         status, contract_address, constructor_params, nft_commitment, nft_capability,
         authority_privkey, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      id, grantNumber, vaultId || null, creator, recipient, title, description || null,
-      normalizedTokenType, tokenCategory || null,
+      id, grantNumber, grantNumber, vaultId || null, creator, recipient, title, description || null,
+      normalizedTokenType, tokenCategory || null, tokenDecimals,
       normalizedMilestonesTotal, normalizedAmountPerMilestone, normalizedTotalAmount,
       cancelable !== false ? 1 : 0, transferable === true ? 1 : 0,
       deployment.contractAddress,
@@ -203,12 +213,15 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
     );
 
     const insertMilestone = db!.prepare(`
-      INSERT INTO grant_milestones (id, grant_id, milestone_index, title, description, status, created_at)
-      VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+      INSERT INTO grant_milestones (id, grant_id, milestone_index, milestone_number, amount, title, description, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
     `);
     for (let i = 0; i < milestones.length; i++) {
       const ms = milestones[i];
-      await insertMilestone.run(randomUUID(), id, i + 1, ms.title || `Milestone ${i + 1}`, ms.description || null, now);
+      await insertMilestone.run(
+        randomUUID(), id, i + 1, i + 1, normalizedAmountPerMilestone,
+        ms.title || `Milestone ${i + 1}`, ms.description || null, now,
+      );
     }
 
     await recordActivityEvent({
@@ -233,7 +246,7 @@ router.post('/grants/create', requireWalletAuth, async (req: Request, res: Respo
     res.json({
       success: true,
       message: 'Grant contract deployed - awaiting funding transaction',
-      grant,
+      grant: omitSecretColumns(grant),
       milestones: createdMilestones,
       deployment: {
         contractAddress: deployment.contractAddress,
@@ -266,7 +279,7 @@ router.get('/grants/:id/funding-info', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Grant contract not deployed' });
     }
 
-    const totalAmountOnChain = displayAmountToOnChain(grant.total_amount, grant.token_type);
+    const totalAmountOnChain = displayAmountToOnChain(grant.total_amount, grant.token_type, Number(grant.token_decimals || 0));
     const nftCommitment = grant.nft_commitment || '';
 
     const fundingService = new GrantFundingService(resolveBchNetwork());
@@ -280,6 +293,7 @@ router.get('/grants/:id/funding-info', async (req: Request, res: Response) => {
         tokenCategory: grant.token_category,
         nftCommitment,
         nftCapability: 'mutable',
+        contractSatoshis: campaignContractSatoshis('grant', grant, BigInt(totalAmountOnChain)),
       });
 
       res.json({
@@ -305,7 +319,7 @@ router.get('/grants/:id/funding-info', async (req: Request, res: Response) => {
             success: false,
             requiresPreparation: true,
             preparationTransaction: serializeWcTransaction(prepResult.wcTransaction),
-            message: 'Your wallet needs a consolidation transaction before funding. Please sign to proceed.',
+            message: 'Your wallet needs one setup step before funding. Approve it in your wallet, then approve the funding.',
           });
         }
       }
@@ -351,13 +365,9 @@ router.post('/grants/:id/confirm-funding', requireWalletAuth, async (req: Reques
       return res.status(404).json({ error: 'Grant not found' });
     }
 
-    const totalAmountOnChain = displayAmountToOnChain(grant.total_amount, grant.token_type);
+    const totalAmountOnChain = displayAmountToOnChain(grant.total_amount, grant.token_type, Number(grant.token_decimals || 0));
     const isTokenGrant = isFungibleTokenType(grant.token_type);
-    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
-      'airdrop',
-      isTokenGrant ? 'FUNGIBLE_TOKEN' : 'BCH',
-      BigInt(totalAmountOnChain),
-    );
+    const minimumContractSatoshis = campaignContractSatoshis('grant', grant, BigInt(totalAmountOnChain));
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
@@ -483,7 +493,7 @@ router.post('/grants/:id/release', requireWalletAuth, async (req: Request, res: 
       authorityPrivKey: decryptPrivateKey(grant.authority_privkey),
     });
 
-    const releaseDisplayAmount = onChainAmountToDisplay(releaseTx.releaseAmount, grant.token_type);
+    const releaseDisplayAmount = onChainAmountToDisplay(releaseTx.releaseAmount, grant.token_type, Number(grant.token_decimals || 0));
 
     res.json({
       success: true,
@@ -529,7 +539,7 @@ router.post('/grants/:id/confirm-release', requireWalletAuth, async (req: Reques
     }
 
     const releaseAmountNumber = Number(amount);
-    const releaseAmountOnChain = displayAmountToOnChain(releaseAmountNumber, grant.token_type);
+    const releaseAmountOnChain = displayAmountToOnChain(releaseAmountNumber, grant.token_type, Number(grant.token_decimals || 0));
     const isTokenGrant = isFungibleTokenType(grant.token_type);
 
     const expectedReleaseOutput = await transactionHasExpectedOutput(
@@ -697,6 +707,9 @@ router.post('/grants/:id/confirm-pause', requireWalletAuth, async (req: Request,
     if (String(grant.creator).toLowerCase() !== signerAddress.toLowerCase()) {
       return res.status(403).json({ error: 'Only the grant creator can confirm pause' });
     }
+    if (grant.status !== 'ACTIVE') {
+      return res.status(409).json({ error: 'Only active grants can be paused', status: grant.status });
+    }
 
     const hasExpectedState = await transactionHasExpectedOutput(
       txHash,
@@ -712,6 +725,11 @@ router.post('/grants/:id/confirm-pause', requireWalletAuth, async (req: Request,
     if (!hasExpectedState) {
       return res.status(400).json({
         error: 'Pause transaction does not include expected grant covenant state output',
+      });
+    }
+    if (!(await grantStateCreatedBy(grant.contract_address, txHash, 1))) {
+      return res.status(400).json({
+        error: 'Pause transaction is not the current grant state on chain',
       });
     }
 
@@ -733,6 +751,142 @@ router.post('/grants/:id/confirm-pause', requireWalletAuth, async (req: Request,
     console.error(`POST /grants/${req.params.id}/confirm-pause error:`, error);
     res.status(500).json({
       error: 'Failed to confirm pause',
+      message: error.message,
+      state: 'failed',
+      retryable: false,
+      errorCode: 'CONFIRM_FAILED',
+    });
+  }
+});
+
+/**
+ * POST /api/grants/:id/resume
+ * Build on-chain resume transaction for a paused grant
+ */
+router.post('/grants/:id/resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const grant = await db!.prepare('SELECT * FROM grants WHERE id = ?').get(id) as any;
+    if (!grant) {
+      return res.status(404).json({ error: 'Grant not found' });
+    }
+    if (grant.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only paused grants can be resumed' });
+    }
+    if (String(grant.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the grant creator can resume this grant' });
+    }
+    if (!grant.contract_address || !grant.constructor_params) {
+      return res.status(400).json({ error: 'Grant contract is not fully configured' });
+    }
+
+    const controlService = new GrantControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
+    const currentCommitment = await contractService.getNFTCommitment(grant.contract_address)
+      || grant.nft_commitment
+      || '';
+    const constructorParams = deserializeConstructorParams(grant.constructor_params);
+    const built = await controlService.buildResumeTransaction({
+      contractAddress: grant.contract_address,
+      constructorParams,
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: normalizeGrantTokenType(grant.token_type),
+      feePayerAddress: signerAddress,
+    });
+
+    res.json({
+      success: true,
+      nextStatus: built.nextStatus,
+      wcTransaction: serializeWcTransaction(built.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /grants/${req.params.id}/resume error:`, error);
+    res.status(500).json({ error: 'Failed to build resume transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/grants/:id/confirm-resume
+ * Confirm on-chain resume transaction and update DB state
+ */
+router.post('/grants/:id/confirm-resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
+      return res.status(409).json({
+        error: 'Transaction hash not found on chipnet',
+        message: 'Transaction is not indexed yet. Retry confirmation shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    const grant = await db!.prepare('SELECT * FROM grants WHERE id = ?').get(id) as any;
+    if (!grant) {
+      return res.status(404).json({ error: 'Grant not found' });
+    }
+    if (String(grant.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the grant creator can confirm resume' });
+    }
+    if (grant.status !== 'PAUSED') {
+      return res.status(409).json({ error: 'Only paused grants can be resumed', status: grant.status });
+    }
+
+    const hasExpectedState = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: grant.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 35,
+      },
+      resolveBchNetwork(),
+    );
+    if (!hasExpectedState) {
+      return res.status(400).json({
+        error: 'Resume transaction does not include expected grant covenant state output',
+      });
+    }
+    if (!(await grantStateCreatedBy(grant.contract_address, txHash, 0))) {
+      return res.status(400).json({
+        error: 'Resume transaction is not the current grant state on chain',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    await db!.prepare('UPDATE grants SET status = ?, updated_at = ? WHERE id = ?')
+      .run('ACTIVE', now, id);
+    await recordActivityEvent({
+      entityType: 'grant' as any,
+      entityId: id,
+      eventType: 'resumed',
+      actor: signerAddress,
+      status: 'ACTIVE',
+      txHash,
+      createdAt: now,
+    });
+
+    res.json({ success: true, txHash, status: 'ACTIVE', state: 'confirmed', retryable: false });
+  } catch (error: any) {
+    console.error(`POST /grants/${req.params.id}/confirm-resume error:`, error);
+    res.status(500).json({
+      error: 'Failed to confirm resume',
       message: error.message,
       state: 'failed',
       retryable: false,
@@ -1049,6 +1203,25 @@ router.post('/grants/:id/confirm-transfer', requireWalletAuth, async (req: Reque
 
 export default router;
 
+/**
+ * True when the grant's live state UTXO was created by `txHash` and its status byte is
+ * `statusByte`. Any earlier tx paying the contract (funding, a release, the pause itself)
+ * also carries a state NFT, so the output check alone can't tell them apart.
+ */
+async function grantStateCreatedBy(contractAddress: string, txHash: string, statusByte: number): Promise<boolean> {
+  try {
+    const utxos = await new ElectrumNetworkProvider(resolveBchNetwork()).getUtxos(contractAddress);
+    const state = utxos.find((utxo) => utxo.token?.nft != null);
+    const nft = state?.token?.nft;
+    if (!state || !nft || state.txid !== txHash) return false;
+    const commitment = hexToBin(nft.commitment);
+    return commitment.length >= 35 && commitment[0] === statusByte;
+  } catch (error) {
+    console.warn('[grants] Failed to read grant state UTXO', { contractAddress, error });
+    return false;
+  }
+}
+
 function normalizeGrantTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN' {
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
@@ -1085,7 +1258,7 @@ function hashToP2pkhAddress(hash20: Uint8Array): string {
   lockingBytecode[24] = 0xac;
   const encoded = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
-    prefix: 'bchtest',
+    prefix: resolveBchNetwork() === 'mainnet' ? 'bitcoincash' : 'bchtest',
   });
   if (typeof encoded === 'string') {
     throw new Error(`Failed to encode authority P2PKH address: ${encoded}`);

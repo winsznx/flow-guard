@@ -1,13 +1,22 @@
 import { resolveBchNetwork } from '../utils/network.js';
-import { Router } from 'express';
-import { decodeTransaction, hexToBin, binToHex } from '@bitauth/libauth';
+import { Router, type Request, type Response } from 'express';
+import {
+  decodeTransaction,
+  decodeAuthenticationInstructions,
+  cashAddressToLockingBytecode,
+  hash160,
+  hexToBin,
+  binToHex,
+} from '@bitauth/libauth';
+import { ElectrumNetworkProvider } from 'cashscript';
 import { ProposalService } from '../services/proposalService.js';
-import { CreateProposalDto, ApproveProposalDto } from '../models/Proposal.js';
+import { CreateProposalDto, ApproveProposalDto, ProposalStatus } from '../models/Proposal.js';
 import db from '../database/schema.js';
 import { VaultService } from '../services/vaultService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
+import { mergeMultisigSignatures } from '../utils/multisigMerge.js';
 import { transactionExists, transactionHasExpectedOutput } from '../utils/txVerification.js';
-import { TransactionService } from '../services/transactionService.js';
+import { TransactionService, type TransactionRecord } from '../services/transactionService.js';
 import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
 
@@ -69,36 +78,56 @@ function txStructuralFingerprint(txHex: string): string | null {
   }
 }
 
+/**
+ * True when some input pushes a 33-byte pubkey whose hash160 matches the P2PKH
+ * address. ProposalCovenant.approve(sig, pubkey) pushes the approver's pubkey, so
+ * this ties an approval tx to the signer that made it.
+ */
+export function txPushesPubkeyForAddress(txHex: string, address: string): boolean {
+  const locking = cashAddressToLockingBytecode(address);
+  if (typeof locking === 'string') return false;
+  const b = locking.bytecode;
+  const isP2pkh = b.length === 25 && b[0] === 0x76 && b[1] === 0xa9 && b[2] === 0x14 && b[23] === 0x88 && b[24] === 0xac;
+  if (!isP2pkh) return false;
+  const expectedHash = binToHex(b.slice(3, 23));
+
+  const decoded = decodeTransaction(hexToBin(txHex));
+  if (typeof decoded === 'string') return false;
+  return decoded.inputs.some((input) =>
+    decodeAuthenticationInstructions(input.unlockingBytecode).some((instruction) => {
+      const data = (instruction as { data?: Uint8Array }).data;
+      return data?.length === 33 && binToHex(hash160(data)) === expectedHash;
+    }),
+  );
+}
+
 // Get all proposals (for stats/dashboard)
-router.get('/', async (req, res) => {
+router.get('/proposals', async (req, res) => {
   try {
     const { status } = req.query;
-    let query = 'SELECT * FROM proposals';
-    const params: any[] = [];
+    let query = 'SELECT * FROM proposals WHERE status <> ?';
+    const params: any[] = [ProposalStatus.ABANDONED];
 
     if (status) {
-      query += ' WHERE status = ?';
+      query += ' AND status = ?';
       params.push(String(status).toLowerCase());
     }
 
     query += ' ORDER BY created_at DESC LIMIT 100';
 
     const rows = await db.prepare(query).all(...params) as any[];
+    // Unauthenticated and spans private vaults: same fields as the explorer feed, no reason/approvals.
     const proposals = rows.map((row: any) => ({
       id: row.id,
       vaultId: row.vault_id,
       proposalId: row.proposal_id,
       recipient: row.recipient,
       amount: row.amount,
-      reason: row.reason,
       status: row.status,
       approvalCount: row.approval_count,
-      approvals: JSON.parse(row.approvals),
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
       executedAt: row.executed_at ? new Date(row.executed_at) : undefined,
-      txHash: row.tx_hash,
-      contractAddress: row.contract_address || undefined,
     }));
 
     res.json({
@@ -111,13 +140,24 @@ router.get('/', async (req, res) => {
 });
 
 // Create proposal
-router.post('/vaults/:vaultId/proposals', async (req, res) => {
+router.post('/vaults/:vaultId/proposals', requireWalletAuth, async (req, res) => {
   try {
+    // Proposals are keyed by the vault's DB id; the URL may carry either id form.
+    const vault = await VaultService.getVaultByVaultId(req.params.vaultId);
+    if (!vault) {
+      return res.status(404).json({ error: 'Vault not found' });
+    }
+    const creator = req.verifiedUser!.address;
+    if (!VaultService.isCreator(vault, creator) && !VaultService.isSigner(vault, creator)) {
+      return res.status(403).json({
+        error: 'Only this treasury\'s creator or signers can create its requests',
+        errorCode: 'NOT_VAULT_MEMBER',
+      });
+    }
     const dto: CreateProposalDto = {
-      vaultId: req.params.vaultId,
       ...req.body,
+      vaultId: vault.id,
     };
-    const creator = callerAddress(req) || 'unknown';
 
     const proposal = await ProposalService.createProposal(dto, creator);
     res.status(201).json(proposal);
@@ -129,7 +169,14 @@ router.post('/vaults/:vaultId/proposals', async (req, res) => {
 // List proposals for a vault
 router.get('/vaults/:vaultId/proposals', async (req, res) => {
   try {
-    const proposals = await ProposalService.getVaultProposals(req.params.vaultId);
+    const vault = await VaultService.getVaultByVaultId(req.params.vaultId);
+    if (!vault) {
+      return res.status(404).json({ error: 'Vault not found' });
+    }
+    if (!VaultService.canViewVault(vault, callerAddress(req) || '')) {
+      return res.status(403).json({ error: 'Access denied: This vault is private' });
+    }
+    const proposals = await ProposalService.getVaultProposals(vault);
     res.json(proposals);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -137,11 +184,15 @@ router.get('/vaults/:vaultId/proposals', async (req, res) => {
 });
 
 // Get proposal by ID
-router.get('/:id', async (req, res) => {
+router.get('/proposals/:id', async (req, res) => {
   try {
     const proposal = await ProposalService.getProposalById(req.params.id);
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' });
+    }
+    const vault = await VaultService.getVaultByVaultId(proposal.vaultId);
+    if (vault && !VaultService.canViewVault(vault, callerAddress(req) || '')) {
+      return res.status(403).json({ error: 'Access denied: This vault is private' });
     }
     res.json(proposal);
   } catch (error: any) {
@@ -149,8 +200,67 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// Abandon a request whose on-chain create was rejected or never broadcast, so the
+// vault isn't left with a pending row and a pending state bit. Creator only. The row
+// is kept as ABANDONED; a later confirm-create for it brings it back.
+router.delete('/proposals/:id', requireWalletAuth, async (req, res) => {
+  try {
+    const proposal = await ProposalService.getProposalById(req.params.id as string);
+    if (!proposal) {
+      return res.status(404).json({ error: 'Proposal not found' });
+    }
+    if (!proposal.creator || proposal.creator.toLowerCase() !== req.verifiedUser!.address.toLowerCase()) {
+      return res.status(403).json({
+        error: 'Only the wallet that created this request can remove it',
+        errorCode: 'NOT_PROPOSAL_CREATOR',
+      });
+    }
+    if (proposal.status === ProposalStatus.ABANDONED) {
+      return res.json({ success: true, id: proposal.id });
+    }
+    if (proposal.status !== ProposalStatus.PENDING || proposal.txHash || proposal.approvalCount > 0) {
+      return res.status(409).json({
+        error: 'This request is already on chain and can no longer be removed',
+        errorCode: 'PROPOSAL_ON_CHAIN',
+      });
+    }
+    // create-onchain saves the covenant address before the wallet signs, so an address
+    // alone doesn't mean it was funded. Coins at it do, even if confirm-create never ran.
+    if (proposal.contractAddress) {
+      let fundedUtxos: number;
+      try {
+        fundedUtxos = (await new ElectrumNetworkProvider(resolveBchNetwork()).getUtxos(proposal.contractAddress)).length;
+      } catch (error) {
+        console.error('DELETE /proposals/:id UTXO lookup failed:', error);
+        return res.status(503).json({
+          error: 'Could not check the request on chain. Try again shortly.',
+          retryable: true,
+          errorCode: 'CHAIN_UNAVAILABLE',
+        });
+      }
+      if (fundedUtxos > 0) {
+        return res.status(409).json({
+          error: 'This request was already funded on chain and can no longer be removed',
+          errorCode: 'PROPOSAL_ON_CHAIN',
+        });
+      }
+    }
+
+    if (!(await ProposalService.abandonPendingProposal(proposal))) {
+      return res.status(409).json({
+        error: 'This request changed while removing it. Reload and try again.',
+        errorCode: 'PROPOSAL_ON_CHAIN',
+      });
+    }
+    return res.json({ success: true, id: proposal.id });
+  } catch (error: any) {
+    console.error('DELETE /proposals/:id error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to remove proposal' });
+  }
+});
+
 // Approve proposal
-router.post('/:id/approve', async (req, res) => {
+router.post('/proposals/:id/approve', requireWalletAuth, async (req, res) => {
   try {
     const dto: ApproveProposalDto = {
       proposalId: req.params.id,
@@ -168,7 +278,7 @@ router.post('/:id/approve', async (req, res) => {
 });
 
 // Create on-chain proposal transaction
-router.post('/:id/create-onchain', requireWalletAuth, async (req, res) => {
+router.post('/proposals/:id/create-onchain', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
     const funderAddress = req.verifiedUser!.address;
@@ -205,13 +315,10 @@ router.post('/:id/create-onchain', requireWalletAuth, async (req, res) => {
 });
 
 // Create on-chain approval transaction
-router.post('/:id/approve-onchain', async (req, res) => {
+router.post('/proposals/:id/approve-onchain', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
-    const signerAddress = callerAddress(req);
-    if (!signerAddress) {
-      return res.status(400).json({ error: 'x-user-address header is required' });
-    }
+    const signerAddress = req.verifiedUser!.address;
 
     const proposal = await ProposalService.getProposalById(proposalId);
     if (!proposal) {
@@ -234,7 +341,15 @@ router.post('/:id/approve-onchain', async (req, res) => {
   }
 });
 
-router.post('/:id/confirm-create', async (req, res) => {
+function isRecordedFor(
+  recorded: TransactionRecord,
+  proposalId: string,
+  txType: TransactionRecord['txType'],
+): boolean {
+  return recorded.proposalId === proposalId && recorded.txType === txType;
+}
+
+router.post('/proposals/:id/confirm-create', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
     const { txHash } = req.body as { txHash?: string };
@@ -249,8 +364,27 @@ router.post('/:id/confirm-create', async (req, res) => {
     if (!proposal.contractAddress) {
       return res.status(400).json({ error: 'Proposal contract address missing; build create-onchain transaction first' });
     }
+    if (proposal.txHash && proposal.txHash !== txHash) {
+      return res.status(409).json({
+        error: 'This request was already confirmed with a different transaction',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'PROPOSAL_ALREADY_CONFIRMED',
+      });
+    }
+    // The broadcast route records the tx under this proposal before confirm runs,
+    // so only a row recorded for another proposal or step is a replay.
+    const recordedTx = await TransactionService.getTransactionByHash(txHash);
+    if (recordedTx && !isRecordedFor(recordedTx, proposal.id, 'proposal')) {
+      return res.status(409).json({
+        error: 'This transaction has already been recorded',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_ALREADY_RECORDED',
+      });
+    }
 
-    const network = (process.env.BCH_NETWORK as 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet') || 'chipnet';
+    const network = resolveBchNetwork();
     if (!(await transactionExists(txHash, network))) {
       return res.status(409).json({
         error: 'Transaction hash not found on blockchain',
@@ -282,14 +416,16 @@ router.post('/:id/confirm-create', async (req, res) => {
       UPDATE proposals
       SET tx_hash = ?, status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(txHash, 'pending', proposalId);
+    `).run(txHash, ProposalStatus.PENDING, proposalId);
 
-    await TransactionService.recordTransaction(txHash, 'proposal', {
-      vaultId: proposal.vaultId,
-      proposalId: proposal.id,
-      amount: proposal.amount,
-      toAddress: proposal.contractAddress,
-    });
+    if (!recordedTx) {
+      await TransactionService.recordTransaction(txHash, 'proposal', {
+        vaultId: proposal.vaultId,
+        proposalId: proposal.id,
+        amount: proposal.amount,
+        toAddress: proposal.contractAddress,
+      });
+    }
 
     const updated = await ProposalService.getProposalById(proposalId);
     return res.json({
@@ -311,7 +447,7 @@ router.post('/:id/confirm-create', async (req, res) => {
   }
 });
 
-router.post('/:id/confirm-approval', requireWalletAuth, async (req, res) => {
+router.post('/proposals/:id/confirm-approval', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id as string;
     const signerAddress = callerAddress(req);
@@ -330,8 +466,17 @@ router.post('/:id/confirm-approval', requireWalletAuth, async (req, res) => {
     if (!proposal.contractAddress) {
       return res.status(400).json({ error: 'Proposal has no on-chain contract address' });
     }
+    const recordedTx = await TransactionService.getTransactionByHash(txHash);
+    if (recordedTx && !isRecordedFor(recordedTx, proposal.id, 'approve')) {
+      return res.status(409).json({
+        error: 'This transaction has already been recorded',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'TX_ALREADY_RECORDED',
+      });
+    }
 
-    const network = (process.env.BCH_NETWORK as 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet') || 'chipnet';
+    const network = resolveBchNetwork();
     if (!(await transactionExists(txHash, network))) {
       return res.status(409).json({
         error: 'Transaction hash not found on blockchain',
@@ -358,6 +503,15 @@ router.post('/:id/confirm-approval', requireWalletAuth, async (req, res) => {
         error: 'Approval transaction does not include expected proposal covenant state output',
       });
     }
+    const approvalTxHex = await new ElectrumNetworkProvider(network).getRawTransaction(txHash);
+    if (!txPushesPubkeyForAddress(approvalTxHex, signerAddress)) {
+      return res.status(403).json({
+        error: 'Approval transaction was not signed by the authenticated wallet',
+        state: 'failed',
+        retryable: false,
+        errorCode: 'APPROVER_MISMATCH',
+      });
+    }
 
     const updatedProposal = await ProposalService.approveProposal({
       proposalId,
@@ -367,13 +521,15 @@ router.post('/:id/confirm-approval', requireWalletAuth, async (req, res) => {
       return res.status(409).json({ error: 'Proposal cannot be approved in its current state' });
     }
 
-    await TransactionService.recordTransaction(txHash, 'approve', {
-      vaultId: updatedProposal.vaultId,
-      proposalId: updatedProposal.id,
-      amount: updatedProposal.amount,
-      fromAddress: signerAddress,
-      toAddress: updatedProposal.contractAddress,
-    });
+    if (!recordedTx) {
+      await TransactionService.recordTransaction(txHash, 'approve', {
+        vaultId: updatedProposal.vaultId,
+        proposalId: updatedProposal.id,
+        amount: updatedProposal.amount,
+        fromAddress: signerAddress,
+        toAddress: updatedProposal.contractAddress,
+      });
+    }
 
     return res.json({
       success: true,
@@ -517,14 +673,14 @@ async function handleExecuteProposal(req: any, res: any): Promise<any> {
 }
 
 // Create execute payout transaction (legacy route)
-router.post('/:id/execute-onchain', requireWalletAuth, handleExecuteProposal);
+router.post('/proposals/:id/execute-onchain', requireWalletAuth, handleExecuteProposal);
 
 // Create execute payout transaction (preferred route)
-router.post('/:id/execute', requireWalletAuth, handleExecuteProposal);
+router.post('/proposals/:id/execute', requireWalletAuth, handleExecuteProposal);
 
 // Submit a partially signed execute transaction.
 // Once the required signature count is reached, backend broadcasts and marks proposal executed.
-router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
+router.post('/proposals/:id/execute-signature', requireWalletAuth, async (req, res) => {
   try {
     const proposalId = req.params.id;
     // Identity comes from the verified wallet-auth proof, not from body headers.
@@ -660,12 +816,17 @@ router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
           signaturesCollected,
           requiredSignerAddresses,
           requiredSignatures: session.required_signatures,
-          // The tx broadcast at threshold uses the LAST signer's payload —
-          // every signer's payload is structurally identical (verified above)
-          // and contains the witness merge produced by the wallet's signing
-          // flow. (When the wallet flow migrates to per-slot signature
-          // submission, swap this to a server-side witness-merge step.)
-          finalTransaction: signedTransaction,
+          // Each wallet fills every signature slot with its own signature, so the
+          // broadcast tx takes each slot's signature from the copy signed by that slot's key.
+          finalTransaction: signaturesCollected >= session.required_signatures
+            ? mergeMultisigSignatures(
+              String(parseJsonArray<{ unlockingBytecode?: string }>(session.source_outputs)[0]?.unlockingBytecode ?? ''),
+              parseJsonArray<string>(session.signer_addresses).map((address, index) => ({
+                pubkey: parseJsonArray<string>(session.signer_pubkeys)[index],
+                transactionHex: signedPayloads[address.toLowerCase()] ?? '',
+              })).filter((entry) => entry.transactionHex),
+            )
+            : null,
         } as const,
       };
     });
@@ -694,7 +855,21 @@ router.post('/:id/execute-signature', requireWalletAuth, async (req, res) => {
 
     const { ContractService } = await import('../services/contract-service.js');
     const contractService = new ContractService(resolveBchNetwork());
-    const txid = await contractService.broadcastTransaction(finalTransaction);
+    let txid: string;
+    try {
+      txid = await contractService.broadcastTransaction(finalTransaction!);
+    } catch (broadcastError: any) {
+      // Close the session so the signers can start a fresh one instead of being stuck at 2 of 2.
+      await db.prepare(
+        `UPDATE proposal_execution_sessions SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      ).run(sessionId);
+      return res.status(502).json({
+        error: broadcastError?.message || 'The payout transaction was rejected by the network',
+        state: 'failed',
+        retryable: true,
+        errorCode: 'EXECUTION_BROADCAST_FAILED',
+      });
+    }
 
     await ProposalService.markProposalExecuted(proposalId, txid);
     await db.prepare(

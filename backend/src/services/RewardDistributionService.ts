@@ -15,6 +15,7 @@ import {
 import { hexToBin, binToHex, hash160, secp256k1 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface DistributionTransactionParams {
   rewardId: string;
@@ -85,7 +86,7 @@ export class RewardDistributionService {
       throw new Error('Reward amount must be greater than 0');
     }
 
-    const artifact = ContractFactory.getArtifact('RewardCovenant');
+    const artifact = ContractFactory.artifactForAddress('RewardCovenant', constructorParams, contractAddress);
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     const contractUtxos = await this.provider.getUtxos(contractAddress);
@@ -215,7 +216,7 @@ export class RewardDistributionService {
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       txBuilder.addOutput({
-        to: recipientAddress,
+        to: toTokenAwareAddress(recipientAddress),
         amount: 1000n,
         token: { category: tokenCategory, amount: rewardAmountBig },
       });
@@ -234,7 +235,7 @@ export class RewardDistributionService {
         },
       });
     } else {
-      txBuilder.addOutput({ to: recipientAddress, amount: rewardAmountBig });
+      txBuilder.addOutput({ to: toTokenAwareAddress(recipientAddress), amount: rewardAmountBig });
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
@@ -256,7 +257,7 @@ export class RewardDistributionService {
 
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Distribute reward',
+      userPrompt: 'Send this reward',
     });
 
     console.log('[RewardDistributionService] Built distribution transaction', {

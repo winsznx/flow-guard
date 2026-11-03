@@ -13,6 +13,8 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
+import { addV2CampaignCancelOutputs } from '../utils/campaignCancel.js';
 
 export interface AirdropControlBuildParams {
   contractAddress: string;
@@ -25,7 +27,7 @@ export interface AirdropControlBuildParams {
 
 export interface AirdropControlBuildResult {
   wcTransaction: WcTransactionObject;
-  nextStatus: 'PAUSED' | 'CANCELLED';
+  nextStatus: 'PAUSED' | 'ACTIVE' | 'CANCELLED';
   cancelReturnAddress?: string;
   remainingPool?: bigint;
 }
@@ -40,57 +42,54 @@ export class AirdropControlService {
   }
 
   async buildPauseTransaction(params: AirdropControlBuildParams): Promise<AirdropControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('AirdropCovenant');
+    return this.buildStatusChange(params, 'pause');
+  }
+
+  async buildResumeTransaction(params: AirdropControlBuildParams): Promise<AirdropControlBuildResult> {
+    return this.buildStatusChange(params, 'resume');
+  }
+
+  /**
+   * AirdropCovenant.pause() and resume() keep the first 23 bytes of the state commitment, set the
+   * status byte and zero the rest. Both allow only the state output, so the fee comes out of
+   * the contract balance. No CLTV on either.
+   */
+  private async buildStatusChange(
+    params: AirdropControlBuildParams,
+    action: 'pause' | 'resume',
+  ): Promise<AirdropControlBuildResult> {
+    const artifact = ContractFactory.artifactForAddress('AirdropCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
     const status = commitment[0] ?? 0;
     const flags = commitment[1] ?? 0;
-    if (status !== 0) {
-      throw new Error('Campaign must be ACTIVE to pause');
+    if (action === 'pause' && status !== 0) {
+      throw new Error('Airdrop must be ACTIVE to pause');
+    }
+    if (action === 'resume' && status !== 1) {
+      throw new Error('Airdrop must be PAUSED to resume');
     }
     if ((flags & 0x01) !== 0x01) {
-      throw new Error('Campaign is not configured as cancelable/pausable');
+      throw new Error('Airdrop is not configured as cancelable/pausable');
     }
     if (commitment.length < 23) {
       throw new Error('Invalid airdrop state commitment');
     }
 
-    // Matches AirdropCovenant.pause() serialization exactly.
     const newCommitment = new Uint8Array(40);
-    newCommitment[0] = 1; // PAUSED
+    newCommitment[0] = action === 'pause' ? 1 : 0;
     newCommitment.set(commitment.slice(1, 23), 1);
-    newCommitment.fill(0, 23);
 
-    // ~3KB control tx; fee must clear min relay (~3500). Airdrop.pause caps
-    // outputs at <= 1 (state only), so an external fee payer's change output would
-    // exceed the cap — the fee is always self-funded from the contract balance.
-    // pause() has no CLTV guard, so locktime/sequence are irrelevant.
-    const feeReserve = 4000n;
+    const feeReserve = 4000n; // ~3KB control tx; must clear min relay (~3500)
+    const stateOutputSatoshis = contractUtxo.satoshis - feeReserve;
+    if (stateOutputSatoshis < 546n) {
+      throw new Error(`Insufficient contract balance to ${action} airdrop`);
+    }
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
     txBuilder.setLocktime(0);
-    txBuilder.addInput(
-      contractUtxo,
-      contract.unlock.pause(
-        placeholderSignature(),
-        placeholderPublicKey(),
-      ),
-    );
-    const feePayer = null as { utxos: any[]; total: bigint } | null;
-    if (feePayer) {
-      const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
-      for (const utxo of feePayer.utxos) {
-        txBuilder.addInput(utxo, unlocker);
-      }
-    }
-    const stateOutputSatoshis = feePayer
-      ? contractUtxo.satoshis
-      : contractUtxo.satoshis - feeReserve;
-    if (stateOutputSatoshis < 546n) {
-      throw new Error('Insufficient contract balance to pause campaign');
-    }
-
+    txBuilder.addInput(contractUtxo, contract.unlock[action](placeholderSignature(), placeholderPublicKey()));
     txBuilder.addOutput({
       to: contract.tokenAddress,
       amount: stateOutputSatoshis,
@@ -103,29 +102,20 @@ export class AirdropControlService {
         },
       },
     });
-    if (feePayer) {
-      const feeChange = feePayer.total - feeReserve;
-      if (feeChange > 546n) {
-        txBuilder.addOutput({
-          to: params.feePayerAddress!,
-          amount: feeChange,
-        });
-      }
-    }
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
-        broadcast: true,
-        userPrompt: 'Pause airdrop campaign',
-      }));
+      broadcast: true,
+      userPrompt: action === 'pause' ? 'Pause this airdrop' : 'Resume this airdrop',
+    }));
 
     return {
       wcTransaction,
-      nextStatus: 'PAUSED',
+      nextStatus: action === 'pause' ? 'PAUSED' : 'ACTIVE',
     };
   }
 
   async buildCancelTransaction(params: AirdropControlBuildParams): Promise<AirdropControlBuildResult> {
-    const artifact = ContractFactory.getArtifact('AirdropCovenant');
+    const artifact = ContractFactory.artifactForAddress('AirdropCovenant', params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -158,85 +148,96 @@ export class AirdropControlService {
         placeholderPublicKey(),
       ),
     );
-    const feeReserve = 2500n;
-    const feePayer = params.feePayerAddress
-      ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
-      : null;
-    if (feePayer) {
-      const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
-      for (const utxo of feePayer.utxos) {
-        txBuilder.addInput(utxo, unlocker);
+    if (ContractFactory.isV2(ContractFactory.typeForAddress('AirdropCovenant', params.constructorParams, params.contractAddress))) {
+      addV2CampaignCancelOutputs({
+        txBuilder,
+        contractUtxo,
+        tokenType: params.tokenType,
+        remainingPool: remainingPool,
+        returnAddress: cancelReturnAddress,
+      });
+    } else {
+      const feeReserve = 2500n;
+      const feePayer = params.feePayerAddress
+        ? await this.selectFeePayerInputs(params.feePayerAddress, feeReserve)
+        : null;
+      if (feePayer) {
+        const unlocker = placeholderP2PKHUnlocker(params.feePayerAddress!);
+        for (const utxo of feePayer.utxos) {
+          txBuilder.addInput(utxo, unlocker);
+        }
       }
-    }
 
-    let spentSatoshis = 0n;
-    if (params.tokenType === 'FUNGIBLE_TOKEN') {
-      if (!contractUtxo.token?.category) {
-        throw new Error('Cancel requires tokenized covenant UTXO with token category');
-      }
-      if (contractUtxo.satoshis < 1000n) {
-        throw new Error('Insufficient contract satoshis to build token cancel output');
-      }
-      txBuilder.addOutput({
-        to: cancelReturnAddress,
-        amount: 1000n,
-        token: {
-          category: contractUtxo.token.category,
+      let spentSatoshis = 0n;
+      if (params.tokenType === 'FUNGIBLE_TOKEN') {
+        if (!contractUtxo.token?.category) {
+          throw new Error('Cancel requires tokenized covenant UTXO with token category');
+        }
+        if (contractUtxo.satoshis < 1000n) {
+          throw new Error('Insufficient contract satoshis to build token cancel output');
+        }
+        txBuilder.addOutput({
+          to: toTokenAwareAddress(cancelReturnAddress),
+          amount: 1000n,
+          token: {
+            category: contractUtxo.token.category,
+            amount: remainingPool,
+          },
+        });
+        spentSatoshis += 1000n;
+      } else {
+        if (remainingPool < 546n) {
+          throw new Error('Remaining BCH pool is below dust and cannot be cancelled');
+        }
+        if (contractUtxo.satoshis < remainingPool) {
+          throw new Error('Contract balance is below remaining BCH pool; cannot build valid cancel transaction');
+        }
+        txBuilder.addOutput({
+          to: cancelReturnAddress,
           amount: remainingPool,
-        },
-      });
-      spentSatoshis += 1000n;
-    } else {
-      if (remainingPool < 546n) {
-        throw new Error('Remaining BCH pool is below dust and cannot be cancelled');
-      }
-      if (contractUtxo.satoshis < remainingPool) {
-        throw new Error('Contract balance is below remaining BCH pool; cannot build valid cancel transaction');
-      }
-      txBuilder.addOutput({
-        to: cancelReturnAddress,
-        amount: remainingPool,
-      });
-      spentSatoshis += remainingPool;
-    }
-
-    if (feePayer) {
-      const contractChange = contractUtxo.satoshis - spentSatoshis;
-      if (contractChange < 0n) {
-        throw new Error('Contract balance is insufficient for required cancel outputs');
-      }
-      if (contractChange > 546n) {
-        txBuilder.addOutput({
-          to: cancelReturnAddress,
-          amount: contractChange,
         });
+        spentSatoshis += remainingPool;
       }
 
-      const feeChange = feePayer.total - feeReserve;
-      if (feeChange > 546n) {
-        txBuilder.addOutput({
-          to: params.feePayerAddress!,
-          amount: feeChange,
-        });
+      if (feePayer) {
+        const contractChange = contractUtxo.satoshis - spentSatoshis;
+        if (contractChange < 0n) {
+          throw new Error('Contract balance is insufficient for required cancel outputs');
+        }
+        if (contractChange > 546n) {
+          txBuilder.addOutput({
+            to: cancelReturnAddress,
+            amount: contractChange,
+          });
+        }
+
+        const feeChange = feePayer.total - feeReserve;
+        if (feeChange > 546n) {
+          txBuilder.addOutput({
+            to: params.feePayerAddress!,
+            amount: feeChange,
+          });
+        }
+      } else {
+        const contractChange = contractUtxo.satoshis - spentSatoshis - feeReserve;
+        if (contractChange < 0n) {
+          throw new Error(
+            'Cancel requires an additional fee-paying input. Provide signer address with spendable BCH.'
+          );
+        }
+        if (contractChange > 546n) {
+          txBuilder.addOutput({
+            to: cancelReturnAddress,
+            amount: contractChange,
+          });
+        }
       }
-    } else {
-      const contractChange = contractUtxo.satoshis - spentSatoshis - feeReserve;
-      if (contractChange < 0n) {
-        throw new Error(
-          'Cancel requires an additional fee-paying input. Provide signer address with spendable BCH.'
-        );
-      }
-      if (contractChange > 546n) {
-        txBuilder.addOutput({
-          to: cancelReturnAddress,
-          amount: contractChange,
-        });
-      }
+
     }
 
     const wcTransaction = this.forceFinalSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Cancel airdrop campaign and recover remaining funds',
+        userPrompt: 'Cancel this airdrop and return the rest to you',
       }));
 
     return {

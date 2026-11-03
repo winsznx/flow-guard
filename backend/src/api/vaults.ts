@@ -7,13 +7,20 @@ import {
 } from '../utils/txVerification.js';
 import { VaultFundingService } from '../services/VaultFundingService.js';
 import { serializeWcTransaction } from '../utils/wcSerializer.js';
+import { ElectrumNetworkProvider } from 'cashscript';
+import { checkAndPrepareGenesisUtxo } from '../utils/genesisPrep.js';
+import { resolveBchNetwork } from '../utils/network.js';
 import db from '../database/schema.js';
 import { displayAmountToOnChain } from '../utils/amounts.js';
 import { requireWalletAuth, callerAddress } from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
 
 const router = Router();
-router.param('id', uuidParam);
+const LOGICAL_VAULT_ID = /^vault_\d+_[a-z0-9]+$/;
+router.param('id', (req, res, next, value: string) => {
+  if (LOGICAL_VAULT_ID.test(value)) return next();
+  uuidParam(req, res, next, value);
+});
 
 async function confirmVaultFunding(args: {
   vaultDbId: string;
@@ -38,7 +45,7 @@ async function confirmVaultFunding(args: {
     };
   }
 
-  const vault = await VaultService.getVaultById(args.vaultDbId);
+  const vault = await VaultService.getVaultByVaultId(args.vaultDbId);
   if (!vault) {
     return {
       status: 404,
@@ -148,7 +155,7 @@ async function confirmVaultFunding(args: {
     };
   }
 
-  const updatedVault = await VaultService.updateBalance(args.vaultDbId, args.amount, args.txid);
+  const updatedVault = await VaultService.updateBalance(vault.id, args.amount, args.txid);
   return {
     status: 200,
     body: {
@@ -238,7 +245,7 @@ router.get('/', async (req, res) => {
 // Get vault by ID (with visibility check)
 router.get('/:id', async (req, res) => {
   try {
-    const vault = await VaultService.getVaultById(req.params.id);
+    const vault = await VaultService.getVaultByVaultId(req.params.id);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -270,7 +277,7 @@ router.get('/:id', async (req, res) => {
 // Get vault state
 router.get('/:id/state', async (req, res) => {
   try {
-    const vault = await VaultService.getVaultById(req.params.id);
+    const vault = await VaultService.getVaultByVaultId(req.params.id);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -299,13 +306,17 @@ router.post('/:id/signers', requireWalletAuth, async (req, res) => {
     }
 
     // Get vault by database ID first to get the vaultId
-    const vault = await VaultService.getVaultById(dbId);
+    const vault = await VaultService.getVaultByVaultId(dbId);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
 
-    const updatedVault = await VaultService.addSigner(vault.vaultId, signerAddress, requesterAddress);
-    res.json(updatedVault);
+    // VaultCovenant and ProposalCovenant bake the three signer hashes in at construction,
+    // so a DB-only signer could never approve or spend on-chain.
+    return res.status(409).json({
+      error: 'Signers are fixed when a vault is created. To change signers, create a new vault.',
+      errorCode: 'SIGNERS_FIXED',
+    });
   } catch (error: any) {
     if (error.message.includes('not found')) {
       return res.status(404).json({ error: error.message });
@@ -324,7 +335,7 @@ router.post('/:id/signers', requireWalletAuth, async (req, res) => {
 // Returns contract address and amount details for frontend to use
 router.get('/:id/deposit', async (req, res) => {
   try {
-    const vault = await VaultService.getVaultById(req.params.id);
+    const vault = await VaultService.getVaultByVaultId(req.params.id);
     if (!vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
@@ -349,7 +360,7 @@ router.get('/:id/deposit', async (req, res) => {
     if (amountToDepositSats > 0n) {
       const constructorParamsRow = await db
         .prepare('SELECT constructor_params FROM vaults WHERE id = ?')
-        .get(req.params.id) as any;
+        .get(vault.id) as any;
 
       if (constructorParamsRow?.constructor_params) {
         try {
@@ -371,7 +382,19 @@ router.get('/:id/deposit', async (req, res) => {
             depositSatoshis: built.depositSatoshis.toString(),
           };
         } catch (error: any) {
-          warning = `State-NFT bootstrap transaction unavailable: ${error.message}`;
+          // The state NFT's category comes from a coin at output index 0. When the wallet
+          // has none, hand back the self-send that makes one, like the other products do.
+          const prep = String(error?.message || '').includes('outpoint index 0')
+            ? await checkAndPrepareGenesisUtxo(new ElectrumNetworkProvider(resolveBchNetwork()), userAddress)
+            : null;
+          if (prep?.required && prep.wcTransaction) {
+            fundingPayload = {
+              requiresPreparation: true,
+              preparationTransaction: serializeWcTransaction(prep.wcTransaction),
+            };
+          } else {
+            warning = `State-NFT bootstrap transaction unavailable: ${error.message}`;
+          }
         }
       } else {
         warning = 'Vault constructor parameters are missing; cannot build state-NFT bootstrap transaction.';

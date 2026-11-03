@@ -9,7 +9,7 @@ import {
 import { binToHex, cashAddressToLockingBytecode, hexToBin } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { PaymentControlService } from './PaymentControlService.js';
-import { finalizeWcTransactionSequences } from './txFinality.js';
+import { finalizeWcTransactionSequences, mineableLocktime } from './txFinality.js';
 
 export interface StreamControlBuildParams {
   streamType: 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID';
@@ -19,6 +19,8 @@ export interface StreamControlBuildParams {
   currentTime: number;
   tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  /** What the wallet shows when it asks to sign, for callers that aren't streams. */
+  userPrompt?: string;
 }
 
 export interface StreamTransferBuildParams extends StreamControlBuildParams {
@@ -66,7 +68,7 @@ export class StreamControlService {
       };
     }
 
-    const artifact = ContractFactory.getArtifact(this.getVestingArtifact(params.streamType));
+    const artifact = ContractFactory.artifactForAddress(this.getVestingArtifact(params.streamType), params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -79,18 +81,19 @@ export class StreamControlService {
       throw new Error('Stream is not configured as pausable');
     }
 
+    const locktime = mineableLocktime(params.currentTime);
     const newCommitment = new Uint8Array(40);
     newCommitment[0] = 1; // PAUSED
     newCommitment[1] = flags;
     newCommitment.set(commitment.slice(2, 10), 2);
     newCommitment.set(commitment.slice(10, 15), 10);
-    this.setUint40LE(newCommitment, 15, params.currentTime);
+    this.setUint40LE(newCommitment, 15, locktime);
     newCommitment.set(commitment.slice(20, 40), 20);
 
     const stateOutputSatoshis = this.buildStateOutputAmount(contractUtxo.satoshis, 'pause');
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(locktime);
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.pause(
@@ -115,7 +118,7 @@ export class StreamControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Pause stream',
+        userPrompt: 'Pause this stream',
       })),
       nextStatus: 'PAUSED',
     };
@@ -137,7 +140,7 @@ export class StreamControlService {
       };
     }
 
-    const artifact = ContractFactory.getArtifact(this.getVestingArtifact(params.streamType));
+    const artifact = ContractFactory.artifactForAddress(this.getVestingArtifact(params.streamType), params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -153,7 +156,8 @@ export class StreamControlService {
       throw new Error('Invalid stream pause state');
     }
 
-    const pauseDuration = Math.max(0, params.currentTime - pauseStart);
+    const locktime = mineableLocktime(params.currentTime);
+    const pauseDuration = Math.max(0, locktime - pauseStart);
     const newCursor = cursor + pauseDuration;
 
     const newCommitment = new Uint8Array(40);
@@ -167,7 +171,7 @@ export class StreamControlService {
     const stateOutputSatoshis = this.buildStateOutputAmount(contractUtxo.satoshis, 'resume');
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(locktime);
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.resume(
@@ -192,14 +196,14 @@ export class StreamControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Resume stream',
+        userPrompt: params.userPrompt ?? 'Resume this stream',
       })),
       nextStatus: 'ACTIVE',
     };
   }
 
   async buildTransferTransaction(params: StreamTransferBuildParams): Promise<StreamControlBuildResult> {
-    const artifact = ContractFactory.getArtifact(this.getVestingArtifact(params.streamType));
+    const artifact = ContractFactory.artifactForAddress(this.getVestingArtifact(params.streamType), params.constructorParams, params.contractAddress);
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const { contractUtxo, commitment } = await this.getContractState(params.contractAddress, params.currentCommitment);
 
@@ -229,7 +233,7 @@ export class StreamControlService {
     const stateOutputSatoshis = this.buildStateOutputAmount(contractUtxo.satoshis, 'transfer');
 
     const txBuilder = new TransactionBuilder({ provider: this.provider });
-    txBuilder.setLocktime(params.currentTime);
+    txBuilder.setLocktime(mineableLocktime(params.currentTime));
     txBuilder.addInput(
       contractUtxo,
       contract.unlock.transfer(
@@ -254,7 +258,7 @@ export class StreamControlService {
     return {
       wcTransaction: finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: 'Transfer vesting stream recipient',
+        userPrompt: 'Change who receives this stream',
       })),
       nextRecipient: params.newRecipient,
     };
@@ -283,7 +287,7 @@ export class StreamControlService {
   }
 
   private buildStateOutputAmount(contractSatoshis: bigint, action: string): bigint {
-    const feeReserve = 900n;
+    const feeReserve = 4000n; // ~1.5KB control tx; must clear min relay and stay under the covenant's 5000 cap
     const stateOutputSatoshis = contractSatoshis - feeReserve;
     if (stateOutputSatoshis < 546n) {
       throw new Error(`Insufficient contract balance to ${action} stream`);

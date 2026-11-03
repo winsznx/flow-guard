@@ -92,13 +92,13 @@ export class BudgetDeploymentService {
     const constructorArgs = [
       vaultIdBytes, // bytes32 vaultId
       senderHash, // bytes20 senderHash
-      2, // int scheduleType (2 = STEP_VESTING)
-      totalAmount, // int totalAmount (satoshis)
-      start, // int startTimestamp
-      end, // int endTimestamp
-      0, // int cliffTimestamp (no cliff for budget plans)
-      stepInterval, // int stepInterval (seconds per milestone)
-      stepAmount, // int stepAmount (tokens per milestone)
+      2n, // int scheduleType (2 = STEP_VESTING)
+      BigInt(totalAmount), // int totalAmount (satoshis)
+      BigInt(start), // int startTimestamp
+      BigInt(end), // int endTimestamp
+      0n, // int cliffTimestamp (no cliff for budget plans)
+      BigInt(stepInterval), // int stepInterval (seconds per milestone)
+      BigInt(stepAmount), // int stepAmount (tokens per milestone)
     ];
 
     // Build initial NFT commitment (40 bytes)
@@ -112,7 +112,7 @@ export class BudgetDeploymentService {
     });
 
     // Get contract artifact and deploy
-    const artifact = ContractFactory.getArtifact('VestingCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('VestingCovenant'));
     const contract = new Contract(artifact, constructorArgs, { provider: this.provider });
 
     // Generate human-readable budget ID

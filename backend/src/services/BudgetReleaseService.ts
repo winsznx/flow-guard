@@ -14,8 +14,8 @@ import {
 } from 'cashscript';
 import { hexToBin, binToHex } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
-import { resolveFeePayer } from '../utils/feePayer.js';
-import { finalizeWcTransactionSequences } from './txFinality.js';
+import { finalizeWcTransactionSequences, mineableLocktime } from './txFinality.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface TransactionOutput {
   to: string;
@@ -97,16 +97,17 @@ export class BudgetReleaseService {
       stepInterval,
       stepAmount,
       totalAmount,
-      currentTime,
       tokenType,
       tokenCategory,
-      feePayerAddress,
       constructorParams,
       currentCommitment,
     } = params;
 
+    // The covenant computes the release from tx.locktime, so the amounts here use the same value.
+    const currentTime = mineableLocktime(params.currentTime);
+
     // Get contract artifact
-    const artifact = ContractFactory.getArtifact('VestingCovenant');
+    const artifact = ContractFactory.artifactForAddress('VestingCovenant', constructorParams, contractAddress);
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     // Get contract UTXOs
@@ -190,11 +191,11 @@ export class BudgetReleaseService {
 
     // Calculate outputs
     const releasableAmountBig = BigInt(releasableAmount);
-    const estimatedFee = 1000n;
-    const resolvedFeePayerAddress = feePayerAddress || recipient;
-    const feePayer = await resolveFeePayer(this.provider, this.network, resolvedFeePayerAddress, estimatedFee);
+    // VestingCovenant.claim() allows two outputs (recipient + state), so the ~3KB release
+    // pays its fee from the contract's reserve, which funding sizes for every release.
+    const estimatedFee = 4000n;
     const recipientOutputSatoshis = tokenType === 'FUNGIBLE_TOKEN' ? 1000n : releasableAmountBig;
-    const remainingBalance = contractBalance - recipientOutputSatoshis;
+    const remainingBalance = contractBalance - recipientOutputSatoshis - estimatedFee;
     const minimumStateOutput = 546n;
 
     if (remainingBalance < minimumStateOutput) {
@@ -202,13 +203,6 @@ export class BudgetReleaseService {
     }
 
     const outputs: TransactionOutput[] = [];
-    for (const utxo of feePayer.utxos) {
-      inputs.push({
-        txid: utxo.txid,
-        vout: utxo.vout,
-        satoshis: Number(utxo.satoshis),
-      });
-    }
 
     let remainingTokens = 0n;
     if (tokenType === 'FUNGIBLE_TOKEN') {
@@ -225,7 +219,7 @@ export class BudgetReleaseService {
     // Output 1: Release amount to recipient
     if (tokenType === 'FUNGIBLE_TOKEN') {
       outputs.push({
-        to: recipient,
+        to: toTokenAwareAddress(recipient),
         amount: 1000, // Dust amount for token output
         token: {
           category: tokenCategory!,
@@ -278,13 +272,10 @@ export class BudgetReleaseService {
         placeholderPublicKey(),
       ),
     );
-    for (const utxo of feePayer.utxos) {
-      txBuilder.addInput(utxo, feePayer.unlocker);
-    }
 
     if (tokenType === 'FUNGIBLE_TOKEN') {
       txBuilder.addOutput({
-        to: recipient,
+        to: toTokenAwareAddress(recipient),
         amount: 1000n,
         token: {
           category: tokenCategory!,
@@ -326,17 +317,6 @@ export class BudgetReleaseService {
       });
     }
 
-    const feeChange = feePayer.total - estimatedFee;
-    if (feeChange > 546n) {
-      outputs.push({
-        to: feePayer.address,
-        amount: Number(feeChange),
-      });
-      txBuilder.addOutput({
-        to: feePayer.address,
-        amount: feeChange,
-      });
-    }
 
     const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,

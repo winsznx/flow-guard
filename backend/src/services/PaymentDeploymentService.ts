@@ -21,6 +21,7 @@ export interface PaymentDeploymentParams {
   pausable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string; // hex-encoded 32-byte category ID for CashTokens
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface PaymentDeployment {
@@ -138,7 +139,7 @@ export class PaymentDeploymentService {
    * Deploy a RecurringPaymentCovenant
    */
   async deployRecurringPayment(params: PaymentDeploymentParams): Promise<PaymentDeployment> {
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('RecurringPaymentCovenant'));
 
     const vaultId = hexToBin(params.vaultId);
     const senderHash = this.addressToHash160(params.sender);
@@ -155,7 +156,7 @@ export class PaymentDeploymentService {
       throw new Error('tokenCategory is required for FUNGIBLE_TOKEN payments');
     }
     const amountPerIntervalOnChain = isTokenPayment
-      ? displayAmountToOnChain(params.amountPerInterval, 'FUNGIBLE_TOKEN')
+      ? displayAmountToOnChain(params.amountPerInterval, 'FUNGIBLE_TOKEN', params.tokenDecimals)
       : displayAmountToOnChain(params.amountPerInterval, 'BCH');
     const totalAmountOnChain = amountPerIntervalOnChain * Math.max(0, estimatedPayments);
 

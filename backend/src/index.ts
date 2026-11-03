@@ -29,7 +29,7 @@ import { startBlockchainMonitor, stopBlockchainMonitor } from './services/blockc
 import { startCycleUnlockScheduler, stopCycleUnlockScheduler } from './services/cycle-unlock-scheduler.js';
 import { startTransactionMonitor, stopTransactionMonitor } from './services/TransactionMonitor.js';
 import { errorHandler } from './middleware/errorHandler.js';
-import { generalLimiter, strictLimiter, queryLimiter } from './middleware/rateLimiter.js';
+import { generalLimiter, strictLimiter, queryLimiter, statusLimiter } from './middleware/rateLimiter.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { resolveBchNetwork } from './utils/network.js';
 
@@ -211,6 +211,7 @@ app.post('/api/vaults/:vaultId/budget-plans', strictLimiter);
 app.get('/api/admin/export', strictLimiter);
 // Apply query rate limiting to read-only endpoints
 app.use('/api/explorer', queryLimiter);
+app.use('/api/status', statusLimiter);
 
 app.use('/api', authRouter); // Nonce issuance — no auth required
 app.use('/api/vaults', vaultsRouter);

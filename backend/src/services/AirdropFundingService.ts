@@ -37,6 +37,8 @@ export interface FundingTransactionParams {
   tokenCategory?: string;
   nftCommitment: string; // hex-encoded NFT commitment
   nftCapability: 'minting' | 'mutable' | 'none';
+  /** BCH for the contract output; defaults to the flat V1 reserve. */
+  contractSatoshis?: bigint;
 }
 
 export interface UnsignedFundingTransaction {
@@ -95,7 +97,7 @@ export class AirdropFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis();
     const totalAmountOnChain = toNonNegativeBigInt(totalAmount, 'totalAmount');
-    const contractOutput = getRequiredContractFundingSatoshis('airdrop', tokenType, totalAmountOnChain);
+    const contractOutput = params.contractSatoshis ?? getRequiredContractFundingSatoshis('airdrop', tokenType, totalAmountOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
     let authorityChangeOutput: TransactionOutput | null = null;
 
@@ -273,7 +275,7 @@ export class AirdropFundingService {
       inputOwnerAddress: creatorAddress,
       inputs: sourceOutputs,
       outputs,
-      userPrompt: `Fund airdrop contract ${contractAddress}`,
+      userPrompt: 'Fund your airdrop',
       broadcast: false,
     });
 

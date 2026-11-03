@@ -13,7 +13,8 @@ import {
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
-import { finalizeWcTransactionSequences } from './txFinality.js';
+import { TOKEN_CANCEL_TOO_EARLY, finalizeWcTransactionSequences } from './txFinality.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface StreamCancelParams {
   streamType: 'LINEAR' | 'STEP' | 'RECURRING' | 'TRANCHE' | 'HYBRID';
@@ -47,7 +48,7 @@ export class StreamCancelService {
   }
 
   async buildCancelTransaction(params: StreamCancelParams): Promise<StreamCancelTransaction> {
-    const artifact = ContractFactory.getArtifact(
+    const covenantType = ContractFactory.typeForAddress(
       params.streamType === 'RECURRING'
         ? 'RecurringPaymentCovenant'
         : params.streamType === 'TRANCHE'
@@ -55,7 +56,12 @@ export class StreamCancelService {
         : params.streamType === 'HYBRID'
           ? 'HybridVestingCovenant'
           : 'VestingCovenant',
+      params.constructorParams,
+      params.contractAddress,
     );
+    const artifact = ContractFactory.getArtifact(covenantType);
+    // V2 vesting cancels allow a third output for the sender's leftover reserve.
+    const maxOutputs = ContractFactory.isV2(covenantType) || params.streamType === 'TRANCHE' ? 3 : 2;
 
     const contract = new Contract(artifact, params.constructorParams, { provider: this.provider });
     const contractUtxos = await this.provider.getUtxos(params.contractAddress);
@@ -137,7 +143,7 @@ export class StreamCancelService {
 
       const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
         broadcast: true,
-        userPrompt: `Cancel recurring stream to recover ${result.unvestedAmount} units`,
+        userPrompt: "Cancel this stream. What's not released yet comes back to you.",
       }));
 
       console.log('[StreamCancelService] Built recurring cancel transaction', {
@@ -160,7 +166,27 @@ export class StreamCancelService {
       };
     }
 
-    const result = params.streamType === 'HYBRID'
+    const result = params.streamType === 'TRANCHE'
+      ? this.addTrancheCancelOutputs({
+          txBuilder,
+          commitment,
+          contractBalance,
+          fee: feeFromContract,
+          sender: params.sender,
+          recipient: params.recipient,
+          cancelReturnAddress,
+          tokenType: params.tokenType,
+          tokenCategory: params.tokenCategory,
+          totalAmount: this.readBigInt(params.constructorParams[2], 'totalAmount'),
+          startTimestamp: this.readBigInt(params.constructorParams[3], 'startTimestamp'),
+          scheduleCount: Number(this.readBigInt(params.constructorParams[4], 'scheduleCount')),
+          tranches: Array.from({ length: 8 }, (_, index) => ({
+            unlockTime: this.readBigInt(params.constructorParams[5 + index * 2], `tranche${index + 1}Timestamp`),
+            cumulative: this.readBigInt(params.constructorParams[6 + index * 2], `tranche${index + 1}Cumulative`),
+          })),
+          locktime: cancelLocktime,
+        })
+      : params.streamType === 'HYBRID'
       ? this.addHybridCancelOutputs({
           txBuilder,
           commitment,
@@ -177,6 +203,7 @@ export class StreamCancelService {
           endTimestamp: this.readBigInt(params.constructorParams[5], 'endTimestamp'),
           upfrontAmount: this.readBigInt(params.constructorParams[6], 'upfrontAmount'),
           locktime: cancelLocktime,
+          maxOutputs,
         })
       : this.addVestingCancelOutputs({
           txBuilder,
@@ -195,6 +222,7 @@ export class StreamCancelService {
           stepInterval: this.readBigInt(params.constructorParams[7], 'stepInterval'),
           stepAmount: this.readBigInt(params.constructorParams[8], 'stepAmount'),
           locktime: cancelLocktime,
+          maxOutputs,
         });
 
     if (feePayer) {
@@ -218,7 +246,7 @@ export class StreamCancelService {
 
     const wcTransaction = finalizeWcTransactionSequences(txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: `Cancel vesting stream. Return ${result.unvestedAmount} units`,
+      userPrompt: "Cancel this stream. What's not released yet comes back to you.",
     }));
 
     console.log('[StreamCancelService] Built vesting cancel transaction', {
@@ -262,7 +290,7 @@ export class StreamCancelService {
     if (remainingPool > 0n) {
       if (args.tokenType === 'FUNGIBLE_TOKEN' && args.tokenCategory) {
         args.txBuilder.addOutput({
-          to: args.cancelReturnAddress,
+          to: toTokenAwareAddress(args.cancelReturnAddress),
           amount: dust,
           token: {
             category: args.tokenCategory,
@@ -313,40 +341,134 @@ export class StreamCancelService {
     stepInterval: bigint;
     stepAmount: bigint;
     locktime: number;
+    maxOutputs: number;
   }): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
     const totalReleased = this.readUint64LE(args.commitment, 2);
     const cursor = this.readUint40LE(args.commitment, 10);
     const duration = Number(args.endTimestamp - args.startTimestamp);
-    const elapsed = Math.max(0, args.locktime - Number(cursor));
-
-    let vestedAtCancel = 0n;
-    if (args.scheduleType === 1) {
-      if (duration <= 0 || elapsed >= duration) {
-        vestedAtCancel = args.totalAmount;
-      } else {
-        vestedAtCancel = (args.totalAmount * BigInt(elapsed)) / BigInt(duration);
+    // Not clamped at 0: VestingCovenant.cancel() uses the signed difference, so before the
+    // start it counts a negative vested amount and expects more than the total back.
+    const vestedAt = (locktime: number): bigint => {
+      const elapsed = locktime - Number(cursor);
+      if (args.scheduleType === 1) {
+        if (duration <= 0 || elapsed >= duration) return args.totalAmount;
+        return (args.totalAmount * BigInt(elapsed)) / BigInt(duration);
       }
-    } else if (args.scheduleType === 2) {
-      const interval = Number(args.stepInterval);
-      if (interval <= 0) {
-        throw new Error('Invalid step interval in stream constructor parameters');
+      if (args.scheduleType === 2) {
+        const interval = Number(args.stepInterval);
+        if (interval <= 0) {
+          throw new Error('Invalid step interval in stream constructor parameters');
+        }
+        const vested = BigInt(Math.trunc(elapsed / interval)) * args.stepAmount;
+        return vested > args.totalAmount ? args.totalAmount : vested;
       }
-      const completedSteps = BigInt(Math.floor(elapsed / interval));
-      vestedAtCancel = completedSteps * args.stepAmount;
-      if (vestedAtCancel > args.totalAmount) vestedAtCancel = args.totalAmount;
-    } else {
       throw new Error(`Unsupported vesting schedule type: ${args.scheduleType}`);
-    }
+    };
 
+    const locktime = this.settleSubDustClaim(args, vestedAt, totalReleased, Number(cursor));
+    const vestedAtCancel = vestedAt(locktime);
+
+    return this.writeCancelOutputs(args, vestedAtCancel, totalReleased, args.maxOutputs);
+  }
+
+  /**
+   * Right after a claim, the recipient's share at the cancel locktime can be a few sats
+   * the network won't relay, and the covenant wants exactly that amount on their output.
+   * For BCH, move the locktime back to the last second where nothing new had been
+   * released, so the cancel pays the recipient nothing instead of an unsendable amount.
+   * Returns the locktime the outputs must be computed at.
+   */
+  private settleSubDustClaim(
+    args: { txBuilder: TransactionBuilder; tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'; locktime: number },
+    vestedAt: (locktime: number) => bigint,
+    totalReleased: bigint,
+    earliest: number,
+  ): number {
+    const claimable = vestedAt(args.locktime) - totalReleased;
+    if (args.tokenType === 'FUNGIBLE_TOKEN' || claimable <= 0n || claimable >= 546n) return args.locktime;
+
+    let low = Math.max(500000000, earliest);
+    if (vestedAt(low) > totalReleased) return args.locktime;
+    let high = args.locktime;
+    while (high - low > 1) {
+      const mid = Math.floor((low + high) / 2);
+      if (vestedAt(mid) > totalReleased) high = mid;
+      else low = mid;
+    }
+    if (vestedAt(low) !== totalReleased) return args.locktime;
+    args.txBuilder.setLocktime(low);
+    return low;
+  }
+
+  /**
+   * TrancheVestingCovenant.cancel(): the vested amount is the cumulative amount of the
+   * last tranche reached at the cancel locktime, shifted by pauses.
+   */
+  private addTrancheCancelOutputs(args: {
+    txBuilder: TransactionBuilder;
+    commitment: Uint8Array;
+    contractBalance: bigint;
+    fee: bigint;
+    sender: string;
+    recipient: string;
+    cancelReturnAddress: string;
+    tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
+    tokenCategory?: string;
+    totalAmount: bigint;
+    startTimestamp: bigint;
+    scheduleCount: number;
+    tranches: Array<{ unlockTime: bigint; cumulative: bigint }>;
+    locktime: number;
+  }): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
+    const totalReleased = this.readUint64LE(args.commitment, 2);
+    const cursor = this.readUint40LE(args.commitment, 10);
+    const effectiveNow = BigInt(args.locktime) - (cursor - args.startTimestamp);
+    let vestedAtCancel = 0n;
+    args.tranches.slice(0, args.scheduleCount).forEach((tranche) => {
+      if (effectiveNow >= tranche.unlockTime) vestedAtCancel = tranche.cumulative;
+    });
+    return this.writeCancelOutputs(args, vestedAtCancel, totalReleased, 3);
+  }
+
+  /**
+   * Writes the recipient and sender outputs the vesting covenants check on cancel, and
+   * returns leftover fee reserve to the sender when the covenant's output cap allows it.
+   */
+  private writeCancelOutputs(
+    args: {
+      txBuilder: TransactionBuilder;
+      contractBalance: bigint;
+      fee: bigint;
+      sender: string;
+      recipient: string;
+      cancelReturnAddress: string;
+      tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
+      tokenCategory?: string;
+      totalAmount: bigint;
+    },
+    vestedAtCancel: bigint,
+    totalReleased: bigint,
+    maxOutputs: number,
+  ): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
     const claimableNow = this.clampToZero(vestedAtCancel - totalReleased);
     const unvested = this.clampToZero(args.totalAmount - vestedAtCancel);
     const dust = 1000n;
     let spentSatoshis = 0n;
+    // VestingCovenant.cancel() checks output[0] as the recipient's claimable part when
+    // there is one, else as the sender's unvested part; output[1] is checked as the
+    // sender's unvested part only when both are non-zero. So the leftover fee reserve can
+    // go back to the sender unless both checked outputs are used and the output cap of 2
+    // is reached.
+    const checkedOutputs = (claimableNow > 0n ? 1 : 0) + (unvested > 0n ? 1 : 0);
+    const roomForChange = checkedOutputs < maxOutputs;
+    if (unvested > args.totalAmount && args.tokenType === 'FUNGIBLE_TOKEN') {
+      throw new Error(TOKEN_CANCEL_TOO_EARLY);
+    }
 
     if (args.tokenType === 'FUNGIBLE_TOKEN' && args.tokenCategory) {
       if (claimableNow > 0n) {
         args.txBuilder.addOutput({
-          to: args.recipient,
+          to: toTokenAwareAddress(args.recipient),
           amount: dust,
           token: {
             category: args.tokenCategory,
@@ -354,22 +476,22 @@ export class StreamCancelService {
           },
         });
         spentSatoshis += dust;
-      } else if (unvested > 0n) {
-        // VestingCovenant.cancel() checks unvested at output[1]; keep output[0] occupied.
-        args.txBuilder.addOutput({ to: args.recipient, amount: dust });
-        spentSatoshis += dust;
       }
 
       if (unvested > 0n) {
+        // The covenant pins only the token amount on the sender's output, so the
+        // leftover fee reserve rides on it instead of needing a change output.
+        const leftoverReserve = args.contractBalance - spentSatoshis - dust - args.fee;
+        const senderAmount = leftoverReserve > 0n ? dust + leftoverReserve : dust;
         args.txBuilder.addOutput({
-          to: args.cancelReturnAddress,
-          amount: dust,
+          to: toTokenAwareAddress(args.cancelReturnAddress),
+          amount: senderAmount,
           token: {
             category: args.tokenCategory,
             amount: unvested,
           },
         });
-        spentSatoshis += dust;
+        spentSatoshis += senderAmount;
       }
     } else {
       if (claimableNow > 0n) {
@@ -378,10 +500,6 @@ export class StreamCancelService {
         }
         args.txBuilder.addOutput({ to: args.recipient, amount: claimableNow });
         spentSatoshis += claimableNow;
-      } else if (unvested > 0n) {
-        // VestingCovenant.cancel() expects unvested at output index 1 when unvested > 0.
-        args.txBuilder.addOutput({ to: args.recipient, amount: 546n });
-        spentSatoshis += 546n;
       }
 
       if (unvested > 0n) {
@@ -400,11 +518,17 @@ export class StreamCancelService {
     const senderChange = args.contractBalance > requiredFromContract
       ? args.contractBalance - requiredFromContract
       : 0n;
-    if (senderChange > 546n) {
+    if (unvested > args.totalAmount && contractShortfall > 0n) {
+      // Before the start the covenant asks for more than the total back, and that extra
+      // must come out of the contract's own reserve, never from a fee sponsor.
+      throw new Error('This stream can be cancelled once its start date has passed.');
+    }
+    const changeRidesOnTokens = args.tokenType === 'FUNGIBLE_TOKEN' && Boolean(args.tokenCategory) && unvested > 0n;
+    if (senderChange > 546n && roomForChange && !changeRidesOnTokens) {
       args.txBuilder.addOutput({ to: args.sender, amount: senderChange });
     }
 
-    return { vestedAmount: vestedAtCancel, unvestedAmount: unvested, contractShortfall };
+    return { vestedAmount: this.clampToZero(vestedAtCancel), unvestedAmount: unvested, contractShortfall };
   }
 
   private addHybridCancelOutputs(args: {
@@ -423,23 +547,23 @@ export class StreamCancelService {
     endTimestamp: bigint;
     upfrontAmount: bigint;
     locktime: number;
+    maxOutputs: number;
   }): { vestedAmount: bigint; unvestedAmount: bigint; contractShortfall: bigint } {
     const totalReleased = this.readUint64LE(args.commitment, 2);
     const cursor = this.readUint40LE(args.commitment, 10);
     const timeShift = cursor - args.startTimestamp;
-    const effectiveNow = BigInt(args.locktime) - timeShift;
-
-    let vestedAtCancel = 0n;
-    if (effectiveNow >= args.endTimestamp) {
-      vestedAtCancel = args.totalAmount;
-    } else if (effectiveNow >= args.unlockTimestamp) {
+    const vestedAt = (locktime: number): bigint => {
+      const effectiveNow = BigInt(locktime) - timeShift;
+      if (effectiveNow >= args.endTimestamp) return args.totalAmount;
+      if (effectiveNow < args.unlockTimestamp) return 0n;
       const remainingAmount = args.totalAmount - args.upfrontAmount;
       const linearDuration = args.endTimestamp - args.unlockTimestamp;
-      vestedAtCancel = linearDuration <= 0n
-        ? args.totalAmount
-        : args.upfrontAmount + ((remainingAmount * (effectiveNow - args.unlockTimestamp)) / linearDuration);
-      if (vestedAtCancel > args.totalAmount) vestedAtCancel = args.totalAmount;
-    }
+      if (linearDuration <= 0n) return args.totalAmount;
+      const vested = args.upfrontAmount + ((remainingAmount * (effectiveNow - args.unlockTimestamp)) / linearDuration);
+      return vested > args.totalAmount ? args.totalAmount : vested;
+    };
+
+    const vestedAtCancel = vestedAt(this.settleSubDustClaim(args, vestedAt, totalReleased, Number(cursor)));
 
     const claimableNow = this.clampToZero(vestedAtCancel - totalReleased);
     const unvested = this.clampToZero(args.totalAmount - vestedAtCancel);
@@ -449,7 +573,7 @@ export class StreamCancelService {
     if (args.tokenType === 'FUNGIBLE_TOKEN' && args.tokenCategory) {
       if (claimableNow > 0n) {
         args.txBuilder.addOutput({
-          to: args.recipient,
+          to: toTokenAwareAddress(args.recipient),
           amount: dust,
           token: {
             category: args.tokenCategory,
@@ -458,20 +582,25 @@ export class StreamCancelService {
         });
         spentSatoshis += dust;
       } else if (unvested > 0n) {
-        args.txBuilder.addOutput({ to: args.recipient, amount: dust });
+        // Output[0] is unchecked when nothing is claimable; keep the placeholder with the sender.
+        args.txBuilder.addOutput({ to: args.sender, amount: dust });
         spentSatoshis += dust;
       }
 
       if (unvested > 0n) {
+        // Both outputs are taken, so leftover fee reserve rides on the sender's
+        // token output (the covenant pins only its token amount) instead of a 3rd output.
+        const leftoverReserve = args.contractBalance - spentSatoshis - dust - args.fee;
+        const senderAmount = leftoverReserve > 0n ? dust + leftoverReserve : dust;
         args.txBuilder.addOutput({
-          to: args.cancelReturnAddress,
-          amount: dust,
+          to: toTokenAwareAddress(args.cancelReturnAddress),
+          amount: senderAmount,
           token: {
             category: args.tokenCategory,
             amount: unvested,
           },
         });
-        spentSatoshis += dust;
+        spentSatoshis += senderAmount;
       }
     } else {
       if (claimableNow > 0n) {
@@ -481,8 +610,13 @@ export class StreamCancelService {
         args.txBuilder.addOutput({ to: args.recipient, amount: claimableNow });
         spentSatoshis += claimableNow;
       } else if (unvested > 0n) {
-        args.txBuilder.addOutput({ to: args.recipient, amount: 546n });
-        spentSatoshis += 546n;
+        // HybridVestingCovenant.cancel() checks the unvested part at output[1] and leaves
+        // output[0] unchecked when nothing is claimable, so output[0] returns the leftover
+        // fee reserve to the sender instead of sending dust to the recipient.
+        const leftoverReserve = args.contractBalance - unvested - args.fee;
+        const placeholder = leftoverReserve > 546n ? leftoverReserve : 546n;
+        args.txBuilder.addOutput({ to: args.sender, amount: placeholder });
+        spentSatoshis += placeholder;
       }
 
       if (unvested > 0n) {
@@ -501,7 +635,10 @@ export class StreamCancelService {
     const senderChange = args.contractBalance > requiredFromContract
       ? args.contractBalance - requiredFromContract
       : 0n;
-    if (senderChange > 546n) {
+    // With unvested > 0 both checked outputs are used (output[1] is checked, output[0] is
+    // either checked or already carries the change), so change needs a third output,
+    // which only a V2 cancel allows.
+    if (senderChange > 546n && (unvested === 0n || (args.maxOutputs > 2 && claimableNow > 0n))) {
       args.txBuilder.addOutput({ to: args.sender, amount: senderChange });
     }
 

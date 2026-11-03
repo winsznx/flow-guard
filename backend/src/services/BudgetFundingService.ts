@@ -26,6 +26,8 @@ export interface BudgetFundingParams {
   tokenCategory?: string; // hex-encoded 32-byte category ID
   nftCommitment: string; // hex-encoded NFT commitment
   nftCapability: 'minting' | 'mutable' | 'none';
+  /** BCH for the contract output; defaults to the flat reserve. */
+  contractSatoshis?: bigint;
 }
 
 export interface TransactionOutput {
@@ -114,7 +116,7 @@ export class BudgetFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis(); // Minimum BCH for token outputs
     const totalAmountOnChain = toNonNegativeBigInt(totalAmount, 'totalAmount');
-    const contractOutput = getRequiredContractFundingSatoshis('budget', tokenType, totalAmountOnChain);
+    const contractOutput = params.contractSatoshis ?? getRequiredContractFundingSatoshis('budget', tokenType, totalAmountOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
     let authorityChangeOutput: TransactionOutput | null = null;
 

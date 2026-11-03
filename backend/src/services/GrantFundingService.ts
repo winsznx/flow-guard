@@ -31,6 +31,8 @@ export interface GrantFundingTransactionParams {
   tokenCategory?: string;
   nftCommitment: string;
   nftCapability: 'minting' | 'mutable' | 'none';
+  /** BCH for the contract output; defaults to the flat V1 reserve. */
+  contractSatoshis?: bigint;
 }
 
 export interface UnsignedFundingTransaction {
@@ -88,7 +90,7 @@ export class GrantFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis();
     const totalAmountOnChain = toNonNegativeBigInt(totalAmount, 'totalAmount');
-    const contractOutput = getRequiredContractFundingSatoshis('airdrop', tokenType, totalAmountOnChain);
+    const contractOutput = params.contractSatoshis ?? getRequiredContractFundingSatoshis('airdrop', tokenType, totalAmountOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
     let authorityChangeOutput: TransactionOutput | null = null;
 
@@ -266,7 +268,7 @@ export class GrantFundingService {
       inputOwnerAddress: creatorAddress,
       inputs: sourceOutputs,
       outputs,
-      userPrompt: `Fund grant contract ${contractAddress}`,
+      userPrompt: 'Fund your grant',
       broadcast: false,
     });
 

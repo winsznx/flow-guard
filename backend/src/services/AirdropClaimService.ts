@@ -8,6 +8,7 @@ import {
 import { hexToBin, binToHex, hash160, secp256k1 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
 import { resolveFeePayer } from '../utils/feePayer.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 export interface ClaimTransactionParams {
   airdropId: string;
@@ -78,7 +79,7 @@ export class AirdropClaimService {
       throw new Error('Claim amount must be greater than 0');
     }
 
-    const artifact = ContractFactory.getArtifact('AirdropCovenant');
+    const artifact = ContractFactory.artifactForAddress('AirdropCovenant', constructorParams, contractAddress);
     const contract = new Contract(artifact, constructorParams, { provider: this.provider });
 
     const contractUtxos = await this.provider.getUtxos(contractAddress);
@@ -201,7 +202,7 @@ export class AirdropClaimService {
 
     if (tokenType === 'FUNGIBLE_TOKEN' && tokenCategory && contractUtxo.token) {
       txBuilder.addOutput({
-        to: claimer,
+        to: toTokenAwareAddress(claimer),
         amount: 1000n,
         token: { category: tokenCategory, amount: claimAmountBig },
       });
@@ -220,7 +221,7 @@ export class AirdropClaimService {
         },
       });
     } else {
-      txBuilder.addOutput({ to: claimer, amount: claimAmountBig });
+      txBuilder.addOutput({ to: toTokenAwareAddress(claimer), amount: claimAmountBig });
 
       txBuilder.addOutput({
         to: contract.tokenAddress,
@@ -234,7 +235,7 @@ export class AirdropClaimService {
     }
     const wcTransaction = txBuilder.generateWcTransactionObject({
       broadcast: true,
-      userPrompt: 'Claim airdrop allocation',
+      userPrompt: 'Claim your airdrop share',
     });
 
     console.log('[AirdropClaimService] Built claim transaction', {

@@ -56,9 +56,11 @@ export function selectTokenFundingInputs<TUtxo extends TokenUtxoLike>(
   );
 
   if (!authorityUtxo) {
+    // The contract keeps its state in an NFT of the token's own category, which only the
+    // wallet holding the token's minting NFT can create.
     throw new Error(
-      `Token category ${tokenCategory} requires a minting authority UTXO to create ${contextLabel} state NFTs. ` +
-        'Hold or delegate minting authority for this category before funding the contract.',
+      `To fund a ${contextLabel} in this token, use the wallet with permission to create the token, ` +
+        'usually the wallet that created it. Or pay it in BCH.',
     );
   }
 

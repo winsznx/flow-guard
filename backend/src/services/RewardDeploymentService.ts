@@ -29,6 +29,7 @@ export interface RewardDeploymentParams {
   cancelable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface RewardDeploymentParamsWithHash {
@@ -42,6 +43,7 @@ export interface RewardDeploymentParamsWithHash {
   cancelable?: boolean;
   tokenType?: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number; // BCMR decimals; display amounts are whole tokens
 }
 
 export interface RewardDeployment {
@@ -115,10 +117,11 @@ export class RewardDeploymentService {
     return id;
   }
 
-  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN'): number {
+  private toOnChainAmount(amount: number, tokenType?: 'BCH' | 'FUNGIBLE_TOKEN', tokenDecimals = 0): number {
     return displayAmountToOnChain(
       amount,
       tokenType === 'FUNGIBLE_TOKEN' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenDecimals,
     );
   }
 
@@ -158,7 +161,7 @@ export class RewardDeploymentService {
     startTimestamp: bigint,
     endTimestamp: bigint,
   ) {
-    const artifact = ContractFactory.getArtifact('RewardCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('RewardCovenant'));
 
     // Two authority slots: [1] authorityHash = creator wallet (admin: pause/resume/cancel); [2] claimAuthorityHash = backend co-signer (reward issuance only)
     const constructorArgs = [
@@ -196,8 +199,8 @@ export class RewardDeploymentService {
     const { privKey: claimAuthPrivKey, hash: claimAuthorityHash } = this.generateAuthorityKeypair();
     const campaignId = this.generateCampaignId(params);
 
-    const maxRewardAmountSat = BigInt(this.toOnChainAmount(params.maxRewardAmount, params.tokenType));
-    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalPool, params.tokenType));
+    const maxRewardAmountSat = BigInt(this.toOnChainAmount(params.maxRewardAmount, params.tokenType, params.tokenDecimals));
+    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalPool, params.tokenType, params.tokenDecimals));
     const startTimestamp = BigInt(params.startTime || 0);
     const endTimestamp = BigInt(params.endTime || 0);
 
@@ -250,8 +253,8 @@ export class RewardDeploymentService {
     const campaignId = new Uint8Array(32);
     campaignId.set(h, 12);
 
-    const maxRewardAmountSat = BigInt(this.toOnChainAmount(params.maxRewardAmount, params.tokenType));
-    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalPool, params.tokenType));
+    const maxRewardAmountSat = BigInt(this.toOnChainAmount(params.maxRewardAmount, params.tokenType, params.tokenDecimals));
+    const totalPoolSat = BigInt(this.toOnChainAmount(params.totalPool, params.tokenType, params.tokenDecimals));
     const startTimestamp = BigInt(params.startTime || 0);
     const endTimestamp = BigInt(params.endTime || 0);
 

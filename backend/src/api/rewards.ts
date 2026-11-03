@@ -25,10 +25,12 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
-import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { campaignContractSatoshis } from '../utils/campaignFunding.js';
+import { resolveTokenDecimals } from '../utils/tokenMeta.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
 import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
+import { omitSecretColumns } from '../utils/responseSanitizers.js';
 
 
 const router = Router();
@@ -56,7 +58,7 @@ router.get('/rewards', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      campaigns,
+      campaigns: campaigns.map(omitSecretColumns),
       total: campaigns.length,
     });
   } catch (error: any) {
@@ -84,7 +86,7 @@ router.get('/rewards/:id', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      campaign,
+      campaign: omitSecretColumns(campaign),
       distributions,
       events,
     });
@@ -114,10 +116,14 @@ router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Resp
       startDate,
       endDate,
       vaultId,
+      tokenDecimals: tokenDecimalsHint,
     } = req.body;
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
+    const tokenDecimals = normalizedTokenType === 'FUNGIBLE_TOKEN'
+      ? await resolveTokenDecimals(tokenCategory, resolveBchNetwork(), tokenDecimalsHint)
+      : 0;
     const normalizedCategory: RewardCategory = VALID_REWARD_CATEGORIES.includes(rewardCategory)
       ? rewardCategory
       : 'CUSTOM';
@@ -130,8 +136,8 @@ router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Resp
     if (!maxRewardAmount || maxRewardAmount <= 0) {
       return res.status(400).json({ error: 'Max reward amount must be greater than 0' });
     }
-    const totalPoolOnChain = displayAmountToOnChain(Number(totalPool), normalizedTokenType);
-    const maxRewardAmountOnChain = displayAmountToOnChain(Number(maxRewardAmount), normalizedTokenType);
+    const totalPoolOnChain = displayAmountToOnChain(Number(totalPool), normalizedTokenType, tokenDecimals);
+    const maxRewardAmountOnChain = displayAmountToOnChain(Number(maxRewardAmount), normalizedTokenType, tokenDecimals);
     if (maxRewardAmountOnChain <= 0 || totalPoolOnChain <= 0) {
       return res.status(400).json({
         error: 'Amounts are below on-chain minimum precision',
@@ -143,8 +149,8 @@ router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Resp
     if (maxRewardAmountOnChain > totalPoolOnChain) {
       return res.status(400).json({ error: 'Max reward amount cannot exceed total pool' });
     }
-    const normalizedTotalPool = onChainAmountToDisplay(totalPoolOnChain, normalizedTokenType);
-    const normalizedMaxRewardAmount = onChainAmountToDisplay(maxRewardAmountOnChain, normalizedTokenType);
+    const normalizedTotalPool = onChainAmountToDisplay(totalPoolOnChain, normalizedTokenType, tokenDecimals);
+    const normalizedMaxRewardAmount = onChainAmountToDisplay(maxRewardAmountOnChain, normalizedTokenType, tokenDecimals);
 
     const id = randomUUID();
     const countRow = await db!.prepare('SELECT COUNT(*) as cnt FROM rewards').get() as any;
@@ -174,18 +180,19 @@ router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Resp
       rewardCategory: normalizedCategory,
       tokenType: normalizedTokenType,
       tokenCategory,
+      tokenDecimals,
     });
 
     await db!.prepare(`
       INSERT INTO rewards (id, campaign_id, vault_id, creator, title, description,
-        reward_category, token_type, token_category, total_pool, max_reward_amount,
+        reward_category, token_type, token_category, token_decimals, total_pool, max_reward_amount,
         distributed_count, distributed_total, status, start_date, end_date,
         contract_address, constructor_params, nft_commitment, nft_capability,
         authority_privkey, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, campaignId, vaultId || null, creator, title, description || null,
-      normalizedCategory, normalizedTokenType, tokenCategory || null,
+      normalizedCategory, normalizedTokenType, tokenCategory || null, tokenDecimals,
       normalizedTotalPool, normalizedMaxRewardAmount,
       startDate || now, endDate || null,
       deployment.contractAddress,
@@ -217,7 +224,7 @@ router.post('/rewards/create', requireWalletAuth, async (req: Request, res: Resp
     res.json({
       success: true,
       message: 'Reward contract deployed - awaiting funding transaction',
-      campaign,
+      campaign: omitSecretColumns(campaign),
       deployment: {
         contractAddress: deployment.contractAddress,
         campaignId,
@@ -249,7 +256,7 @@ router.get('/rewards/:id/funding-info', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Campaign contract not deployed' });
     }
 
-    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_pool, campaign.token_type);
+    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_pool, campaign.token_type, Number(campaign.token_decimals || 0));
     const nftCommitment = campaign.nft_commitment || '';
 
     const fundingService = new RewardFundingService(resolveBchNetwork());
@@ -263,6 +270,7 @@ router.get('/rewards/:id/funding-info', async (req: Request, res: Response) => {
         tokenCategory: campaign.token_category,
         nftCommitment,
         nftCapability: 'mutable',
+        contractSatoshis: campaignContractSatoshis('reward', campaign, BigInt(fundingAmountOnChain)),
       });
 
       res.json({
@@ -288,7 +296,7 @@ router.get('/rewards/:id/funding-info', async (req: Request, res: Response) => {
             success: false,
             requiresPreparation: true,
             preparationTransaction: serializeWcTransaction(prepResult.wcTransaction),
-            message: 'Your wallet needs a consolidation transaction before funding. Please sign to proceed.',
+            message: 'Your wallet needs one setup step before funding. Approve it in your wallet, then approve the funding.',
           });
         }
       }
@@ -334,13 +342,9 @@ router.post('/rewards/:id/confirm-funding', requireWalletAuth, async (req: Reque
       return res.status(404).json({ error: 'Reward campaign not found' });
     }
 
-    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_pool, campaign.token_type);
+    const fundingAmountOnChain = displayAmountToOnChain(campaign.total_pool, campaign.token_type, Number(campaign.token_decimals || 0));
     const isTokenReward = isFungibleTokenType(campaign.token_type);
-    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
-      'airdrop',
-      isTokenReward ? 'FUNGIBLE_TOKEN' : 'BCH',
-      BigInt(fundingAmountOnChain),
-    );
+    const minimumContractSatoshis = campaignContractSatoshis('reward', campaign, BigInt(fundingAmountOnChain));
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
@@ -453,7 +457,7 @@ router.post('/rewards/:id/distribute', requireWalletAuth, async (req: Request, r
     const constructorParams = deserializeConstructorParams(campaign.constructor_params || '[]');
     // Constructor layout: [2]=claimAuthorityHash, [3]=maxRewardAmount, [4]=totalPool.
     const maxRewardAmountOnChain = readBigIntParam(constructorParams[3], 'maxRewardAmount');
-    const rewardAmountOnChain = BigInt(displayAmountToOnChain(rewardAmount, campaign.token_type));
+    const rewardAmountOnChain = BigInt(displayAmountToOnChain(rewardAmount, campaign.token_type, Number(campaign.token_decimals || 0)));
 
     if (rewardAmountOnChain > maxRewardAmountOnChain) {
       return res.status(400).json({
@@ -463,7 +467,7 @@ router.post('/rewards/:id/distribute', requireWalletAuth, async (req: Request, r
     }
 
     const totalPool = readBigIntParam(constructorParams[4], 'totalPool');
-    const distributedOnChain = BigInt(displayAmountToOnChain(campaign.distributed_total || 0, campaign.token_type));
+    const distributedOnChain = BigInt(displayAmountToOnChain(campaign.distributed_total || 0, campaign.token_type, Number(campaign.token_decimals || 0)));
     if (distributedOnChain + rewardAmountOnChain > totalPool) {
       return res.status(400).json({ error: 'Distribution would exceed remaining campaign pool' });
     }
@@ -491,7 +495,7 @@ router.post('/rewards/:id/distribute', requireWalletAuth, async (req: Request, r
       authorityPrivKey: decryptPrivateKey(campaign.authority_privkey),
     });
 
-    const distributedDisplayAmount = onChainAmountToDisplay(distributionTx.rewardAmount, campaign.token_type);
+    const distributedDisplayAmount = onChainAmountToDisplay(distributionTx.rewardAmount, campaign.token_type, Number(campaign.token_decimals || 0));
 
     res.json({
       success: true,
@@ -536,7 +540,7 @@ router.post('/rewards/:id/confirm-distribute', requireWalletAuth, async (req: Re
     }
 
     const distributedAmountNumber = Number(amount);
-    const distributedAmountOnChain = displayAmountToOnChain(distributedAmountNumber, campaign.token_type);
+    const distributedAmountOnChain = displayAmountToOnChain(distributedAmountNumber, campaign.token_type, Number(campaign.token_decimals || 0));
     const isTokenReward = isFungibleTokenType(campaign.token_type);
 
     const expectedDistributionOutput = await transactionHasExpectedOutput(
@@ -725,6 +729,134 @@ router.post('/rewards/:id/confirm-pause', requireWalletAuth, async (req: Request
     console.error(`POST /rewards/${req.params.id}/confirm-pause error:`, error);
     res.status(500).json({
       error: 'Failed to confirm pause',
+      message: error.message,
+      state: 'failed',
+      retryable: false,
+      errorCode: 'CONFIRM_FAILED',
+    });
+  }
+});
+
+/**
+ * POST /api/rewards/:id/resume
+ * Build on-chain resume transaction for a reward campaign
+ */
+router.post('/rewards/:id/resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const campaign = await db!.prepare('SELECT * FROM rewards WHERE id = ?').get(id) as any;
+    if (!campaign) {
+      return res.status(404).json({ error: 'Reward campaign not found' });
+    }
+    if (campaign.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only paused campaigns can be resumed' });
+    }
+    if (String(campaign.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the campaign creator can resume this campaign' });
+    }
+    if (!campaign.contract_address || !campaign.constructor_params) {
+      return res.status(400).json({ error: 'Campaign contract is not fully configured' });
+    }
+
+    const controlService = new RewardControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
+    const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
+      || campaign.nft_commitment
+      || '';
+    const constructorParams = deserializeConstructorParams(campaign.constructor_params);
+    const built = await controlService.buildResumeTransaction({
+      contractAddress: campaign.contract_address,
+      constructorParams,
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: normalizeRewardTokenType(campaign.token_type),
+      feePayerAddress: signerAddress,
+    });
+
+    res.json({
+      success: true,
+      nextStatus: built.nextStatus,
+      wcTransaction: serializeWcTransaction(built.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /rewards/${req.params.id}/resume error:`, error);
+    res.status(500).json({ error: 'Failed to build resume transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/rewards/:id/confirm-resume
+ * Confirm on-chain resume transaction and update DB state
+ */
+router.post('/rewards/:id/confirm-resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
+      return res.status(409).json({
+        error: 'Transaction hash not found on chipnet',
+        message: 'Transaction is not indexed yet. Retry confirmation shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    const campaign = await db!.prepare('SELECT * FROM rewards WHERE id = ?').get(id) as any;
+    if (!campaign) {
+      return res.status(404).json({ error: 'Reward campaign not found' });
+    }
+    if (String(campaign.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the campaign creator can confirm resume' });
+    }
+
+    const hasExpectedState = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: campaign.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 35,
+      },
+      resolveBchNetwork(),
+    );
+    if (!hasExpectedState) {
+      return res.status(400).json({
+        error: 'Resume transaction does not include expected campaign covenant state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    await db!.prepare('UPDATE rewards SET status = ?, updated_at = ? WHERE id = ?')
+      .run('ACTIVE', now, id);
+    await recordActivityEvent({
+      entityType: 'reward' as any,
+      entityId: id,
+      eventType: 'resumed',
+      actor: signerAddress,
+      status: 'ACTIVE',
+      txHash,
+      createdAt: now,
+    });
+
+    res.json({ success: true, txHash, status: 'ACTIVE', state: 'confirmed', retryable: false });
+  } catch (error: any) {
+    console.error(`POST /rewards/${req.params.id}/confirm-resume error:`, error);
+    res.status(500).json({
+      error: 'Failed to confirm resume',
       message: error.message,
       state: 'failed',
       retryable: false,
@@ -925,7 +1057,7 @@ function hashToP2pkhAddress(hash20: Uint8Array): string {
   lockingBytecode[24] = 0xac;
   const encoded = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
-    prefix: 'bchtest',
+    prefix: resolveBchNetwork() === 'mainnet' ? 'bitcoincash' : 'bchtest',
   });
   if (typeof encoded === 'string') {
     throw new Error(`Failed to encode authority P2PKH address: ${encoded}`);

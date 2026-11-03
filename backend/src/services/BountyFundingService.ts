@@ -36,6 +36,8 @@ export interface BountyFundingTransactionParams {
   tokenCategory?: string;
   nftCommitment: string;
   nftCapability: 'minting' | 'mutable' | 'none';
+  /** BCH for the contract output; defaults to the flat V1 reserve. */
+  contractSatoshis?: bigint;
 }
 
 export interface UnsignedFundingTransaction {
@@ -93,7 +95,7 @@ export class BountyFundingService {
     let totalTokenInputAmount = 0n;
     const dustAmount = getTokenOutputDustSatoshis();
     const totalPoolOnChain = toNonNegativeBigInt(totalPool, 'totalPool');
-    const contractOutput = getRequiredContractFundingSatoshis('airdrop', tokenType, totalPoolOnChain);
+    const contractOutput = params.contractSatoshis ?? getRequiredContractFundingSatoshis('airdrop', tokenType, totalPoolOnChain);
     let stateTokenCategory: string | undefined = tokenCategory;
     let authorityChangeOutput: TransactionOutput | null = null;
 
@@ -271,7 +273,7 @@ export class BountyFundingService {
       inputOwnerAddress: creatorAddress,
       inputs: sourceOutputs,
       outputs,
-      userPrompt: `Fund bounty contract ${contractAddress}`,
+      userPrompt: 'Fund your bounty',
       broadcast: false,
     });
 

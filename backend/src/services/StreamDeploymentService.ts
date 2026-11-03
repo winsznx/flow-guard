@@ -5,7 +5,7 @@
 
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import { hash160, hexToBin, binToHex, cashAddressToLockingBytecode } from '@bitauth/libauth';
-import { ContractFactory, type ConstructorParam } from './ContractFactory.js';
+import { ContractFactory, type ConstructorParam, type ContractType } from './ContractFactory.js';
 import { displayAmountToOnChain } from '../utils/amounts.js';
 import { FtVestingService, type FtScheduleArgs } from './FtVestingService.js';
 
@@ -52,6 +52,22 @@ export interface StreamDeployment {
     };
   };
 }
+
+const SCHEDULE_TIME_PARAM_INDEXES: Record<StreamDeploymentParams['streamType'], number[]> = {
+  LINEAR: [4, 5, 6],
+  STEP: [4, 5, 6],
+  HYBRID: [3, 4, 5],
+  TRANCHE: [3, 5, 7, 9, 11, 13, 15, 17, 19],
+  RECURRING: [6, 7],
+};
+
+const SCHEDULE_ARTIFACTS: Record<StreamDeploymentParams['streamType'], ContractType> = {
+  LINEAR: 'VestingCovenant',
+  STEP: 'VestingCovenant',
+  HYBRID: 'HybridVestingCovenant',
+  TRANCHE: 'TrancheVestingCovenant',
+  RECURRING: 'RecurringPaymentCovenant',
+};
 
 export class StreamDeploymentService {
   private provider: ElectrumNetworkProvider;
@@ -110,6 +126,45 @@ export class StreamDeploymentService {
     );
   }
 
+  /**
+   * Move every schedule timestamp of an unfunded single-UTXO stream forward by
+   * shiftSeconds and re-derive the address. Durations stay the same, and unset
+   * optional times (no cliff, open-ended end) stay 0.
+   */
+  rebaseScheduleParams(
+    streamType: StreamDeploymentParams['streamType'],
+    constructorParams: ConstructorParam[],
+    shiftSeconds: number,
+  ): { contractAddress: string; constructorParams: ConstructorParam[] } {
+    const rebased = StreamDeploymentService.shiftScheduleParams(streamType, constructorParams, shiftSeconds);
+    const contract = new Contract(
+      ContractFactory.getArtifact(ContractFactory.latest(SCHEDULE_ARTIFACTS[streamType])),
+      rebased.map((param) => (param.type === 'bytes' ? hexToBin(param.value) : BigInt(param.value))),
+      { provider: this.provider },
+    );
+    return { contractAddress: contract.address, constructorParams: rebased };
+  }
+
+  /** Shift the schedule timestamps in stored constructor params; FT vesting uses the LINEAR/STEP layout. */
+  static shiftScheduleParams(
+    streamType: StreamDeploymentParams['streamType'],
+    constructorParams: ConstructorParam[],
+    shiftSeconds: number,
+  ): ConstructorParam[] {
+    const timeIndexes = new Set(SCHEDULE_TIME_PARAM_INDEXES[streamType]);
+    const shift = BigInt(Math.trunc(shiftSeconds));
+    return constructorParams.map((param, index) => {
+      if (!timeIndexes.has(index) || param.type !== 'bigint') return param;
+      const value = BigInt(param.value);
+      return value > 0n ? { ...param, value: (value + shift).toString() } : param;
+    });
+  }
+
+  async addressHasUtxos(address: string): Promise<boolean> {
+    const utxos = await this.provider.getUtxos(address);
+    return utxos.length > 0;
+  }
+
   private setUint40LE(target: Uint8Array, offset: number, value: number): void {
     const safe = Math.max(0, Math.floor(value));
     target[offset] = safe & 0xff;
@@ -166,7 +221,7 @@ export class StreamDeploymentService {
    * Deploy a VestingCovenant
    */
   async deployVestingStream(params: StreamDeploymentParams): Promise<StreamDeployment> {
-    const artifact = ContractFactory.getArtifact('VestingCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('VestingCovenant'));
     if (params.tokenType === 'FUNGIBLE_TOKEN' && !params.tokenCategory) {
       throw new Error('tokenCategory is required for FUNGIBLE_TOKEN streams');
     }
@@ -178,7 +233,8 @@ export class StreamDeploymentService {
     // Map stream type to schedule type int
     const scheduleType = params.streamType === 'LINEAR' ? 1 : 2; // STEP
 
-    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType);
+    const decimals = params.tokenDecimals ?? 0;
+    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType, decimals);
     const totalAmountSat = BigInt(totalAmountOnChain);
     const startTimestamp = BigInt(params.startTime);
     const endTimestamp = BigInt(params.endTime);
@@ -186,7 +242,7 @@ export class StreamDeploymentService {
     const stepInterval = BigInt(params.stepInterval || 0);
     const stepAmount = BigInt(
       params.stepAmount
-        ? this.toOnChainAmount(params.stepAmount, params.tokenType)
+        ? this.toOnChainAmount(params.stepAmount, params.tokenType, decimals)
         : 0,
     );
 
@@ -327,17 +383,18 @@ export class StreamDeploymentService {
       throw new Error('tokenCategory is required for FUNGIBLE_TOKEN streams');
     }
 
-    const artifact = ContractFactory.getArtifact('RecurringPaymentCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('RecurringPaymentCovenant'));
 
     const vaultId = hexToBin(params.vaultId);
     const senderHash = this.addressToHash160(params.sender);
     const recipientHash = this.addressToHash160(params.recipient);
     const streamId = this.generateStreamId(params);
 
-    const amountPerIntervalOnChain = this.toOnChainAmount(params.amountPerInterval, params.tokenType);
+    const decimals = params.tokenDecimals ?? 0;
+    const amountPerIntervalOnChain = this.toOnChainAmount(params.amountPerInterval, params.tokenType, decimals);
     const amountPerIntervalSat = BigInt(amountPerIntervalOnChain);
     const intervalSeconds = BigInt(params.intervalSeconds);
-    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType);
+    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType, decimals);
     const totalAmountSat = BigInt(totalAmountOnChain);
     const startTimestamp = BigInt(params.startTime);
     const endTimestamp = BigInt(params.endTime);
@@ -414,17 +471,18 @@ export class StreamDeploymentService {
       throw new Error('tokenCategory is required for FUNGIBLE_TOKEN streams');
     }
 
-    const artifact = ContractFactory.getArtifact('HybridVestingCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('HybridVestingCovenant'));
     const vaultId = hexToBin(params.vaultId);
     const senderHash = this.addressToHash160(params.sender);
     const streamId = this.generateStreamId(params);
 
-    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType);
+    const decimals = params.tokenDecimals ?? 0;
+    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType, decimals);
     const totalAmountSat = BigInt(totalAmountOnChain);
     const startTimestamp = BigInt(params.startTime);
     const unlockTimestamp = BigInt(params.hybridUnlockTime);
     const endTimestamp = BigInt(params.endTime);
-    const upfrontAmountSat = BigInt(this.toOnChainAmount(params.hybridUpfrontAmount, params.tokenType));
+    const upfrontAmountSat = BigInt(this.toOnChainAmount(params.hybridUpfrontAmount, params.tokenType, decimals));
 
     const constructorArgs = [
       vaultId,
@@ -488,12 +546,13 @@ export class StreamDeploymentService {
       throw new Error('tokenCategory is required for FUNGIBLE_TOKEN streams');
     }
 
-    const artifact = ContractFactory.getArtifact('TrancheVestingCovenant');
+    const artifact = ContractFactory.getArtifact(ContractFactory.latest('TrancheVestingCovenant'));
     const vaultId = hexToBin(params.vaultId);
     const senderHash = this.addressToHash160(params.sender);
     const streamId = this.generateStreamId(params);
 
-    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType);
+    const decimals = params.tokenDecimals ?? 0;
+    const totalAmountOnChain = this.toOnChainAmount(params.totalAmount, params.tokenType, decimals);
     const totalAmountSat = BigInt(totalAmountOnChain);
     const startTimestamp = BigInt(params.startTime);
     const scheduleCount = BigInt(params.trancheSchedule.length);
@@ -515,7 +574,7 @@ export class StreamDeploymentService {
     ];
     for (const tranche of paddedSchedule) {
       constructorArgs.push(BigInt(tranche.unlockTime));
-      constructorArgs.push(BigInt(this.toOnChainAmount(tranche.cumulativeAmount, params.tokenType)));
+      constructorArgs.push(BigInt(this.toOnChainAmount(tranche.cumulativeAmount, params.tokenType, decimals)));
     }
 
     const contract = new Contract(artifact, constructorArgs, { provider: this.provider });
@@ -532,7 +591,7 @@ export class StreamDeploymentService {
       constructorParams.push({ type: 'bigint', value: BigInt(tranche.unlockTime).toString() });
       constructorParams.push({
         type: 'bigint',
-        value: BigInt(this.toOnChainAmount(tranche.cumulativeAmount, params.tokenType)).toString(),
+        value: BigInt(this.toOnChainAmount(tranche.cumulativeAmount, params.tokenType, decimals)).toString(),
       });
     }
 

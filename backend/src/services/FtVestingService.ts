@@ -31,8 +31,11 @@ import {
   encodeCashAddress,
 } from '@bitauth/libauth';
 import { ContractFactory } from './ContractFactory.js';
+import { CONTINUOUS_STREAM_CLAIM_BUDGET } from './StreamFundingService.js';
+import { StreamClaimReserveError, getStreamFullyReleasedAt } from './StreamClaimService.js';
 import { buildFundingWcTransaction } from '../utils/wcFundingBuilder.js';
-import { finalizeWcTransactionSequences } from './txFinality.js';
+import { TOKEN_CANCEL_TOO_EARLY, finalizeWcTransactionSequences } from './txFinality.js';
+import { toTokenAwareAddress } from '../utils/tokenAddress.js';
 
 const NON_FINAL_SEQUENCE = 0xfffffffe;
 const CLAIM_LOCKTIME_BUFFER = 7200; // set nLockTime below MTP so the spend is immediately mineable
@@ -40,6 +43,20 @@ const CLAIM_FEE = 4000n; // within the covenant's <= 8000 two-input cap, above m
 const STATE_NFT_RESERVE = 12_000n; // BCH in the state NFT UTXO: covers claim fee + output dust
 const VAULT_DUST = 1_500n; // BCH carried by the FT vault UTXO
 const OUTPUT_DUST = 1_000n; // BCH on each token output during a claim
+const STATE_DUST = 546n;
+const CONTROL_SPENDS = 2n; // one pause and one resume, 2,000 sats each
+const FINAL_CLAIM_STATE_RESERVE = CLAIM_FEE + STATE_DUST; // the vault's dust pays the recipient output
+
+/**
+ * BCH for the state NFT UTXO. FtVestingCovenant takes exactly two inputs, so every
+ * claim's fee and recipient dust come out of this reserve. Size it by the schedule's
+ * claim count, up to the shared claim budget, so the last claim still goes through.
+ */
+export function getFtStateReserveSatoshis(maxClaims: number): bigint {
+  const claims = BigInt(Math.min(Math.max(1, Math.ceil(maxClaims)), CONTINUOUS_STREAM_CLAIM_BUDGET));
+  const sized = claims * (CLAIM_FEE + OUTPUT_DUST) + CONTROL_SPENDS * 2_000n + STATE_DUST;
+  return sized > STATE_NFT_RESERVE ? sized : STATE_NFT_RESERVE;
+}
 
 export type FtScheduleType = 1 | 2; // 1=LINEAR, 2=STEP
 
@@ -100,14 +117,7 @@ export function addressToHash160(address: string): Uint8Array {
   return b.slice(3, 23);
 }
 
-/** Token-aware address (same locking bytecode) — required for CashToken outputs. */
-export function toTokenAwareAddress(address: string): string {
-  const decoded = decodeCashAddress(address);
-  if (typeof decoded === 'string') throw new Error(decoded);
-  if (decoded.type === 'p2pkhWithTokens' || decoded.type === 'p2shWithTokens') return address;
-  const tokenType = decoded.type === 'p2sh' ? 'p2shWithTokens' : 'p2pkhWithTokens';
-  return encodeCashAddress({ prefix: decoded.prefix, type: tokenType, payload: decoded.payload }).address;
-}
+export { toTokenAwareAddress };
 
 export class FtVestingService {
   private readonly provider: ElectrumNetworkProvider;
@@ -192,6 +202,12 @@ export class FtVestingService {
   }
 
   /** Linear/step vested-total at an effective time, matching the covenant's integer math. */
+  /** What claim() lets out: the covenant refuses any claim before the cliff, while cancel() ignores it. */
+  static claimableVestedTotal(args: FtScheduleArgs, effectiveTime: number, cursor: number): bigint {
+    if (args.cliffTimestamp > 0n && BigInt(effectiveTime) < args.cliffTimestamp) return 0n;
+    return FtVestingService.vestedTotal(args, effectiveTime, cursor);
+  }
+
   static vestedTotal(args: FtScheduleArgs, effectiveTime: number, cursor: number): bigint {
     const elapsed = BigInt(effectiveTime - cursor);
     if (elapsed <= 0n) return 0n;
@@ -234,9 +250,9 @@ export class FtVestingService {
     const recipientHash = params.currentCommitment.slice(20, 40);
 
     const locktime = params.nowSeconds - CLAIM_LOCKTIME_BUFFER;
-    const vested = FtVestingService.vestedTotal(params.args, locktime, cursor);
+    const vested = FtVestingService.claimableVestedTotal(params.args, locktime, cursor);
     const claimable = vested - totalReleased;
-    if (claimable <= 0n) throw new Error('Nothing to claim yet — wait for more of the stream to vest, then try again.');
+    if (claimable <= 0n) throw new Error('Nothing to claim yet. Wait for more of the stream to be released, then try again.');
 
     const vaultAmount = toBigInt(params.vaultUtxo.token?.amount);
     if (claimable > vaultAmount) throw new Error('The claim amount is more than the tokens the stream currently holds. Refresh and try again.');
@@ -320,6 +336,7 @@ export class FtVestingService {
     cancelable: boolean;
     transferable: boolean;
     existingStateCategory?: string | null;
+    stateReserve?: bigint;
   }): Promise<{
     contractAddress: string;
     stateCategory: string;
@@ -344,9 +361,12 @@ export class FtVestingService {
     const contract = this.deriveContract(params.args, stateCategory, params.ftCategory);
     const initC = this.initialCommitment(params.args, params.recipient, params.cancelable, params.transferable);
 
-    const ftUtxos = utxos.filter(
-      (u) => u.token?.category === params.ftCategory && !u.token?.nft && toBigInt(u.token?.amount) > 0n,
-    );
+    // Tokens held next to an NFT of the same category (such as the minting NFT, where
+    // funding builders return token change) count too. That NFT goes back to the sender
+    // unchanged on its own output.
+    const ftUtxos = utxos
+      .filter((u) => u.token?.category === params.ftCategory && toBigInt(u.token?.amount) > 0n)
+      .sort((a, b) => Number(Boolean(a.token?.nft)) - Number(Boolean(b.token?.nft)));
     const selectedFt: Utxo[] = [];
     let ftSum = 0n;
     for (const u of ftUtxos) {
@@ -358,16 +378,26 @@ export class FtVestingService {
       throw new Error(`Not enough of this token in your wallet: the stream needs ${params.tokenAmount} but you hold ${ftSum}. Lower the amount, or add more of the token to your wallet.`);
     }
 
-    const FEE = 1500n;
-    const need = STATE_NFT_RESERVE + VAULT_DUST + FEE;
+    const returnedNfts = selectedFt.filter((u) => u.token?.nft);
+    const tokenChangeOutputs = BigInt(returnedNfts.length) + (ftSum > params.tokenAmount ? 1n : 0n);
+    const stateReserve = params.stateReserve ?? STATE_NFT_RESERVE;
+    // About 1 sat per byte: ~160 bytes per P2PKH input, ~70 per token output, plus overhead.
+    const outputCount = 3n + tokenChangeOutputs;
+    const feeFor = (inputCount: number) => {
+      const estimate = 300n + BigInt(inputCount) * 160n + outputCount * 70n;
+      return estimate > 1500n ? estimate : 1500n;
+    };
     const selected: Utxo[] = [anchor, ...selectedFt];
     let inSats = toBigInt(anchor.satoshis) + selectedFt.reduce((s, u) => s + toBigInt(u.satoshis), 0n);
+    const needFor = (inputCount: number) => stateReserve + VAULT_DUST + tokenChangeOutputs * VAULT_DUST + feeFor(inputCount);
     const extraBch = bchUtxos.filter((u) => !(u.txid === anchor.txid && u.vout === anchor.vout));
     for (const u of extraBch) {
-      if (inSats >= need + 546n) break;
+      if (inSats >= needFor(selected.length) + 546n) break;
       selected.push(u);
       inSats += toBigInt(u.satoshis);
     }
+    const FEE = feeFor(selected.length);
+    const need = needFor(selected.length);
     if (inSats < need) throw new Error(`Not enough BCH to cover the stream's on-chain reserve and network fee (need about ${need} sats, your wallet has ${inSats}). Add a little BCH and try again.`);
 
     const inputs: FundingSourceOutput[] = selected.map((u) => ({
@@ -377,15 +407,16 @@ export class FtVestingService {
       tokenCategory: u.token?.category,
       tokenAmount: u.token?.amount !== undefined ? toBigInt(u.token.amount).toString() : undefined,
       tokenNftCapability: u.token?.nft?.capability,
-      tokenNftCommitment: u.token?.nft?.commitment
-        ? (typeof u.token.nft.commitment === 'string' ? u.token.nft.commitment : binToHex(u.token.nft.commitment))
+      // An empty commitment is still an NFT; dropping it would sign over the wrong source output.
+      tokenNftCommitment: u.token?.nft
+        ? (typeof u.token.nft.commitment === 'string' ? u.token.nft.commitment : binToHex(u.token.nft.commitment ?? new Uint8Array()))
         : undefined,
     }));
 
     const outputs: FundingOutputSpec[] = [
       {
         to: contract.tokenAddress,
-        amount: STATE_NFT_RESERVE.toString(),
+        amount: stateReserve.toString(),
         token: { category: stateCategory, amount: '0', nft: { commitment: binToHex(initC), capability: 'mutable' } },
       },
       {
@@ -394,6 +425,20 @@ export class FtVestingService {
         token: { category: params.ftCategory, amount: params.tokenAmount.toString() },
       },
     ];
+    for (const u of returnedNfts) {
+      outputs.push({
+        to: toTokenAwareAddress(params.senderAddress),
+        amount: VAULT_DUST.toString(),
+        token: {
+          category: params.ftCategory,
+          amount: '0',
+          nft: {
+            capability: u.token!.nft!.capability as 'none' | 'mutable' | 'minting',
+            commitment: typeof u.token!.nft!.commitment === 'string' ? u.token!.nft!.commitment : binToHex(u.token!.nft!.commitment),
+          },
+        },
+      });
+    }
     const ftChange = ftSum - params.tokenAmount;
     if (ftChange > 0n) {
       outputs.push({
@@ -402,14 +447,14 @@ export class FtVestingService {
         token: { category: params.ftCategory, amount: ftChange.toString() },
       });
     }
-    const bchChange = inSats - STATE_NFT_RESERVE - VAULT_DUST - (ftChange > 0n ? VAULT_DUST : 0n) - FEE;
+    const bchChange = inSats - stateReserve - VAULT_DUST - tokenChangeOutputs * VAULT_DUST - FEE;
     if (bchChange > 546n) outputs.push({ to: params.senderAddress, amount: bchChange.toString() });
 
     const wcTransaction = buildFundingWcTransaction({
       inputOwnerAddress: params.senderAddress,
       inputs,
       outputs,
-      userPrompt: `Fund CashToken stream ${contract.address}`,
+      userPrompt: 'Fund this stream',
       broadcast: false,
     });
 
@@ -474,7 +519,7 @@ export class FtVestingService {
       inputOwnerAddress: params.senderAddress,
       inputs,
       outputs,
-      userPrompt: params.userPrompt ?? 'Prepare your wallet to fund a CashToken stream',
+      userPrompt: params.userPrompt ?? 'Step 1 of 2. Get your wallet ready to fund this stream. This sends a small amount back to yourself.',
       broadcast: false,
     });
     return { needsAnchor: true, anchorSats: Number(ANCHOR_SATS), wcTransaction };
@@ -485,6 +530,32 @@ export class FtVestingService {
    * signatures on both covenant inputs are filled in by the wallet. The emitted
    * transaction is structurally identical to buildClaim (VM-proven).
    */
+  /**
+   * When a reserve-limited FT stream can be claimed in one go, or null when a claim
+   * can go through now (or the live state can't be read).
+   */
+  async getClaimDeferredUntil(params: {
+    args: FtScheduleArgs;
+    stateCategory: string;
+    ftCategory: string;
+    nowSeconds: number;
+  }): Promise<number | null> {
+    const contract = this.deriveContract(params.args, params.stateCategory, params.ftCategory);
+    const utxos = await this.provider.getUtxos(contract.tokenAddress);
+    const stateUtxo = utxos.find((u) => Boolean(u.token?.nft) && u.token?.category === params.stateCategory);
+    const vaultUtxo = utxos.find((u) => u.token?.category === params.ftCategory && !u.token?.nft);
+    const commitment = stateUtxo?.token?.nft?.commitment;
+    if (!stateUtxo || !vaultUtxo || typeof commitment !== 'string' || !commitment.startsWith('00')) return null;
+    const fullyReleasedAt = getStreamFullyReleasedAt(
+      Number(readUint40LE(hexToBin(commitment), 10)),
+      Number(params.args.startTimestamp),
+      Number(params.args.endTimestamp),
+    );
+    if (params.nowSeconds >= fullyReleasedAt) return null;
+    const stateOut = toBigInt(stateUtxo.satoshis) + toBigInt(vaultUtxo.satoshis) - OUTPUT_DUST - OUTPUT_DUST - CLAIM_FEE;
+    return stateOut < FINAL_CLAIM_STATE_RESERVE ? fullyReleasedAt : null;
+  }
+
   async buildClaimWc(params: {
     args: FtScheduleArgs;
     stateCategory: string;
@@ -497,7 +568,7 @@ export class FtVestingService {
     const utxos = await this.provider.getUtxos(contract.tokenAddress);
     const stateUtxo = utxos.find((u) => Boolean(u.token?.nft) && u.token?.category === params.stateCategory);
     const vaultUtxo = utxos.find((u) => u.token?.category === params.ftCategory && !u.token?.nft);
-    if (!stateUtxo || !vaultUtxo) throw new Error('The stream is still confirming on-chain — its state or token vault is not visible yet. Wait a few seconds and try again.');
+    if (!stateUtxo || !vaultUtxo) throw new Error('The stream is still confirming on chain. Wait a few seconds and try again.');
 
     const cursor = Number(readUint40LE(params.currentCommitment, 10));
     const totalReleased = new DataView(
@@ -509,9 +580,9 @@ export class FtVestingService {
     const recipientHash = params.currentCommitment.slice(20, 40);
 
     const locktime = params.nowSeconds - CLAIM_LOCKTIME_BUFFER;
-    const vested = FtVestingService.vestedTotal(params.args, locktime, cursor);
+    const vested = FtVestingService.claimableVestedTotal(params.args, locktime, cursor);
     const claimable = vested - totalReleased;
-    if (claimable <= 0n) throw new Error('Nothing to claim yet — wait for more of the stream to vest, then try again.');
+    if (claimable <= 0n) throw new Error('Nothing to claim yet. Wait for more of the stream to be released, then try again.');
     const vaultAmount = toBigInt(vaultUtxo.token?.amount);
     if (claimable > vaultAmount) throw new Error('The claim amount is more than the tokens the stream currently holds. Refresh and try again.');
     const remaining = vaultAmount - claimable;
@@ -531,6 +602,12 @@ export class FtVestingService {
 
     if (remaining > 0n) {
       const stateOut = stateInSats + vaultInSats - OUTPUT_DUST - OUTPUT_DUST - CLAIM_FEE;
+      // The reserve covers a fixed claim budget. Keep enough for the final claim.
+      if (stateOut < FINAL_CLAIM_STATE_RESERVE) {
+        throw new StreamClaimReserveError(
+          getStreamFullyReleasedAt(cursor, Number(params.args.startTimestamp), Number(params.args.endTimestamp)),
+        );
+      }
       builder
         .addOutput({ to: contract.tokenAddress, amount: stateOut, token: { category: params.stateCategory, amount: 0n, nft: { capability: 'mutable', commitment: binToHex(newCommitment) } } })
         .addOutput({ to: contract.tokenAddress, amount: OUTPUT_DUST, token: { category: params.ftCategory, amount: remaining } });
@@ -540,7 +617,7 @@ export class FtVestingService {
     }
 
     const wcTransaction = finalizeWcTransactionSequences(
-      builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Claim vested CashTokens' }),
+      builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Claim tokens from this stream' }),
     );
     return { claimable, remaining, wcTransaction };
   }
@@ -556,7 +633,7 @@ export class FtVestingService {
     const contract = this.deriveContract(params.args, params.stateCategory, params.ftCategory);
     const stateUtxo = (await this.provider.getUtxos(contract.tokenAddress))
       .find((u) => Boolean(u.token?.nft) && u.token?.category === params.stateCategory);
-    if (!stateUtxo) throw new Error('The stream is still confirming on-chain — its state is not visible yet. Wait a few seconds and try again.');
+    if (!stateUtxo) throw new Error('The stream is still confirming on chain. Wait a few seconds and try again.');
     const c = params.currentCommitment;
     if (c[0] !== 0) throw new Error('This stream can only be paused while it is active.');
     const flags = c[1];
@@ -570,7 +647,7 @@ export class FtVestingService {
       .setLocktime(locktime)
       .addInput(stateUtxo, contract.unlock.pause(placeholderSignature(), placeholderPublicKey()), { sequence: NON_FINAL_SEQUENCE })
       .addOutput({ to: contract.tokenAddress, amount: stateOut, token: { category: params.stateCategory, amount: 0n, nft: { capability: 'mutable', commitment: binToHex(newCommitment) } } });
-    return { wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Pause stream' })) };
+    return { wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Pause this stream' })) };
   }
 
   /** Resume: sender-signed, advances the cursor by the pause duration (1 input -> 1 output). */
@@ -584,7 +661,7 @@ export class FtVestingService {
     const contract = this.deriveContract(params.args, params.stateCategory, params.ftCategory);
     const stateUtxo = (await this.provider.getUtxos(contract.tokenAddress))
       .find((u) => Boolean(u.token?.nft) && u.token?.category === params.stateCategory);
-    if (!stateUtxo) throw new Error('The stream is still confirming on-chain — its state is not visible yet. Wait a few seconds and try again.');
+    if (!stateUtxo) throw new Error('The stream is still confirming on chain. Wait a few seconds and try again.');
     const c = params.currentCommitment;
     if (c[0] !== 1) throw new Error('This stream can only be resumed while it is paused.');
     const flags = c[1];
@@ -593,7 +670,7 @@ export class FtVestingService {
     const pauseStart = readUint40LE(c, 15);
     const recipientHash = c.slice(20, 40);
     const locktime = params.nowSeconds - CLAIM_LOCKTIME_BUFFER;
-    if (locktime <= pauseStart) throw new Error('Please wait a moment before resuming — a little time must pass after pausing.');
+    if (locktime <= pauseStart) throw new Error('Wait a moment before resuming. A little time has to pass after pausing.');
     const newCursor = cursor + (locktime - pauseStart);
     const newCommitment = encodeFtCommitment({ status: 0, flags, totalReleased, cursor: newCursor, pauseStart: 0, recipientHash });
     const stateOut = toBigInt(stateUtxo.satoshis) - 2000n;
@@ -601,7 +678,7 @@ export class FtVestingService {
       .setLocktime(locktime)
       .addInput(stateUtxo, contract.unlock.resume(placeholderSignature(), placeholderPublicKey()), { sequence: NON_FINAL_SEQUENCE })
       .addOutput({ to: contract.tokenAddress, amount: stateOut, token: { category: params.stateCategory, amount: 0n, nft: { capability: 'mutable', commitment: binToHex(newCommitment) } } });
-    return { wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Resume stream' })) };
+    return { wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Resume this stream' })) };
   }
 
   /** Cancel: sender-signed, splits vested->recipient / unvested->sender, burns the state NFT. */
@@ -618,11 +695,13 @@ export class FtVestingService {
     const utxos = await this.provider.getUtxos(contract.tokenAddress);
     const stateUtxo = utxos.find((u) => Boolean(u.token?.nft) && u.token?.category === params.stateCategory);
     const vaultUtxo = utxos.find((u) => u.token?.category === params.ftCategory && !u.token?.nft);
-    if (!stateUtxo || !vaultUtxo) throw new Error('The stream is still confirming on-chain — its state or token vault is not visible yet. Wait a few seconds and try again.');
+    if (!stateUtxo || !vaultUtxo) throw new Error('The stream is still confirming on chain. Wait a few seconds and try again.');
     const c = params.currentCommitment;
     const totalReleased = new DataView(c.buffer, c.byteOffset + 2, 8).getBigUint64(0, true);
     const cursor = readUint40LE(c, 10);
     const locktime = params.nowSeconds - CLAIM_LOCKTIME_BUFFER;
+    // The covenant's vesting math goes negative while the lock time is before the cursor.
+    if (locktime < cursor) throw new Error(TOKEN_CANCEL_TOO_EARLY);
     const vested = FtVestingService.vestedTotal(params.args, locktime, cursor);
     const claimableNow = vested - totalReleased > 0n ? vested - totalReleased : 0n;
     const vaultAmount = toBigInt(vaultUtxo.token?.amount);
@@ -650,7 +729,7 @@ export class FtVestingService {
     return {
       claimableNow,
       unvested,
-      wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Cancel stream' })),
+      wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: "Cancel this stream. What's not released yet comes back to you." })),
     };
   }
 
@@ -665,7 +744,7 @@ export class FtVestingService {
     const contract = this.deriveContract(params.args, params.stateCategory, params.ftCategory);
     const stateUtxo = (await this.provider.getUtxos(contract.tokenAddress))
       .find((u) => Boolean(u.token?.nft) && u.token?.category === params.stateCategory);
-    if (!stateUtxo) throw new Error('The stream is still confirming on-chain — its state is not visible yet. Wait a few seconds and try again.');
+    if (!stateUtxo) throw new Error('The stream is still confirming on chain. Wait a few seconds and try again.');
     const c = params.currentCommitment;
     if (c[0] !== 0) throw new Error('This stream can only be transferred to a new recipient while it is active.');
     const newRecipientHash = addressToHash160(params.newRecipientAddress);
@@ -680,7 +759,7 @@ export class FtVestingService {
         { sequence: NON_FINAL_SEQUENCE },
       )
       .addOutput({ to: contract.tokenAddress, amount: stateOut, token: { category: params.stateCategory, amount: 0n, nft: { capability: 'mutable', commitment: binToHex(newCommitment) } } });
-    return { wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Transfer stream' })) };
+    return { wcTransaction: finalizeWcTransactionSequences(builder.generateWcTransactionObject({ broadcast: true, userPrompt: 'Change who receives this stream' })) };
   }
 }
 

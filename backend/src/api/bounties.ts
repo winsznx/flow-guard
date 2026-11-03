@@ -25,10 +25,12 @@ import {
   listActivityEvents,
   recordActivityEvent,
 } from '../utils/activityEvents.js';
-import { getRequiredContractFundingSatoshis } from '../utils/fundingConfig.js';
+import { campaignContractSatoshis } from '../utils/campaignFunding.js';
+import { resolveTokenDecimals } from '../utils/tokenMeta.js';
 import { encryptPrivateKey, decryptPrivateKey } from '../utils/keyEncryption.js';
 import { requireWalletAuth, callerAddress} from '../middleware/auth.js';
 import { uuidParam } from '../middleware/errorHandler.js';
+import { omitSecretColumns } from '../utils/responseSanitizers.js';
 
 
 const router = Router();
@@ -55,7 +57,7 @@ router.get('/bounties', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      campaigns,
+      campaigns: campaigns.map(toBountyResponse),
       total: campaigns.length,
     });
   } catch (error: any) {
@@ -83,7 +85,7 @@ router.get('/bounties/:id', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      campaign,
+      campaign: toBountyResponse(campaign),
       claims,
       events,
     });
@@ -113,10 +115,14 @@ router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Res
       startDate,
       endDate,
       vaultId,
+      tokenDecimals: tokenDecimalsHint,
     } = req.body;
     const normalizedTokenType = tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
       ? 'FUNGIBLE_TOKEN'
       : 'BCH';
+    const tokenDecimals = normalizedTokenType === 'FUNGIBLE_TOKEN'
+      ? await resolveTokenDecimals(tokenCategory, resolveBchNetwork(), tokenDecimalsHint)
+      : 0;
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
     }
@@ -126,7 +132,7 @@ router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Res
     if (!maxWinners || maxWinners <= 0 || !Number.isInteger(Number(maxWinners))) {
       return res.status(400).json({ error: 'Max winners must be a positive integer' });
     }
-    const rewardPerWinnerOnChain = displayAmountToOnChain(Number(rewardPerWinner), normalizedTokenType);
+    const rewardPerWinnerOnChain = displayAmountToOnChain(Number(rewardPerWinner), normalizedTokenType, tokenDecimals);
     if (rewardPerWinnerOnChain <= 0) {
       return res.status(400).json({
         error: 'Reward per winner is below on-chain minimum precision',
@@ -135,7 +141,7 @@ router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Res
           : 'Use at least 1 token base unit per reward',
       });
     }
-    const normalizedRewardPerWinner = onChainAmountToDisplay(rewardPerWinnerOnChain, normalizedTokenType);
+    const normalizedRewardPerWinner = onChainAmountToDisplay(rewardPerWinnerOnChain, normalizedTokenType, tokenDecimals);
     const normalizedMaxWinners = Number(maxWinners);
 
     const id = randomUUID();
@@ -165,18 +171,19 @@ router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Res
       endTime: endDate || 0,
       tokenType: normalizedTokenType,
       tokenCategory,
+      tokenDecimals,
     });
 
     await db!.prepare(`
       INSERT INTO bounties (id, campaign_id, vault_id, creator, title, description,
-        token_type, token_category, reward_per_winner, max_winners,
+        token_type, token_category, token_decimals, reward_per_winner, max_winners,
         winners_count, total_paid, status, start_date, end_date,
         contract_address, constructor_params, nft_commitment, nft_capability,
         authority_privkey, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, campaignId, vaultId || null, creator, title, description || null,
-      normalizedTokenType, tokenCategory || null,
+      normalizedTokenType, tokenCategory || null, tokenDecimals,
       normalizedRewardPerWinner, normalizedMaxWinners,
       startDate || now, endDate || null,
       deployment.contractAddress,
@@ -208,7 +215,7 @@ router.post('/bounties/create', requireWalletAuth, async (req: Request, res: Res
     res.json({
       success: true,
       message: 'Bounty contract deployed - awaiting funding transaction',
-      campaign,
+      campaign: toBountyResponse(campaign),
       deployment: {
         contractAddress: deployment.contractAddress,
         campaignId,
@@ -241,7 +248,7 @@ router.get('/bounties/:id/funding-info', async (req: Request, res: Response) => 
     }
 
     const totalPoolDisplay = campaign.reward_per_winner * campaign.max_winners;
-    const totalPoolOnChain = displayAmountToOnChain(totalPoolDisplay, campaign.token_type);
+    const totalPoolOnChain = displayAmountToOnChain(totalPoolDisplay, campaign.token_type, Number(campaign.token_decimals || 0));
     const nftCommitment = campaign.nft_commitment || '';
 
     const fundingService = new BountyFundingService(resolveBchNetwork());
@@ -255,6 +262,7 @@ router.get('/bounties/:id/funding-info', async (req: Request, res: Response) => 
         tokenCategory: campaign.token_category,
         nftCommitment,
         nftCapability: 'mutable',
+        contractSatoshis: campaignContractSatoshis('bounty', campaign, BigInt(totalPoolOnChain)),
       });
 
       res.json({
@@ -280,7 +288,7 @@ router.get('/bounties/:id/funding-info', async (req: Request, res: Response) => 
             success: false,
             requiresPreparation: true,
             preparationTransaction: serializeWcTransaction(prepResult.wcTransaction),
-            message: 'Your wallet needs a consolidation transaction before funding. Please sign to proceed.',
+            message: 'Your wallet needs one setup step before funding. Approve it in your wallet, then approve the funding.',
           });
         }
       }
@@ -327,13 +335,9 @@ router.post('/bounties/:id/confirm-funding', requireWalletAuth, async (req: Requ
     }
 
     const totalPoolDisplay = campaign.reward_per_winner * campaign.max_winners;
-    const totalPoolOnChain = displayAmountToOnChain(totalPoolDisplay, campaign.token_type);
+    const totalPoolOnChain = displayAmountToOnChain(totalPoolDisplay, campaign.token_type, Number(campaign.token_decimals || 0));
     const isTokenBounty = isFungibleTokenType(campaign.token_type);
-    const minimumContractSatoshis = getRequiredContractFundingSatoshis(
-      'airdrop',
-      isTokenBounty ? 'FUNGIBLE_TOKEN' : 'BCH',
-      BigInt(totalPoolOnChain),
-    );
+    const minimumContractSatoshis = campaignContractSatoshis('bounty', campaign, BigInt(totalPoolOnChain));
 
     const expectedContractOutput = await transactionHasExpectedOutput(
       txHash,
@@ -473,7 +477,7 @@ router.post('/bounties/:id/claim', requireWalletAuth, async (req: Request, res: 
       authorityPrivKey: decryptPrivateKey(campaign.authority_privkey),
     });
 
-    const claimDisplayAmount = onChainAmountToDisplay(claimTx.claimAmount, campaign.token_type);
+    const claimDisplayAmount = onChainAmountToDisplay(claimTx.claimAmount, campaign.token_type, Number(campaign.token_decimals || 0));
 
     res.json({
       success: true,
@@ -518,7 +522,7 @@ router.post('/bounties/:id/confirm-claim', requireWalletAuth, async (req: Reques
     }
 
     const claimAmountNumber = Number(amount);
-    const claimAmountOnChain = displayAmountToOnChain(claimAmountNumber, campaign.token_type);
+    const claimAmountOnChain = displayAmountToOnChain(claimAmountNumber, campaign.token_type, Number(campaign.token_decimals || 0));
     const isTokenBounty = isFungibleTokenType(campaign.token_type);
 
     const expectedClaimOutput = await transactionHasExpectedOutput(
@@ -723,6 +727,134 @@ router.post('/bounties/:id/confirm-pause', requireWalletAuth, async (req: Reques
 });
 
 /**
+ * POST /api/bounties/:id/resume
+ * Build on-chain resume transaction for a bounty campaign
+ */
+router.post('/bounties/:id/resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+
+    const campaign = await db!.prepare('SELECT * FROM bounties WHERE id = ?').get(id) as any;
+    if (!campaign) {
+      return res.status(404).json({ error: 'Bounty campaign not found' });
+    }
+    if (campaign.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only paused bounties can be resumed' });
+    }
+    if (String(campaign.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the bounty creator can resume this campaign' });
+    }
+    if (!campaign.contract_address || !campaign.constructor_params) {
+      return res.status(400).json({ error: 'Bounty contract is not fully configured' });
+    }
+
+    const controlService = new BountyControlService(resolveBchNetwork());
+    const contractService = new ContractService(resolveBchNetwork());
+    const currentCommitment = await contractService.getNFTCommitment(campaign.contract_address)
+      || campaign.nft_commitment
+      || '';
+    const constructorParams = deserializeConstructorParams(campaign.constructor_params);
+    const built = await controlService.buildResumeTransaction({
+      contractAddress: campaign.contract_address,
+      constructorParams,
+      currentCommitment,
+      currentTime: Math.floor(Date.now() / 1000),
+      tokenType: normalizeBountyTokenType(campaign.token_type),
+      feePayerAddress: signerAddress,
+    });
+
+    res.json({
+      success: true,
+      nextStatus: built.nextStatus,
+      wcTransaction: serializeWcTransaction(built.wcTransaction),
+    });
+  } catch (error: any) {
+    console.error(`POST /bounties/${req.params.id}/resume error:`, error);
+    res.status(500).json({ error: 'Failed to build resume transaction', message: error.message });
+  }
+});
+
+/**
+ * POST /api/bounties/:id/confirm-resume
+ * Confirm on-chain resume transaction and update DB state
+ */
+router.post('/bounties/:id/confirm-resume', requireWalletAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { txHash } = req.body;
+    const signerAddress = callerAddress(req);
+    if (!signerAddress) {
+      return res.status(400).json({ error: 'x-user-address header is required' });
+    }
+    if (!txHash) {
+      return res.status(400).json({ error: 'Transaction hash is required' });
+    }
+    if (!(await transactionExists(txHash, resolveBchNetwork()))) {
+      return res.status(409).json({
+        error: 'Transaction hash not found on chipnet',
+        message: 'Transaction is not indexed yet. Retry confirmation shortly.',
+        state: 'pending',
+        retryable: true,
+        errorCode: 'TX_NOT_FOUND',
+      });
+    }
+
+    const campaign = await db!.prepare('SELECT * FROM bounties WHERE id = ?').get(id) as any;
+    if (!campaign) {
+      return res.status(404).json({ error: 'Bounty campaign not found' });
+    }
+    if (String(campaign.creator).toLowerCase() !== signerAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the bounty creator can confirm resume' });
+    }
+
+    const hasExpectedState = await transactionHasExpectedOutput(
+      txHash,
+      {
+        address: campaign.contract_address,
+        minimumSatoshis: 546n,
+        requireNft: true,
+        requiredNftCapability: 'mutable',
+        minimumNftCommitmentBytes: 35,
+      },
+      resolveBchNetwork(),
+    );
+    if (!hasExpectedState) {
+      return res.status(400).json({
+        error: 'Resume transaction does not include expected bounty covenant state output',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    await db!.prepare('UPDATE bounties SET status = ?, updated_at = ? WHERE id = ?')
+      .run('ACTIVE', now, id);
+    await recordActivityEvent({
+      entityType: 'bounty' as any,
+      entityId: id,
+      eventType: 'resumed',
+      actor: signerAddress,
+      status: 'ACTIVE',
+      txHash,
+      createdAt: now,
+    });
+
+    res.json({ success: true, txHash, status: 'ACTIVE', state: 'confirmed', retryable: false });
+  } catch (error: any) {
+    console.error(`POST /bounties/${req.params.id}/confirm-resume error:`, error);
+    res.status(500).json({
+      error: 'Failed to confirm resume',
+      message: error.message,
+      state: 'failed',
+      retryable: false,
+      errorCode: 'CONFIRM_FAILED',
+    });
+  }
+});
+
+/**
  * POST /api/bounties/:id/cancel
  * Build on-chain cancel transaction for a bounty campaign
  */
@@ -878,6 +1010,20 @@ router.post('/bounties/:id/confirm-cancel', requireWalletAuth, async (req: Reque
 
 export default router;
 
+/**
+ * Strips secret columns and adds `cancelable`, which has no DB column: it is bit 0 of
+ * the commitment flags byte (byte 1), fixed at deploy and never changed by the covenant.
+ */
+function toBountyResponse(row: any): any {
+  const sanitized = omitSecretColumns(row);
+  if (!sanitized || typeof sanitized !== 'object') return sanitized;
+  const flagsHex = typeof row.nft_commitment === 'string' ? row.nft_commitment.slice(2, 4) : '';
+  return {
+    ...sanitized,
+    cancelable: /^[0-9a-fA-F]{2}$/.test(flagsHex) && (parseInt(flagsHex, 16) & 0x01) === 0x01,
+  };
+}
+
 function normalizeBountyTokenType(tokenType: unknown): 'BCH' | 'FUNGIBLE_TOKEN' {
   return tokenType === 'FUNGIBLE_TOKEN' || tokenType === 'CASHTOKENS'
     ? 'FUNGIBLE_TOKEN'
@@ -914,7 +1060,7 @@ function hashToP2pkhAddress(hash20: Uint8Array): string {
   lockingBytecode[24] = 0xac;
   const encoded = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
-    prefix: 'bchtest',
+    prefix: resolveBchNetwork() === 'mainnet' ? 'bitcoincash' : 'bchtest',
   });
   if (typeof encoded === 'string') {
     throw new Error(`Failed to encode authority P2PKH address: ${encoded}`);

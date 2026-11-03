@@ -80,6 +80,25 @@ export const generalLimiter = rateLimit({
   skipSuccessfulRequests: false,
   // Skip failed requests from rate limit count (optional)
   skipFailedRequests: false,
+  // /api/status has its own statusLimiter; it is polled by the status page and network guard.
+  skip: (req) => req.path === '/status' || req.path.startsWith('/status/'),
+});
+
+/**
+ * Status rate limiter
+ * 600 requests per 15 minutes per IP
+ * The payload is cached in-process for 10s, so volume here never reaches upstream probes.
+ */
+export const statusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  keyGenerator: clientRateLimitKey,
+  max: 600,
+  message: {
+    error: 'Too many status requests from this IP, please try again after 15 minutes',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 /**

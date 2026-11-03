@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS proposals (
     tx_hash TEXT
 );
 
+ALTER TABLE proposals
+    ADD COLUMN IF NOT EXISTS creator TEXT;
+
 CREATE TABLE IF NOT EXISTS proposal_execution_sessions (
     id TEXT PRIMARY KEY,
     proposal_id TEXT NOT NULL,
@@ -243,6 +246,9 @@ CREATE TABLE IF NOT EXISTS payments (
     updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
 
+ALTER TABLE payments
+    ADD COLUMN IF NOT EXISTS token_decimals INTEGER DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS payment_executions (
     id TEXT PRIMARY KEY,
     payment_id TEXT NOT NULL,
@@ -286,6 +292,9 @@ CREATE TABLE IF NOT EXISTS airdrops (
     updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
 
+ALTER TABLE airdrops
+    ADD COLUMN IF NOT EXISTS token_decimals INTEGER DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS airdrop_claims (
     id TEXT PRIMARY KEY,
     campaign_id TEXT NOT NULL,
@@ -299,6 +308,19 @@ CREATE INDEX IF NOT EXISTS idx_airdrops_status ON airdrops(status);
 CREATE INDEX IF NOT EXISTS idx_airdrop_claims_campaign ON airdrop_claims(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_airdrop_claims_claimer ON airdrop_claims(claimer);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_airdrop_claims_unique ON airdrop_claims(campaign_id, claimer);
+
+-- One co-signed claim per (campaign, claimer) that has not been confirmed yet.
+-- POST /airdrops/:id/claim hands it out again while its state UTXO is still live,
+-- so a wallet that skips confirm-claim can't get a second claim signed.
+CREATE TABLE IF NOT EXISTS airdrop_claim_reservations (
+    campaign_id TEXT NOT NULL,
+    claimer TEXT NOT NULL,
+    tx_hash TEXT NOT NULL,
+    state_outpoint TEXT NOT NULL,
+    wc_transaction TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    PRIMARY KEY (campaign_id, claimer)
+);
 
 CREATE TABLE IF NOT EXISTS rewards (
     id TEXT PRIMARY KEY,
@@ -326,6 +348,9 @@ CREATE TABLE IF NOT EXISTS rewards (
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
     updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
+
+ALTER TABLE rewards
+    ADD COLUMN IF NOT EXISTS token_decimals INTEGER DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS reward_distributions (
     id TEXT PRIMARY KEY,
@@ -366,6 +391,9 @@ CREATE TABLE IF NOT EXISTS bounties (
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
     updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
+
+ALTER TABLE bounties
+    ADD COLUMN IF NOT EXISTS token_decimals INTEGER DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS bounty_claims (
     id TEXT PRIMARY KEY,
@@ -409,6 +437,15 @@ CREATE TABLE IF NOT EXISTS grants (
     updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
 );
 
+ALTER TABLE grants
+    ADD COLUMN IF NOT EXISTS token_decimals INTEGER DEFAULT 0;
+
+-- The API and frontend name a grant's reference grant_number; tables created from this
+-- file only had campaign_id. Create writes both so either shape works.
+ALTER TABLE grants
+    ADD COLUMN IF NOT EXISTS grant_number TEXT,
+    ADD COLUMN IF NOT EXISTS campaign_id TEXT;
+
 CREATE TABLE IF NOT EXISTS grant_milestones (
     id TEXT PRIMARY KEY,
     grant_id TEXT NOT NULL,
@@ -423,6 +460,13 @@ CREATE TABLE IF NOT EXISTS grant_milestones (
 CREATE INDEX IF NOT EXISTS idx_grants_creator ON grants(creator);
 CREATE INDEX IF NOT EXISTS idx_grants_status ON grants(status);
 CREATE INDEX IF NOT EXISTS idx_grant_milestones_grant ON grant_milestones(grant_id);
+
+-- Same mismatch on milestones: the API reads and writes milestone_index and created_at.
+ALTER TABLE grant_milestones
+    ADD COLUMN IF NOT EXISTS milestone_index INTEGER,
+    ADD COLUMN IF NOT EXISTS milestone_number INTEGER,
+    ADD COLUMN IF NOT EXISTS amount DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS created_at BIGINT;
 
 CREATE TABLE IF NOT EXISTS activity_events (
     id TEXT PRIMARY KEY,

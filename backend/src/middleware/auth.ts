@@ -791,6 +791,19 @@ export async function requireWalletAuth(
 }
 
 /**
+ * Express middleware for routes that read differently for a signed-in caller.
+ * Sets `req.verifiedUser` when a valid bearer token is sent, and otherwise lets
+ * the request through unauthenticated. It never trusts `x-user-address` alone
+ * and never consumes a nonce, so a GET stays free of side effects.
+ */
+export function attachVerifiedUser(req: Request, _res: Response, next: NextFunction): void {
+  const bearer = extractBearerToken(req);
+  const user = bearer ? verifyBearer(bearer) : null;
+  if (user) req.verifiedUser = user;
+  next();
+}
+
+/**
  * Returns the verified user when wallet-auth middleware has run, otherwise
  * falls back to the legacy header identity (unverified). Handlers that must
  * enforce ownership should call `requireAuthenticatedUser(req)` instead.

@@ -76,12 +76,12 @@ router.get('/explorer/activity', async (req, res) => {
       let sql = `SELECT p.id, p.vault_id as stream_id, '' as sender,
         p.recipient, 'BCH' as token_type, NULL as token_category,
         p.amount as total_amount,
-        CASE WHEN p.status = 'EXECUTED' THEN p.amount ELSE 0 END as vested_amount,
-        CASE WHEN p.status = 'EXECUTED' THEN 100 ELSE p.approval_count * 25 END as progress_percentage,
-        'PROPOSAL' as stream_type, p.status, p.created_at, 'TREASURY' as activity_type
-        FROM proposals p WHERE 1=1`;
+        CASE WHEN UPPER(p.status) = 'EXECUTED' THEN p.amount ELSE 0 END as vested_amount,
+        CASE WHEN UPPER(p.status) = 'EXECUTED' THEN 100 ELSE p.approval_count * 25 END as progress_percentage,
+        'PROPOSAL' as stream_type, UPPER(p.status) as status, p.created_at, 'TREASURY' as activity_type
+        FROM proposals p WHERE p.status <> 'abandoned'`;
       const params: any[] = [];
-      if (status && status !== 'ALL') { sql += ' AND p.status = ?'; params.push(status); }
+      if (status && status !== 'ALL') { sql += ' AND UPPER(p.status) = UPPER(?)'; params.push(status); }
       sql += ` ORDER BY p.created_at DESC LIMIT ${pageLimit}`;
       const rows = await db!.prepare(sql).all(...params) as any[];
       results.push(...rows.map(r => ({ ...r, created_at: Number(new Date(r.created_at)) / 1000 })));
