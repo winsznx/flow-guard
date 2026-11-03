@@ -1,7 +1,7 @@
 {
   "name": "flowguard",
-  "version": "0.1.0",
-  "description": "Contract-backed treasuries, streams, payments, distributions, and governance on Bitcoin Cash",
+  "version": "1.1.0",
+  "description": "Contract-backed vaults, streams, payments and distributions on Bitcoin Cash",
   "private": true,
   "license": "MIT",
   "workspaces": [
