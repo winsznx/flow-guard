@@ -1,30 +1,28 @@
 /**
- * Wallet Connectors for FlowGuard
+ * Wallet connectors for FlowGuard, based on the BCH reference implementations
+ * https://github.com/mainnet-pat/dapp-starter and https://github.com/mainnet-pat/wc2-bch-bcr.
  *
- * Complete rewrite based on BCH reference implementations:
- * - https://github.com/mainnet-pat/dapp-starter
- * - https://github.com/mainnet-pat/wc2-bch-bcr
- *
- * Supports five wallet types:
- * 1. Paytaca Native (browser extension - window.paytaca API)
- * 2. Cashonize (CashScript-aware mobile wallet via WalletConnect v2)
- * 3. WalletConnect v2 (Zapit and other mobile wallets)
- * 4. WizardConnect (BCH-native, NIP-17 transport - beta, Paytaca mobile only)
- * 5. OPTN Wallet (covenant-native mobile wallet via WalletConnect v2 - beta)
+ * 1. Paytaca extension (window.paytaca)
+ * 2. Cashonize (WalletConnect v2, web or phone)
+ * 3. WalletConnect v2 (Paytaca phone, Zapit, Selene and others)
+ * 4. WizardConnect (NIP-17 transport, beta, Paytaca phone only)
+ * 5. OPTN (WalletConnect v2, beta)
  */
 
 export { PaytacaNativeConnector } from './PaytacaNativeConnector';
 export { CashonizeConnector } from './CashonizeConnector';
 export { Web3ModalWalletConnectConnector } from './Web3ModalWalletConnectConnector';
 export { WizardConnectConnector } from './WizardConnectConnector';
-export { OptnConnector, OPTN_WALLET_URL } from './OptnConnector';
+export { OptnConnector } from './OptnConnector';
 
-import type { IWalletConnector, WalletType } from '../types/wallet';
+import type { IWalletConnector, WalletInfo, WalletType } from '../types/wallet';
 import { PaytacaNativeConnector } from './PaytacaNativeConnector';
 import { CashonizeConnector } from './CashonizeConnector';
 import { Web3ModalWalletConnectConnector } from './Web3ModalWalletConnectConnector';
 import { WizardConnectConnector } from './WizardConnectConnector';
-import { OptnConnector, OPTN_WALLET_URL } from './OptnConnector';
+import { OptnConnector } from './OptnConnector';
+import { flowFailure } from '../copy/errors';
+import { UNKNOWN_WALLET_NAME, WALLETS } from '../copy/wallets';
 
 /**
  * Feature flag for WizardConnect. Defaults to disabled because the protocol
@@ -50,6 +48,11 @@ export function isOptnEnabled(): boolean {
   return import.meta.env.VITE_ENABLE_OPTN === 'true';
 }
 
+/** A connector that can also resume a stored session without prompting the user. */
+export interface RestorableWalletConnector extends IWalletConnector {
+  restore(): Promise<WalletInfo | null>;
+}
+
 /**
  * Factory function to create wallet connector by type
  *
@@ -63,7 +66,7 @@ export function isOptnEnabled(): boolean {
  * const address = await connector.getAddress();
  * ```
  */
-export function createWalletConnector(type: WalletType): IWalletConnector {
+export function createWalletConnector(type: WalletType): RestorableWalletConnector {
   switch (type) {
     case 'paytaca':
       return new PaytacaNativeConnector();
@@ -76,86 +79,48 @@ export function createWalletConnector(type: WalletType): IWalletConnector {
 
     case 'wizardconnect':
       if (!isWizardConnectEnabled()) {
-        throw new Error(
-          'WizardConnect is in beta and disabled by default. ' +
-            'Enable with VITE_ENABLE_WIZARDCONNECT=true in your env.',
-        );
+        throw flowFailure('WALLET_UNSUPPORTED', { details: 'WizardConnect is turned off in this build.' });
       }
       return new WizardConnectConnector();
 
     case 'optn':
       if (!isOptnEnabled()) {
-        throw new Error(
-          'OPTN Wallet support is in beta and disabled by default. ' +
-            'Enable with VITE_ENABLE_OPTN=true in your env.',
-        );
+        throw flowFailure('WALLET_UNSUPPORTED', { details: 'OPTN is turned off in this build.' });
       }
       return new OptnConnector();
 
     default:
-      throw new Error(`Unsupported wallet type: ${type}`);
+      throw flowFailure('WALLET_UNSUPPORTED', { details: `Saved wallet type ${String(type)} isn't supported.` });
   }
 }
 
 /**
- * Get user-friendly wallet display name
+ * Resume a saved wallet without showing a QR code or extension prompt.
+ * Resolves to null when the wallet has no session that can be resumed silently.
  */
-export function getWalletDisplayName(type: WalletType): string {
-  switch (type) {
-    case 'paytaca':
-      return 'Paytaca';
-    case 'cashonize':
-      return 'Cashonize';
-    case 'walletconnect':
-      return 'WalletConnect';
-    case 'wizardconnect':
-      return 'WizardConnect';
-    case 'optn':
-      return 'OPTN Wallet';
-    default:
-      return 'Unknown Wallet';
-  }
+export async function restoreWalletConnector(
+  type: WalletType,
+): Promise<{ connector: IWalletConnector; info: WalletInfo } | null> {
+  const connector = createWalletConnector(type);
+  const info = await connector.restore();
+  return info ? { connector, info } : null;
 }
 
-/**
- * Get wallet description for UI
- */
+function isWalletType(type: string): type is WalletType {
+  return Object.prototype.hasOwnProperty.call(WALLETS, type);
+}
+
+/** The wallet's name, from the registry in copy/wallets.ts. */
+export function getWalletDisplayName(type: WalletType | string | null | undefined): string {
+  return type && isWalletType(type) ? WALLETS[type].name : UNKNOWN_WALLET_NAME;
+}
+
+/** The wallet's one-line picker description, from the registry in copy/wallets.ts. */
 export function getWalletDescription(type: WalletType): string {
-  switch (type) {
-    case 'paytaca':
-      return 'Browser extension or mobile app';
-    case 'cashonize':
-      return 'CashScript-aware mobile wallet';
-    case 'walletconnect':
-      return 'Mobile wallets (Cashonize, Zapit)';
-    case 'wizardconnect':
-      return 'BCH-native, end-to-end encrypted (Beta)';
-    case 'optn':
-      return 'Covenant-native mobile wallet (Beta)';
-    default:
-      return '';
-  }
+  return WALLETS[type].line;
 }
 
-/**
- * Check if wallet type requires installation
- */
-export function requiresInstallation(type: WalletType): boolean {
-  return type === 'paytaca'; // Extension needs installation
-}
-
-/**
- * Get installation URL for wallet
- */
+/** Where to get the wallet, when it has a download page. */
 export function getInstallationUrl(type: WalletType): string | null {
-  switch (type) {
-    case 'paytaca':
-      return 'https://chrome.google.com/webstore/detail/paytaca/pakphhpnneopheifihmjcjnbdbhaaiaa';
-    case 'wizardconnect':
-      return 'https://paytaca.com';
-    case 'optn':
-      return OPTN_WALLET_URL;
-    default:
-      return null;
-  }
+  return WALLETS[type].getUrl ?? null;
 }

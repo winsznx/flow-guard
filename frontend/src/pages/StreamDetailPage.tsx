@@ -1,1999 +1,1217 @@
-import { useState, useEffect } from 'react';
-import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Clock,
-  Calendar,
-  TrendingUp,
-  Download,
-  Repeat,
-  XCircle,
-  CheckCircle2,
-  AlertCircle,
-  ExternalLink,
-  Copy,
-  Check,
-} from 'lucide-react';
-import { useWallet } from '../hooks/useWallet';
-import { useNetwork } from '../hooks/useNetwork';
-import { Card } from '../components/ui/Card';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useLocation, useParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { TwoColumn } from '../components/layout/TwoColumn';
+import { ActivityList } from '../components/ui/ActivityList';
+import { AddressInput } from '../components/ui/AddressInput';
+import { Amount } from '../components/ui/Amount';
+import { AmountInput } from '../components/ui/AmountInput';
+import { Address } from '../components/ui/Address';
+import { BackLink } from '../components/ui/BackLink';
 import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
-import { SkeletonStats, SkeletonCard } from '../components/ui/Skeleton';
-import { CircularProgress } from '../components/streams/CircularProgress';
-import { StreamScheduleChart } from '../components/streams/StreamScheduleChart';
-import { formatLogicalId } from '../utils/display';
-import { tokenSymbol } from '../utils/tokenFormat';
-import { TokenIdentity, useTokenMeta } from '../components/shared/TokenIdentity';
-import { readDaoLaunchContext, type DaoLaunchContext } from '../utils/daoStreamLaunch';
-import { getStreamScheduleTemplateLabel } from '../utils/streamShapes';
-import { toUserFacingError } from '../utils/userError';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Card } from '../components/ui/Card';
+import { Checkbox } from '../components/ui/Checkbox';
+import { Code } from '../components/ui/Code';
+import { CopyButton } from '../components/ui/CopyButton';
+import { DetailList } from '../components/ui/DetailList';
+import { Dialog } from '../components/ui/Dialog';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Heading } from '../components/ui/Heading';
+import { ArrowDownToLine, ArrowUpFromLine, Copy } from '../components/ui/Icon';
+import { ManageActions, type ManageAction } from '../components/ui/ManageActions';
+import { Notice } from '../components/ui/Notice';
+import { Panel } from '../components/ui/Panel';
+import { PlanSentence, type Schedule } from '../components/ui/PlanSentence';
+import { ReleaseBar } from '../components/ui/ReleaseBar';
+import { ScheduleTimeline } from '../components/ui/ScheduleTimeline';
+import { Skeleton } from '../components/ui/Skeleton';
+import { useToast } from '../components/ui/Toast';
+import {
+  TransactionReview,
+  type ReviewSummary,
+  type TxStep,
+} from '../components/ui/TransactionReview';
+import type { Asset } from '../components/ui/types';
+import { LABELS, ROLE_LINES, TOASTS } from '../copy/common';
+import { toEventKind, type ActivityEvent } from '../copy/events';
+import {
+  formatAddress,
+  formatAmount,
+  formatDate,
+  formatShortId,
+  formatDateTime,
+  formatInterval,
+} from '../copy/format';
+import { lifecycleStatus } from '../copy/status';
+import { STREAM_DETAIL, scheduleChoiceOf, scheduleName } from '../copy/streams';
+import { useNetwork } from '../hooks/useNetwork';
+import { useWallet } from '../hooks/useWallet';
 import {
   cancelStreamOnChain,
   claimStreamFunds,
   fundStreamContract,
-  getExplorerTxUrl,
   pauseStreamOnChain,
   refillStreamOnChain,
   resumeStreamOnChain,
   transferStreamOnChain,
 } from '../utils/blockchain';
+import { getCachedTokenMeta, resolveTokenMeta, type TokenMeta } from '../utils/tokenMeta';
 
-interface StreamLaunchContext {
-  source: string;
-  title?: string;
-  description?: string;
-  preferredLane?: string;
-}
+const DAY_SECONDS = 86_400;
+const MAX_EVEN_BLOCKS = 52;
+const ACTIVITY_SHOWN = 8;
+
+type StreamStatus = 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
 
 interface Stream {
   id: string;
   stream_id: string;
-  vault_id: string;
+  vault_id?: string | null;
+  batch_id?: string | null;
   sender: string;
   recipient: string;
   token_type: 'BCH' | 'CASHTOKENS';
-  token_category?: string;
-  token_decimals?: number;
+  token_category?: string | null;
+  token_decimals?: number | null;
   total_amount: number;
   withdrawn_amount: number;
   vested_amount: number;
   claimable_amount: number;
-  progress_percentage: number;
-  stream_type: 'LINEAR' | 'RECURRING' | 'STEP' | 'TRANCHE' | 'HYBRID';
+  claim_deferred_until?: number | null;
+  stream_type: string;
   start_time: number;
-  end_time?: number;
-  interval_seconds?: number;
-  amount_per_interval?: number;
-  step_amount?: number;
-  schedule_count?: number;
-  tranche_schedule?: Array<{
-    unlock_time: number;
-    amount: number;
-    cumulative_amount: number;
-  }>;
-  hybrid_unlock_time?: number;
-  hybrid_upfront_amount?: number;
-  cliff_timestamp?: number;
-  next_payment_time?: number;
-  schedule_template?: string;
-  launch_source?: string;
-  launch_title?: string;
-  launch_description?: string;
-  preferred_lane?: string;
-  launch_context?: StreamLaunchContext;
+  end_time?: number | null;
+  interval_seconds?: number | null;
+  amount_per_interval?: number | null;
+  step_amount?: number | null;
+  schedule_count?: number | null;
+  tranche_schedule?: { unlock_time: number; amount: number; cumulative_amount: number }[] | null;
+  hybrid_unlock_time?: number | null;
+  hybrid_upfront_amount?: number | null;
+  cliff_timestamp?: number | null;
+  pause_started_at?: number | null;
   cancelable: boolean;
   transferable: boolean;
   refillable: boolean;
-  status: 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
-  activated_at?: number;
+  status: StreamStatus;
   created_at: number;
-  description?: string;
+  description?: string | null;
 }
 
-interface Claim {
-  id: string;
-  amount: number;
-  claimed_at: number;
-  tx_hash?: string;
-}
-
-interface ActivityEvent {
+interface StreamEvent {
   id: string;
   event_type: string;
   actor: string | null;
   amount: number | null;
-  status: string | null;
   tx_hash: string | null;
-  details?: unknown;
   created_at: number;
 }
 
-interface RelatedActivityEvent {
-  id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  status: string | null;
-  tx_hash: string | null;
-  created_at: number;
-  stream: {
-    stream_id: string;
-    vault_id?: string | null;
-    stream_type: string;
-    schedule_template?: string | null;
-    launch_context?: StreamLaunchContext | null;
+interface StreamRecord {
+  stream: Stream;
+  events: StreamEvent[];
+}
+
+type Load =
+  | { kind: 'loading' }
+  | { kind: 'not-found' }
+  | { kind: 'error' }
+  | { kind: 'ready'; record: StreamRecord };
+
+type Role = 'sender' | 'recipient' | 'viewer';
+
+type ReviewAction = 'fund' | 'claim' | 'cancel' | 'pause' | 'resume' | 'recipient' | 'addFunds';
+
+/** Smallest BCH output the network relays, so smaller claims wait. */
+const BCH_DUST_LIMIT = 0.00000546;
+
+type BlockState = 'claimed' | 'ready' | 'later' | 'waiting';
+type Block = { at: number; amount: string; state: BlockState };
+type RawBlock = { at: number; amount: number; waiting?: boolean };
+
+class StreamNotFound extends Error {}
+
+async function fetchStream(id: string): Promise<StreamRecord> {
+  const response = await fetch(`/api/streams/${id}`);
+  if (response.status === 404 || response.status === 400) throw new StreamNotFound();
+  if (!response.ok) throw new Error(`Stream request failed with ${response.status}`);
+  const data: { stream?: Stream; events?: StreamEvent[] } = await response.json();
+  if (!data.stream) throw new StreamNotFound();
+  return { stream: data.stream, events: data.events ?? [] };
+}
+
+function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  const bare = (value: string) =>
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/^[a-z]+:/, '');
+  return Boolean(a && b) && bare(a ?? '') === bare(b ?? '');
+}
+
+function useTokenMeta(category: string | null): TokenMeta | null {
+  const [resolved, setResolved] = useState<{ category: string; meta: TokenMeta | null } | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!category) return undefined;
+    let ignore = false;
+    resolveTokenMeta(category)
+      .then((meta) => {
+        if (!ignore) setResolved({ category, meta });
+      })
+      .catch((error: unknown) => console.warn('Token details did not load', error));
+    return () => {
+      ignore = true;
+    };
+  }, [category]);
+
+  if (!category) return null;
+  return resolved?.category === category ? resolved.meta : getCachedTokenMeta(category);
+}
+
+function streamAsset(stream: Stream, meta: TokenMeta | null): Asset {
+  if (stream.token_type === 'BCH' || !stream.token_category) return { kind: 'bch' };
+  return {
+    kind: 'token',
+    tokenId: stream.token_category,
+    symbol: meta?.symbol,
+    decimals: stream.token_decimals ?? meta?.decimals ?? 0,
   };
 }
 
-type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
-
-interface FeedbackState {
-  tone: FeedbackTone;
-  title: string;
-  description?: string;
-  details?: string;
-  txHash?: string;
+function decimalsOf(asset: Asset): number {
+  return asset.kind === 'bch' ? 8 : Math.max(0, Math.min(18, asset.decimals));
 }
 
-const FRESH_CREATE_TITLE = 'Stream created. Funding is the next step.';
-const FRESH_CREATE_DESCRIPTION = 'The stream exists on-chain. Fund this stream from here to activate vesting.';
+function amountText(value: number, asset: Asset): string {
+  return Math.max(0, Number.isFinite(value) ? value : 0).toFixed(decimalsOf(asset));
+}
 
-function formatAssetAmount(
-  amount: number,
-  tokenType: 'BCH' | 'CASHTOKENS',
-  tokenCategory?: string | null,
-  decimals?: number,
-) {
-  const maxFrac = tokenType === 'BCH' ? 8 : Math.max(0, Math.min(18, Math.trunc(decimals ?? 0)));
-  const formatted = amount.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: maxFrac,
+/** Timeline blocks are approximate for streams released every second, so they use list precision. */
+function blockAmount(value: number, asset: Asset): string {
+  return Math.max(0, Number.isFinite(value) ? value : 0).toFixed(Math.min(4, decimalsOf(asset)));
+}
+
+function money(value: number, asset: Asset): string {
+  return formatAmount(amountText(value, asset), asset) ?? amountText(value, asset);
+}
+
+function perRelease(stream: Stream): number | null {
+  const count = stream.schedule_count ?? 0;
+  if (stream.stream_type === 'RECURRING')
+    return stream.amount_per_interval ?? (count > 0 ? stream.total_amount / count : null);
+  if (stream.stream_type === 'STEP')
+    return stream.step_amount ?? (count > 0 ? stream.total_amount / count : null);
+  return null;
+}
+
+function hasWait(stream: Stream): boolean {
+  return Boolean(stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time);
+}
+
+function evenBlocks(from: number, to: number, amount: number): RawBlock[] {
+  if (to <= from || amount <= 0) return [];
+  const count = Math.max(1, Math.min(MAX_EVEN_BLOCKS, Math.round((to - from) / (7 * DAY_SECONDS))));
+  return Array.from({ length: count }, (_, index) => ({
+    at: from + ((to - from) * (index + 1)) / count,
+    amount: amount / count,
+  }));
+}
+
+function rawBlocks(stream: Stream): RawBlock[] {
+  const start = stream.start_time;
+  const end = stream.end_time ?? 0;
+  const total = stream.total_amount;
+
+  switch (stream.stream_type) {
+    case 'RECURRING':
+    case 'STEP': {
+      const count = stream.schedule_count ?? 0;
+      const interval = stream.interval_seconds ?? 0;
+      const each = perRelease(stream);
+      if (count < 1 || interval <= 0 || each === null) return [];
+      const cliff = hasWait(stream) ? (stream.cliff_timestamp ?? 0) : 0;
+      return Array.from({ length: count }, (_, index) => {
+        const at = start + interval * (index + 1);
+        const amount =
+          index === count - 1 && stream.stream_type === 'STEP' ? total - each * (count - 1) : each;
+        return { at: Math.max(at, cliff), amount };
+      });
+    }
+    case 'TRANCHE':
+      return (stream.tranche_schedule ?? []).map((tranche) => ({
+        at: tranche.unlock_time,
+        amount: tranche.amount,
+      }));
+    case 'HYBRID': {
+      const unlock = stream.hybrid_unlock_time ?? 0;
+      const upfront = stream.hybrid_upfront_amount ?? 0;
+      if (!unlock || !end || unlock >= end) return [];
+      return [
+        { at: start, amount: 0, waiting: true },
+        { at: unlock, amount: upfront },
+        ...evenBlocks(unlock, end, total - upfront),
+      ];
+    }
+    case 'LINEAR': {
+      if (!end || end <= start) return [];
+      if (!hasWait(stream)) return evenBlocks(start, end, total);
+      const cliff = stream.cliff_timestamp ?? start;
+      const earned = (total * (cliff - start)) / (end - start);
+      return [
+        { at: start, amount: 0, waiting: true },
+        { at: cliff, amount: earned },
+        ...evenBlocks(cliff, end, total - earned),
+      ];
+    }
+    default:
+      return [];
+  }
+}
+
+/** Streams that release every second, drawn as approximate weekly blocks. */
+function isContinuous(stream: Stream): boolean {
+  return stream.stream_type === 'LINEAR' || stream.stream_type === 'HYBRID';
+}
+
+/** Block states use the same claimed and ready amounts as the action card. */
+function scheduleBlocks(stream: Stream, asset: Asset): Block[] {
+  const epsilon = 10 ** -decimalsOf(asset);
+  const claimable = stream.status === 'ACTIVE' ? Math.max(0, stream.claimable_amount) : 0;
+  const released = stream.status === 'PENDING' ? 0 : stream.withdrawn_amount + claimable;
+  let cumulative = 0;
+  return rawBlocks(stream).map((block) => {
+    if (block.waiting) return { at: block.at * 1000, amount: '0', state: 'waiting' };
+    cumulative += block.amount;
+    const state: BlockState =
+      cumulative - block.amount / 2 <= stream.withdrawn_amount + epsilon
+        ? 'claimed'
+        : cumulative <= released + epsilon
+          ? 'ready'
+          : 'later';
+    return { at: block.at * 1000, amount: blockAmount(block.amount, asset), state };
   });
-  return `${formatted} ${tokenSymbol(tokenType, tokenCategory)}`;
 }
 
-function formatIntervalLabel(intervalSeconds?: number) {
-  if (!intervalSeconds) return 'N/A';
-  const days = Math.round(intervalSeconds / 86400);
-  if (days % 365 === 0) {
-    const years = days / 365;
-    return `${years} year${years === 1 ? '' : 's'}`;
+function planOf(stream: Stream, asset: Asset): Schedule | null {
+  const choice = scheduleChoiceOf(stream);
+  const total = amountText(stream.total_amount, asset);
+  const each = perRelease(stream);
+  const end = stream.end_time ?? 0;
+  switch (choice) {
+    case 'once':
+      return end ? { kind: 'once', amount: total, asset, on: end } : null;
+    case 'evenly':
+    case 'waitThenEvenly':
+      return end
+        ? {
+            kind: 'linear',
+            total,
+            asset,
+            start: stream.start_time,
+            end,
+            waitUntil: hasWait(stream) ? (stream.cliff_timestamp ?? undefined) : undefined,
+          }
+        : null;
+    case 'sameAmount': {
+      const interval = stream.interval_seconds ?? 0;
+      const count = stream.schedule_count ?? 0;
+      if (!interval || !count || each === null) return null;
+      return {
+        kind: 'recurring',
+        perRelease: amountText(each, asset),
+        asset,
+        everyDays: interval / DAY_SECONDS,
+        count,
+        start: stream.start_time + interval,
+      };
+    }
+    case 'partNow': {
+      const upfront = stream.hybrid_upfront_amount;
+      if (!stream.hybrid_unlock_time || upfront === null || upfront === undefined || !end)
+        return null;
+      return {
+        kind: 'upfront',
+        upfront: amountText(upfront, asset),
+        rest: amountText(stream.total_amount - upfront, asset),
+        asset,
+        start: stream.hybrid_unlock_time,
+        end,
+      };
+    }
+    case 'custom': {
+      const releases = (stream.tranche_schedule ?? []).map((tranche) => ({
+        amount: amountText(tranche.amount, asset),
+        at: tranche.unlock_time,
+      }));
+      return releases.length > 0 ? { kind: 'custom', releases, asset } : null;
+    }
+    default:
+      return null;
   }
-  if (days % 30 === 0) {
-    const months = days / 30;
-    return `${months} month${months === 1 ? '' : 's'}`;
-  }
-  if (days % 7 === 0) {
-    const weeks = days / 7;
-    return `${weeks} week${weeks === 1 ? '' : 's'}`;
-  }
-  return `${days} day${days === 1 ? '' : 's'}`;
 }
 
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
+function toActivity(event: StreamEvent, asset: Asset, address: string | null): ActivityEvent {
+  return {
+    id: event.id,
+    kind: toEventKind(event.event_type),
+    object: { kind: 'stream' },
+    at: event.created_at,
+    actor: event.actor
+      ? { address: event.actor, isYou: sameAddress(event.actor, address) }
+      : undefined,
+    amount: event.amount !== null && event.amount > 0 ? { value: event.amount, asset } : undefined,
+    txid: event.tx_hash ?? undefined,
+  };
 }
 
-function normalizeChartPoints(points: Array<{ x: number; y: number }>) {
-  const normalized: Array<{ x: number; y: number }> = [];
-
-  for (const point of points) {
-    const x = clamp01(point.x);
-    const y = clamp01(point.y);
-    const previous = normalized[normalized.length - 1];
-
-    if (previous && Math.abs(previous.x - x) < 0.0001 && Math.abs(previous.y - y) < 0.0001) {
-      continue;
-    }
-
-    normalized.push({ x, y });
-  }
-
-  return normalized.length > 0 ? normalized : [{ x: 0, y: 0 }, { x: 1, y: 0 }];
+function DetailSkeleton() {
+  return (
+    <PageContainer>
+      <div className="flex flex-col gap-6">
+        <Skeleton kind="text" lines={2} />
+        <Skeleton kind="tile" />
+        <Skeleton kind="row" lines={4} />
+      </div>
+    </PageContainer>
+  );
 }
 
-function buildStreamDetailChartPoints(stream: Stream) {
-  const derivedDurationSeconds = stream.end_time && stream.end_time > stream.start_time
-    ? stream.end_time - stream.start_time
-    : stream.stream_type === 'RECURRING' && stream.interval_seconds && stream.schedule_count
-      ? stream.interval_seconds * stream.schedule_count
-      : 0;
-  if (derivedDurationSeconds <= 0) {
-    return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
-  }
-
-  const durationSeconds = derivedDurationSeconds;
-
-  if (stream.stream_type === 'LINEAR') {
-    if (stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time) {
-      const cliffElapsed = stream.cliff_timestamp - stream.start_time;
-      const cliffX = cliffElapsed / durationSeconds;
-      const cliffY = stream.total_amount > 0
-        ? Math.min((stream.total_amount * cliffElapsed) / durationSeconds, stream.total_amount) / stream.total_amount
-        : cliffX;
-
-      return normalizeChartPoints([
-        { x: 0, y: 0 },
-        { x: cliffX, y: 0 },
-        { x: cliffX, y: cliffY },
-        { x: 1, y: 1 },
-      ]);
-    }
-
-    return [{ x: 0, y: 0 }, { x: 1, y: 1 }];
-  }
-
-  if (stream.stream_type === 'HYBRID') {
-    if (
-      !stream.end_time ||
-      !stream.hybrid_unlock_time ||
-      stream.hybrid_unlock_time <= stream.start_time ||
-      stream.hybrid_unlock_time >= stream.end_time
-    ) {
-      return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
-    }
-
-    const unlockX = (stream.hybrid_unlock_time - stream.start_time) / durationSeconds;
-    const unlockY = stream.total_amount > 0 && stream.hybrid_upfront_amount !== undefined
-      ? Math.max(0, Math.min(stream.hybrid_upfront_amount, stream.total_amount)) / stream.total_amount
-      : 0;
-
-    return normalizeChartPoints([
-      { x: 0, y: 0 },
-      { x: unlockX, y: 0 },
-      { x: unlockX, y: unlockY },
-      { x: 1, y: 1 },
-    ]);
-  }
-
-  if (!stream.interval_seconds || stream.interval_seconds <= 0) {
-    return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
-  }
-
-  const scheduleCount = stream.schedule_count || Math.floor(durationSeconds / stream.interval_seconds);
-  if (scheduleCount < 1) {
-    return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
-  }
-
-  if (stream.stream_type === 'RECURRING') {
-    const points = [{ x: 0, y: 0 }];
-    for (let index = 1; index <= scheduleCount; index += 1) {
-      points.push({
-        x: (index * stream.interval_seconds) / durationSeconds,
-        y: index / scheduleCount,
-      });
-    }
-    return normalizeChartPoints(points);
-  }
-
-  if (stream.stream_type === 'TRANCHE') {
-    const schedule = stream.tranche_schedule || [];
-    if (schedule.length === 0) {
-      return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
-    }
-
-    const points = [{ x: 0, y: 0 }];
-    for (const tranche of schedule) {
-      const x = (tranche.unlock_time - stream.start_time) / durationSeconds;
-      const y = stream.total_amount > 0 ? tranche.cumulative_amount / stream.total_amount : 0;
-      points.push({ x, y: points[points.length - 1].y });
-      points.push({ x, y });
-    }
-    return normalizeChartPoints(points);
-  }
-
-  const stepAmount = stream.step_amount ?? Math.ceil(stream.total_amount / scheduleCount);
-  const cliffElapsed = stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time
-    ? stream.cliff_timestamp - stream.start_time
-    : 0;
-  const cliffCompletedSteps = cliffElapsed > 0
-    ? Math.min(scheduleCount, Math.floor(cliffElapsed / stream.interval_seconds))
-    : 0;
-  const points = [{ x: 0, y: 0 }];
-
-  if (cliffElapsed > 0) {
-    const cliffY = stream.total_amount > 0
-      ? Math.min(cliffCompletedSteps * stepAmount, stream.total_amount) / stream.total_amount
-      : cliffCompletedSteps / scheduleCount;
-    points.push({ x: cliffElapsed / durationSeconds, y: 0 });
-    if (cliffY > 0) {
-      points.push({ x: cliffElapsed / durationSeconds, y: cliffY });
-    }
-  }
-
-  for (let index = Math.max(1, cliffCompletedSteps + 1); index <= scheduleCount; index += 1) {
-    points.push({
-      x: (index * stream.interval_seconds) / durationSeconds,
-      y: stream.total_amount > 0
-        ? Math.min(index * stepAmount, stream.total_amount) / stream.total_amount
-        : index / scheduleCount,
-    });
-  }
-
-  return normalizeChartPoints(points);
-}
-
-function buildScheduleRows(stream: Stream) {
-  if (stream.stream_type === 'LINEAR') {
-    const rows: Array<{ label: string; date: string; note: string }> = [];
-
-    if (stream.cliff_timestamp && stream.end_time && stream.cliff_timestamp > stream.start_time) {
-      const cliffElapsed = stream.cliff_timestamp - stream.start_time;
-      const duration = stream.end_time - stream.start_time;
-      const cliffUnlock = duration > 0
-        ? Math.min((stream.total_amount * cliffElapsed) / duration, stream.total_amount)
-        : stream.total_amount;
-
-      rows.push({
-        label: 'Cliff release',
-        date: new Date(stream.cliff_timestamp * 1000).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        note: `${formatAssetAmount(cliffUnlock, stream.token_type, stream.token_category, stream.token_decimals)} becomes claimable when the cliff lifts.`,
-      });
-    }
-
-    if (stream.end_time) {
-      rows.push({
-        label: 'Full unlock',
-        date: new Date(stream.end_time * 1000).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        note: formatAssetAmount(stream.total_amount, stream.token_type, stream.token_category, stream.token_decimals),
-      });
-    }
-
-    return rows;
-  }
-
-  if (stream.stream_type === 'HYBRID') {
-    const rows: Array<{ label: string; date: string; note: string }> = [];
-
-    if (stream.hybrid_unlock_time) {
-      rows.push({
-        label: 'Upfront unlock',
-        date: new Date(stream.hybrid_unlock_time * 1000).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        note: stream.hybrid_upfront_amount !== undefined
-          ? formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type, stream.token_category, stream.token_decimals)
-          : 'Configured upfront release',
-      });
-    }
-
-    if (stream.end_time) {
-      const remainder = stream.hybrid_upfront_amount !== undefined
-        ? Math.max(0, stream.total_amount - stream.hybrid_upfront_amount)
-        : stream.total_amount;
-      rows.push({
-        label: 'Linear remainder completes',
-        date: new Date(stream.end_time * 1000).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        note: `${formatAssetAmount(remainder, stream.token_type, stream.token_category, stream.token_decimals)} finishes vesting by schedule end.`,
-      });
-    }
-
-    return rows;
-  }
-
-  const scheduleCount = stream.schedule_count || 0;
-  const intervalSeconds = stream.interval_seconds || 0;
-  if (scheduleCount < 1 || intervalSeconds <= 0) return [];
-
-  if (stream.stream_type === 'RECURRING') {
-    const rows: Array<{ label: string; date: string; note: string }> = [];
-    const visible = Math.min(scheduleCount, 4);
-    const fundedRunwayEnd = stream.start_time + intervalSeconds * scheduleCount;
-
-    for (let index = 1; index <= visible; index += 1) {
-      rows.push({
-        label: `Release ${index}`,
-        date: new Date((stream.start_time + intervalSeconds * index) * 1000).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        note: stream.amount_per_interval !== undefined
-          ? formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category, stream.token_decimals)
-          : 'Pending',
-      });
-    }
-
-    if (scheduleCount > visible) {
-      rows.push({
-        label: `Final release (${scheduleCount})`,
-        date: new Date(fundedRunwayEnd * 1000).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        note: stream.amount_per_interval !== undefined
-          ? formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category, stream.token_decimals)
-          : 'Pending',
-      });
-    }
-
-    return rows;
-  }
-
-  if (stream.stream_type === 'TRANCHE') {
-    return (stream.tranche_schedule || []).map((tranche, index) => ({
-      label: `Tranche ${index + 1}`,
-      date: new Date(tranche.unlock_time * 1000).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      note: `${formatAssetAmount(tranche.amount, stream.token_type, stream.token_category, stream.token_decimals)} • cumulative ${formatAssetAmount(tranche.cumulative_amount, stream.token_type, stream.token_category, stream.token_decimals)}`,
-    }));
-  }
-
-  const stepAmount = stream.step_amount ?? Math.ceil(stream.total_amount / scheduleCount);
-  const finalAmount = stream.total_amount - (stepAmount * Math.max(0, scheduleCount - 1));
-  const cliffElapsed = stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time
-    ? stream.cliff_timestamp - stream.start_time
-    : 0;
-  const cliffCompletedSteps = cliffElapsed > 0
-    ? Math.min(scheduleCount, Math.floor(cliffElapsed / intervalSeconds))
-    : 0;
-  const rows: Array<{ label: string; date: string; note: string }> = [];
-
-  if (cliffElapsed > 0 && cliffCompletedSteps > 0 && stream.cliff_timestamp) {
-    rows.push({
-      label: 'Cliff unlock',
-      date: new Date(stream.cliff_timestamp * 1000).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      note: `${formatAssetAmount(Math.min(cliffCompletedSteps * stepAmount, stream.total_amount), stream.token_type, stream.token_category, stream.token_decimals)} across ${cliffCompletedSteps} milestone${cliffCompletedSteps === 1 ? '' : 's'}.`,
-    });
-  }
-
-  const visibleMilestones = Math.min(scheduleCount - cliffCompletedSteps, 3);
-  for (let offset = 0; offset < visibleMilestones; offset += 1) {
-    const milestoneIndex = cliffCompletedSteps + offset + 1;
-    if (milestoneIndex > scheduleCount) break;
-    rows.push({
-      label: `Milestone ${milestoneIndex}`,
-      date: new Date((stream.start_time + intervalSeconds * milestoneIndex) * 1000).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      note: formatAssetAmount(milestoneIndex === scheduleCount ? finalAmount : stepAmount, stream.token_type, stream.token_category, stream.token_decimals),
-    });
-  }
-
-  if (scheduleCount > cliffCompletedSteps + visibleMilestones && stream.end_time) {
-    rows.push({
-      label: `Final milestone (${scheduleCount})`,
-      date: new Date(stream.end_time * 1000).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      note: formatAssetAmount(finalAmount, stream.token_type, stream.token_category, stream.token_decimals),
-    });
-  }
-
-  return rows;
-}
-
-/**
- * StreamDetailPage - Single Stream View
- * Like Sablier's stream detail page with circular progress ring
- */
 export default function StreamDetailPage() {
   const { id } = useParams<{ id: string }>();
   const wallet = useWallet();
   const network = useNetwork();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const launchState = location.state as { daoContext?: DaoLaunchContext; freshCreate?: boolean } | null;
-  const daoContext = launchState?.daoContext || readDaoLaunchContext();
-  const [stream, setStream] = useState<Stream | null>(null);
-  // Resolve BCMR metadata so amounts render the real symbol (STAMP) instead of
-  // "CT 963d…"; also drives the rich token identity block below.
-  useTokenMeta(stream?.token_type === 'CASHTOKENS' ? stream?.token_category : null);
-  const [claims, setClaims] = useState<Claim[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [claiming, setClaiming] = useState(false);
-  const [pausing, setPausing] = useState(false);
-  const [resuming, setResuming] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [funding, setFunding] = useState(false);
-  const [transferring, setTransferring] = useState(false);
-  const [refilling, setRefilling] = useState(false);
-  const [nextRecipientAddress, setNextRecipientAddress] = useState('');
-  const [refillAmountInput, setRefillAmountInput] = useState('');
-  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [relatedActivity, setRelatedActivity] = useState<RelatedActivityEvent[]>([]);
-  const [feedback, setFeedback] = useState<FeedbackState | null>(
-    launchState?.freshCreate
-      ? {
-          tone: 'info',
-          title: FRESH_CREATE_TITLE,
-          description: FRESH_CREATE_DESCRIPTION,
+  const { pathname } = useLocation();
+  const { toast } = useToast();
+  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+  const [reloadKey, setReloadKey] = useState(0);
+  const [review, setReview] = useState<ReviewAction | null>(null);
+  const [recipientDialog, setRecipientDialog] = useState(false);
+  const [newRecipient, setNewRecipient] = useState('');
+  const [recipientValid, setRecipientValid] = useState(false);
+  const [recipientChecked, setRecipientChecked] = useState(false);
+  const [addFundsDialog, setAddFundsDialog] = useState(false);
+  const [addAmount, setAddAmount] = useState('');
+
+  useEffect(() => {
+    if (!id) return undefined;
+    let ignore = false;
+    fetchStream(id)
+      .then((record) => {
+        if (!ignore) setLoad({ kind: 'ready', record });
+      })
+      .catch((error: unknown) => {
+        if (ignore) return;
+        if (error instanceof StreamNotFound) {
+          setLoad({ kind: 'not-found' });
+          return;
         }
-      : null,
+        console.error('Stream did not load', error);
+        setLoad((current) => (current.kind === 'ready' ? current : { kind: 'error' }));
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [id, reloadKey]);
+
+  const reload = useCallback(() => setReloadKey((key) => key + 1), []);
+
+  const record = load.kind === 'ready' ? load.record : null;
+  const meta = useTokenMeta(
+    record?.stream.token_type === 'CASHTOKENS' ? (record.stream.token_category ?? null) : null
   );
 
-  const buildErrorFeedback = (
-    title: string,
-    error: unknown,
-    fallback: string,
-  ): FeedbackState => {
-    const parsed = toUserFacingError(error, fallback);
-    return {
-      tone: 'error',
-      title,
-      description: parsed.message,
-      details: parsed.details,
-    };
-  };
+  if (load.kind === 'loading') return <DetailSkeleton />;
 
-  const refreshStream = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`/api/streams/${id}`);
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Failed to fetch stream' }));
-        throw new Error(error.error || 'Failed to fetch stream');
-      }
-      const data = await response.json();
-      setStream(data.stream);
-      setClaims(data.claims || []);
-      setEvents(data.events || []);
-      const persistedContext = data.stream?.launch_context;
-      if (persistedContext?.source || data.stream?.vault_id) {
-        const relatedParams = new URLSearchParams();
-        relatedParams.set('limit', '6');
-        if (persistedContext?.source) {
-          relatedParams.set('contextSource', persistedContext.source);
-          relatedParams.set('treasury', 'true');
-        }
-        if (data.stream?.vault_id) {
-          relatedParams.set('vaultId', data.stream.vault_id);
-        }
-
-        const relatedResponse = await fetch(`/api/streams/activity?${relatedParams.toString()}`);
-        const relatedData = await relatedResponse.json().catch(() => ({ events: [] }));
-        setRelatedActivity(
-          (relatedData.events || []).filter((event: RelatedActivityEvent) => event.stream.stream_id !== data.stream.stream_id),
-        );
-      } else {
-        setRelatedActivity([]);
-      }
-      setLoadError(null);
-    } catch (error) {
-      console.error('Failed to fetch stream:', error);
-      setLoadError(error instanceof Error ? error.message : 'Failed to load stream');
-      setStream(null);
-      setClaims([]);
-      setEvents([]);
-      setRelatedActivity([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (id) {
-      void refreshStream();
-    }
-  }, [id, wallet.address]);
-
-  useEffect(() => {
-    if (!stream) return;
-    setFeedback((current) => {
-      if (!current) return current;
-      if (
-        current.title === FRESH_CREATE_TITLE
-        && stream.status !== 'PENDING'
-      ) {
-        return null;
-      }
-      return current;
-    });
-  }, [stream?.status]);
-
-  const handleClaim = async () => {
-    if (!stream || stream.claimable_amount <= 0) return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can claim from this stream.',
-      });
-      return;
-    }
-
-    try {
-      setClaiming(true);
-      const claimEstimate = stream.claimable_amount;
-      const txHash = await claimStreamFunds(wallet, stream.id);
-      await refreshStream();
-
-      setFeedback({
-        tone: 'success',
-        title: `Successfully claimed ${formatAssetAmount(claimEstimate, stream.token_type, stream.token_category, stream.token_decimals)}.`,
-        description: 'The stream balance and claim history have been refreshed.',
-        txHash,
-      });
-    } catch (error) {
-      console.error('Claim failed:', error);
-      setFeedback(buildErrorFeedback('Claim failed.', error, 'Failed to claim stream'));
-    } finally {
-      setClaiming(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!stream || !stream.cancelable) return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can cancel this stream.',
-      });
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Are you sure you want to cancel this stream?\n\n` +
-      `Recipient will keep all vested funds (${formatAssetAmount(stream.vested_amount, stream.token_type, stream.token_category, stream.token_decimals)}).\n` +
-      `Remaining funds (${formatAssetAmount(stream.total_amount - stream.vested_amount, stream.token_type, stream.token_category, stream.token_decimals)}) will be returned to the sender.`
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setCancelling(true);
-      const txHash = await cancelStreamOnChain(wallet, stream.id);
-
-      setFeedback({
-        tone: 'success',
-        title: 'Stream cancelled successfully.',
-        description: 'The stream has been closed on-chain and treasury state was updated.',
-        txHash,
-      });
-      navigate(stream.vault_id ? `/vaults/${stream.vault_id}?tab=streams` : effectiveDaoContext ? '/app/dao' : '/streams');
-    } catch (error) {
-      console.error('Cancel failed:', error);
-      await refreshStream();
-      setFeedback(buildErrorFeedback('Cancel failed.', error, 'Failed to cancel stream'));
-    } finally {
-      setCancelling(false);
-    }
-  };
-
-  const handleFund = async () => {
-    if (!stream || stream.status !== 'PENDING') return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can fund this stream.',
-      });
-      return;
-    }
-
-    try {
-      setFunding(true);
-
-      const txId = await fundStreamContract(wallet, stream.id);
-      console.log('Stream funded successfully. TxID:', txId);
-
-      // Refresh stream data
-      await refreshStream();
-
-      setFeedback({
-        tone: 'success',
-        title: 'Stream funded successfully.',
-        description: 'The funding transaction is recorded and stream status was refreshed.',
-        txHash: txId,
-      });
-    } catch (error) {
-      console.error('Funding failed:', error);
-      setFeedback(buildErrorFeedback('Funding failed.', error, 'Failed to fund stream'));
-    } finally {
-      setFunding(false);
-    }
-  };
-
-  const copyToClipboard = async (text: string, type: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedAddress(type);
-    setTimeout(() => setCopiedAddress(null), 2000);
-  };
-
-  const formatAddress = (addr: string) => `${addr.slice(0, 10)}...${addr.slice(-8)}`;
-  const formatDate = (timestamp: number) =>
-    new Date(timestamp * 1000).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-  const formatDuration = (seconds: number) => {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    if (days > 0) return `${days}d ${hours}h`;
-    return `${hours}h`;
-  };
-
-  const getStatusBadge = (status: string) => {
-    const styles: Record<string, string> = {
-      PENDING: 'bg-blue-100 text-blue-800',
-      ACTIVE: 'bg-green-100 text-green-800',
-      PAUSED: 'bg-yellow-100 text-yellow-800',
-      CANCELLED: 'bg-red-100 text-red-800',
-      COMPLETED: 'bg-gray-100 text-gray-800',
-      FAILED: 'bg-red-100 text-red-800',
-    };
-
-    const icons: Record<string, any> = {
-      PENDING: Clock,
-      ACTIVE: CheckCircle2,
-      PAUSED: Clock,
-      CANCELLED: XCircle,
-      COMPLETED: CheckCircle2,
-      FAILED: AlertCircle,
-    };
-
-    const Icon = icons[status] || AlertCircle;
-
+  if (load.kind === 'not-found' || load.kind === 'error') {
+    const copy = load.kind === 'not-found' ? STREAM_DETAIL.notFound : STREAM_DETAIL.loadError;
     return (
-      <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${styles[status]}`}>
-        <Icon className="w-4 h-4" />
-        {status}
-      </span>
-    );
-  };
-
-  const getExplorerUrl = (txHash: string) => {
-    return getExplorerTxUrl(txHash, network);
-  };
-
-  const handlePause = async () => {
-    if (!stream) return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can pause this stream.',
-      });
-      return;
-    }
-
-    try {
-      setPausing(true);
-      const txHash = await pauseStreamOnChain(wallet, stream.id);
-      await refreshStream();
-      setFeedback({
-        tone: 'success',
-        title: 'Stream paused successfully.',
-        description: 'Claims are paused until the stream is resumed.',
-        txHash,
-      });
-    } catch (error) {
-      console.error('Pause failed:', error);
-      await refreshStream();
-      setFeedback(buildErrorFeedback('Pause failed.', error, 'Failed to pause stream'));
-    } finally {
-      setPausing(false);
-    }
-  };
-
-  const handleResume = async () => {
-    if (!stream) return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can resume this stream.',
-      });
-      return;
-    }
-
-    try {
-      setResuming(true);
-      const txHash = await resumeStreamOnChain(wallet, stream.id);
-      await refreshStream();
-      setFeedback({
-        tone: 'success',
-        title: 'Stream resumed successfully.',
-        description: 'The vesting schedule is active again.',
-        txHash,
-      });
-    } catch (error) {
-      console.error('Resume failed:', error);
-      setFeedback(buildErrorFeedback('Resume failed.', error, 'Failed to resume stream'));
-    } finally {
-      setResuming(false);
-    }
-  };
-
-  const handleTransfer = async () => {
-    if (!stream) return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can transfer recipient ownership.',
-      });
-      return;
-    }
-    if (!nextRecipientAddress.trim()) {
-      setFeedback({
-        tone: 'warning',
-        title: 'Recipient address is required.',
-        description: 'Enter a new recipient address before submitting transfer.',
-      });
-      return;
-    }
-
-    try {
-      setTransferring(true);
-      const txHash = await transferStreamOnChain(wallet, stream.id, nextRecipientAddress.trim());
-      setNextRecipientAddress('');
-      await refreshStream();
-      setFeedback({
-        tone: 'success',
-        title: 'Stream recipient updated successfully.',
-        description: 'Ownership was transferred on-chain and details have been refreshed.',
-        txHash,
-      });
-    } catch (error) {
-      console.error('Transfer failed:', error);
-      setFeedback(buildErrorFeedback('Transfer failed.', error, 'Failed to transfer stream recipient'));
-    } finally {
-      setTransferring(false);
-    }
-  };
-
-  const handleRefill = async () => {
-    if (!stream) return;
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can refill runway.',
-      });
-      return;
-    }
-    const refillAmount = Number(refillAmountInput);
-    if (!Number.isFinite(refillAmount) || refillAmount <= 0) {
-      setFeedback({
-        tone: 'warning',
-        title: 'Refill amount is invalid.',
-        description: 'Enter an amount greater than zero.',
-      });
-      return;
-    }
-
-    try {
-      setRefilling(true);
-      const txHash = await refillStreamOnChain(wallet, stream.id, refillAmount);
-      setRefillAmountInput('');
-      await refreshStream();
-      setFeedback({
-        tone: 'success',
-        title: 'Recurring stream refilled successfully.',
-        description: 'Runway was extended and stream totals were refreshed.',
-        txHash,
-      });
-    } catch (error) {
-      console.error('Refill failed:', error);
-      setFeedback(buildErrorFeedback('Refill failed.', error, 'Failed to refill recurring stream'));
-    } finally {
-      setRefilling(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen pb-20 bg-background">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-8">
-          <div className="mb-6">
-            <div className="h-8 w-1/3 animate-pulse rounded bg-surfaceAlt border border-border/40 mb-3" />
-            <div className="h-4 w-1/2 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-          </div>
-          <SkeletonStats count={4} className="mb-6" />
-          <SkeletonCard lines={3} className="mb-4" />
-          <SkeletonCard lines={3} />
+      <PageContainer>
+        <div className="mb-6">
+          <BackLink to="/streams" label={STREAM_DETAIL.notFound.back} />
         </div>
-      </div>
+        <ErrorState
+          title={copy.title}
+          reason={copy.reason}
+          onRetry={
+            load.kind === 'error'
+              ? () => {
+                  setLoad({ kind: 'loading' });
+                  reload();
+                }
+              : undefined
+          }
+        />
+      </PageContainer>
     );
   }
 
-  if (loadError || !stream) {
-    return (
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        <Card padding="lg" className="border-red-200 bg-red-50/50">
-          <p className="font-mono text-sm text-red-700">
-            {loadError || 'Stream not found'}
-          </p>
-          <div className="mt-4">
-            <Button variant="secondary" onClick={() => navigate(daoContext ? '/app/dao' : '/streams')}>
-              Back to Streams
-            </Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
+  const { stream, events } = load.record;
+  const address = wallet.address;
+  const asset = streamAsset(stream, meta);
+  const role: Role = sameAddress(stream.sender, address)
+    ? 'sender'
+    : sameAddress(stream.recipient, address)
+      ? 'recipient'
+      : 'viewer';
+  const nowMs = Date.now();
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const status = lifecycleStatus(stream.status, { startsAt: stream.start_time * 1000, now: nowMs });
+  const recipientShort = formatAddress(stream.recipient);
+  const senderShort = formatAddress(stream.sender);
+  const title = stream.description?.trim() || STREAM_DETAIL.titleTo(recipientShort);
+  const isRecurring = stream.stream_type === 'RECURRING';
+  const isToken = asset.kind === 'token';
 
-  const isSender = wallet.address?.toLowerCase() === stream.sender.toLowerCase();
-  const isRecipient = wallet.address?.toLowerCase() === stream.recipient.toLowerCase();
-  const effectiveDaoContext: DaoLaunchContext | null = stream.launch_context
-    ? {
-        source: stream.launch_context.source,
-        title: stream.launch_context.title || daoContext?.title || 'Organization stream workflow',
-        description: stream.launch_context.description || daoContext?.description || 'This stream was launched from an organization workspace and is tracked as part of the treasury workflow.',
-        preferredLane: stream.launch_context.preferredLane || daoContext?.preferredLane,
-      }
-    : daoContext || null;
-  const displayStreamId = formatLogicalId(stream.stream_id);
-  const templateLabel = getStreamScheduleTemplateLabel(stream.schedule_template);
-  const cadenceLabel = stream.stream_type === 'LINEAR'
-    ? stream.cliff_timestamp && stream.end_time && stream.cliff_timestamp > stream.start_time
-      ? 'Continuous vesting with cliff release'
-      : 'Continuous unlock'
+  const claimed = Math.max(0, stream.withdrawn_amount);
+  const ready = Math.max(0, stream.claimable_amount);
+  const later = Math.max(0, stream.total_amount - claimed - ready);
+  const releasedSoFar = Math.max(0, stream.vested_amount);
+  const unreleased = Math.max(0, stream.total_amount - releasedSoFar);
+  const releasedNotClaimed = Math.max(0, releasedSoFar - claimed);
+  const notClaimed = Math.max(0, stream.total_amount - claimed);
+  const deferredUntil =
+    stream.claim_deferred_until && stream.claim_deferred_until > nowSeconds
+      ? stream.claim_deferred_until
+      : null;
+  const each = perRelease(stream);
+
+  const blocks = scheduleBlocks(stream, asset);
+  const nextBlock = blocks.find((block) => block.state === 'later');
+  const plan = planOf(stream, asset);
+  const waitEnd = hasWait(stream)
+    ? (stream.cliff_timestamp ?? null)
     : stream.stream_type === 'HYBRID'
-      ? 'Upfront unlock + linear tail'
-    : stream.stream_type === 'TRANCHE'
-      ? 'Custom unlock checkpoints'
-    : `${stream.stream_type === 'RECURRING' ? 'Release cadence' : 'Milestone cadence'}: ${formatIntervalLabel(stream.interval_seconds)}`;
-  const fundedRunwayLabel = stream.stream_type === 'RECURRING' && stream.refillable
-    ? `${stream.schedule_count || 0} funded release${stream.schedule_count === 1 ? '' : 's'} in runway`
-    : null;
-  const trancheLabel = stream.stream_type === 'RECURRING'
-    ? stream.amount_per_interval !== undefined
-      ? formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category, stream.token_decimals)
-      : 'Pending'
-    : stream.stream_type === 'TRANCHE'
-      ? stream.tranche_schedule?.length
-        ? `${stream.tranche_schedule.length} custom checkpoints`
-        : 'Pending'
-    : stream.stream_type === 'HYBRID'
-      ? stream.hybrid_upfront_amount !== undefined
-        ? `${formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type, stream.token_category, stream.token_decimals)} upfront`
-        : 'Pending'
-    : stream.stream_type === 'STEP'
-      ? stream.step_amount !== undefined
-        ? formatAssetAmount(stream.step_amount, stream.token_type, stream.token_category, stream.token_decimals)
-        : 'Pending'
-      : 'Continuously vested';
-  const scheduleRows = buildScheduleRows(stream);
-  const scheduleChartPoints = buildStreamDetailChartPoints(stream);
-  const backDestination = stream.vault_id
-    ? `/vaults/${stream.vault_id}?tab=streams`
-    : effectiveDaoContext
-      ? '/app/dao'
-      : '/streams';
-  const backLabel = stream.vault_id
-    ? 'Back to Treasury'
-    : effectiveDaoContext
-      ? 'Back to Organization Workspace'
-      : 'Back to Streams';
-  const feedbackToneClasses: Record<FeedbackTone, string> = {
-    success: 'border-success/40 bg-success/10 text-success',
-    warning: 'border-warning/40 bg-warning/10 text-warning',
-    error: 'border-error/40 bg-error/10 text-error',
-    info: 'border-primary/30 bg-primary/10 text-primary',
+      ? (stream.hybrid_unlock_time ?? null)
+      : null;
+
+  const isActive = stream.status === 'ACTIVE';
+  const isPaused = stream.status === 'PAUSED';
+  const claimable = isToken ? ready > 0 : ready >= BCH_DUST_LIMIT;
+  const canClaim = role === 'recipient' && isActive && claimable && !deferredUntil;
+  const canAddFunds =
+    role === 'sender' && isRecurring && stream.refillable && (isActive || isPaused);
+  const canPause = role === 'sender' && stream.cancelable && isActive;
+  const canResume = role === 'sender' && stream.cancelable && isPaused;
+  const canCancel = role === 'sender' && stream.cancelable && (isActive || isPaused);
+  const canChangeRecipient =
+    role === 'recipient' && stream.transferable && !isRecurring && isActive;
+
+  const recipientLine = (): string => {
+    if (stream.status === 'PENDING') return STREAM_DETAIL.action.notFunded;
+    if (stream.status === 'CANCELLED') return STREAM_DETAIL.action.cancelled;
+    if (stream.status === 'COMPLETED') return STREAM_DETAIL.action.finished;
+    if (isPaused) return STREAM_DETAIL.action.paused;
+    if (deferredUntil) return STREAM_DETAIL.action.deferred(formatDate(deferredUntil) ?? '');
+    if (waitEnd && waitEnd > nowSeconds) {
+      const date = formatDate(waitEnd);
+      if (date) return STREAM_DETAIL.action.waitUntil(date);
+    }
+    if (isContinuous(stream) && stream.end_time && stream.end_time > nowSeconds) {
+      const end = formatDate(stream.end_time);
+      if (end) return STREAM_DETAIL.action.continuous(end);
+    }
+    if (nextBlock && !isContinuous(stream)) {
+      const amount = formatAmount(nextBlock.amount, asset);
+      const date = formatDate(nextBlock.at);
+      if (amount && date) return STREAM_DETAIL.action.next(amount, date);
+    }
+    if (claimed > 0 && later <= 0 && ready <= 0) return STREAM_DETAIL.action.allClaimed;
+    return STREAM_DETAIL.action.nothingYet;
   };
+
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${pathname}`);
+      toast({ tone: 'success', title: TOASTS.linkCopied });
+    } catch (error) {
+      console.warn('Clipboard write was refused', error);
+      toast({ tone: 'danger', title: TOASTS.copyFailed });
+    }
+  };
+
+  const runWith =
+    (send: () => Promise<string>, walletSteps = 1) =>
+    async (report: (step: TxStep) => void): Promise<{ txid?: string }> => {
+      report({ step: 'wallet', index: 1, of: walletSteps, status: 'pending' });
+      const txid = await send();
+      for (let index = 1; index <= walletSteps; index += 1) {
+        report({ step: 'wallet', index, of: walletSteps, status: 'done' });
+      }
+      report({ step: 'network', status: 'done' });
+      report({ step: 'confirmed', status: 'done' });
+      reload();
+      return { txid };
+    };
+
+  const primaryAction = (() => {
+    if (role === 'recipient') {
+      return canClaim ? (
+        <Button
+          variant="primary"
+          size="lg"
+          leadingIcon={ArrowDownToLine}
+          onClick={() => setReview('claim')}
+        >
+          {STREAM_DETAIL.action.claim(money(ready, asset))}
+        </Button>
+      ) : (
+        <p className="text-body text-ink-secondary">{recipientLine()}</p>
+      );
+    }
+    if (role === 'sender') {
+      if (stream.status === 'PENDING') {
+        return (
+          <Button
+            variant="primary"
+            size="lg"
+            leadingIcon={ArrowUpFromLine}
+            onClick={() => setReview('fund')}
+          >
+            {STREAM_DETAIL.action.fund}
+          </Button>
+        );
+      }
+      if (canAddFunds) {
+        return (
+          <Button
+            variant="primary"
+            size="lg"
+            leadingIcon={ArrowUpFromLine}
+            onClick={() => setAddFundsDialog(true)}
+          >
+            {STREAM_DETAIL.action.addFunds}
+          </Button>
+        );
+      }
+      if (isActive || isPaused) {
+        return (
+          <Button variant="primary" size="lg" leadingIcon={Copy} onClick={() => void copyShareLink()}>
+            {STREAM_DETAIL.action.copyShareLink}
+          </Button>
+        );
+      }
+    }
+    return null;
+  })();
+
+  const notices: ReactNode[] = [];
+  if (stream.status === 'PENDING' && role === 'sender') {
+    const created = formatDate(stream.created_at) ?? '';
+    notices.push(
+      <Notice key="not-funded" tone="warning" title={STREAM_DETAIL.notice.notFundedTitle}>
+        <p>
+          {STREAM_DETAIL.notice.notFundedSender(money(stream.total_amount, asset), recipientShort)}
+        </p>
+        <p className="mt-1">
+          {stream.batch_id
+            ? STREAM_DETAIL.notice.notFundedBatch(created)
+            : STREAM_DETAIL.notice.notFundedSingle}
+        </p>
+      </Notice>
+    );
+  }
+  if (stream.status === 'PENDING' && role === 'recipient') {
+    notices.push(
+      <Notice key="not-funded" tone="info" title={STREAM_DETAIL.notice.notFundedTitle}>
+        {STREAM_DETAIL.notice.notFundedRecipient}
+      </Notice>
+    );
+  }
+  if (isPaused && role !== 'sender') {
+    notices.push(
+      <Notice key="paused" tone="warning" title={STREAM_DETAIL.notice.pausedTitle}>
+        {STREAM_DETAIL.notice.pausedRecipient}
+      </Notice>
+    );
+  }
+  if (isPaused && role === 'sender') {
+    notices.push(
+      <Notice key="paused" tone="warning" title={STREAM_DETAIL.notice.pausedTitle}>
+        {STREAM_DETAIL.notice.pausedSender(recipientShort)}
+      </Notice>
+    );
+  }
+  if (deferredUntil && role === 'recipient' && isActive) {
+    notices.push(
+      <Notice
+        key="deferred"
+        tone="info"
+        title={STREAM_DETAIL.notice.deferredTitle(formatDate(deferredUntil) ?? '')}
+      >
+        {STREAM_DETAIL.notice.deferred(formatDateTime(deferredUntil, { withZone: true }) ?? '')}
+      </Notice>
+    );
+  }
+  if (stream.vault_id) {
+    notices.push(
+      <Notice
+        key="vault"
+        tone="neutral"
+        title={STREAM_DETAIL.notice.vaultTitle}
+        action={
+          <ButtonLink variant="link" standalone to={`/vaults/${stream.vault_id}`}>
+            {STREAM_DETAIL.notice.openVault}
+          </ButtonLink>
+        }
+      >
+        {role === 'sender' ? STREAM_DETAIL.notice.vaultSender : STREAM_DETAIL.notice.vaultOther}
+      </Notice>
+    );
+  }
+
+  const scheduleLine = (() => {
+    const end = stream.end_time ? formatDate(stream.end_time) : null;
+    if (isRecurring && stream.refillable) return STREAM_DETAIL.schedule.noEnd;
+    if (stream.stream_type === 'LINEAR' && end) {
+      const wait = hasWait(stream) ? formatDate(stream.cliff_timestamp) : null;
+      return wait
+        ? STREAM_DETAIL.schedule.linearWait(wait, end)
+        : STREAM_DETAIL.schedule.linear(end);
+    }
+    if (stream.stream_type === 'HYBRID' && end && stream.hybrid_unlock_time) {
+      const date = formatDate(stream.hybrid_unlock_time);
+      if (date)
+        return STREAM_DETAIL.schedule.upfront(
+          money(stream.hybrid_upfront_amount ?? 0, asset),
+          date,
+          end
+        );
+    }
+    return null;
+  })();
+
+  const pausedSince = stream.pause_started_at ? formatDate(stream.pause_started_at) : null;
+  const pausedScheduleLine = pausedSince
+    ? STREAM_DETAIL.schedule.pausedSince(pausedSince)
+    : STREAM_DETAIL.schedule.paused;
+
+  const interval = stream.interval_seconds ? formatInterval(stream.interval_seconds) : null;
+  const details = [
+    {
+      label: STREAM_DETAIL.details.from,
+      value: <Address value={stream.sender} isYou={role === 'sender'} />,
+    },
+    {
+      label: STREAM_DETAIL.details.to,
+      value: <Address value={stream.recipient} isYou={role === 'recipient'} />,
+    },
+    {
+      label: STREAM_DETAIL.details.paidIn,
+      value:
+        asset.kind === 'bch' ? (
+          'BCH'
+        ) : (
+          <span className="inline-flex flex-col items-start gap-1 sm:items-end">
+            <span>{asset.symbol?.trim() || STREAM_DETAIL.details.token}</span>
+            <span className="inline-flex items-center gap-1 text-small text-ink-muted">
+              {LABELS.tokenId} <Code>{formatShortId(asset.tokenId)}</Code>
+              <CopyButton value={asset.tokenId} label={STREAM_DETAIL.details.copyTokenId} />
+            </span>
+          </span>
+        ),
+    },
+    { label: STREAM_DETAIL.details.schedule, value: scheduleName(stream) },
+    ...(interval && (isRecurring || stream.stream_type === 'STEP')
+      ? [
+          {
+            label: STREAM_DETAIL.details.howOften,
+            value: interval.charAt(0).toUpperCase() + interval.slice(1),
+          },
+        ]
+      : []),
+    ...(each !== null
+      ? [
+          {
+            label: STREAM_DETAIL.details.eachRelease,
+            value: <Amount value={amountText(each, asset)} asset={asset} />,
+          },
+        ]
+      : []),
+    {
+      label: STREAM_DETAIL.details.starts,
+      value: formatDateTime(stream.start_time, { withZone: true }),
+    },
+    ...(waitEnd
+      ? [
+          {
+            label:
+              stream.stream_type === 'HYBRID'
+                ? STREAM_DETAIL.details.upfront
+                : STREAM_DETAIL.details.waitUntil,
+            value: formatDateTime(waitEnd, { withZone: true }),
+          },
+        ]
+      : []),
+    {
+      label: STREAM_DETAIL.details.ends,
+      value:
+        isRecurring && stream.refillable
+          ? STREAM_DETAIL.details.noEnd
+          : formatDateTime(stream.end_time ?? null, { withZone: true }),
+    },
+    {
+      label: STREAM_DETAIL.details.canPause,
+      value: stream.cancelable ? STREAM_DETAIL.details.yes : STREAM_DETAIL.details.no,
+    },
+    ...(isRecurring
+      ? [
+          {
+            label: STREAM_DETAIL.details.canAddFunds,
+            value: stream.refillable ? STREAM_DETAIL.details.yes : STREAM_DETAIL.details.no,
+          },
+        ]
+      : [
+          {
+            label: STREAM_DETAIL.details.canChangeRecipient,
+            value: stream.transferable ? STREAM_DETAIL.details.yes : STREAM_DETAIL.details.no,
+          },
+        ]),
+    {
+      label: STREAM_DETAIL.details.listedUnder,
+      value: stream.vault_id ? (
+        <ButtonLink variant="link" to={`/vaults/${stream.vault_id}`}>
+          {STREAM_DETAIL.details.vault}
+        </ButtonLink>
+      ) : (
+        STREAM_DETAIL.details.notListed
+      ),
+    },
+    {
+      label: STREAM_DETAIL.details.reference,
+      value: (
+        <span className="inline-flex items-center gap-1">
+          <Code>{stream.stream_id}</Code>
+          <CopyButton value={stream.stream_id} label={STREAM_DETAIL.details.copyReference} />
+        </span>
+      ),
+    },
+  ];
+
+  const recipientName = recipientShort;
+  const whoLine =
+    role === 'recipient'
+      ? !stream.cancelable
+        ? STREAM_DETAIL.who.youFixed
+        : isRecurring
+          ? STREAM_DETAIL.who.youRecurring
+          : STREAM_DETAIL.who.youCancelable
+      : !stream.cancelable
+        ? STREAM_DETAIL.who.fixed(recipientName)
+        : isRecurring
+          ? STREAM_DETAIL.who.recurringCancelable(recipientName)
+          : STREAM_DETAIL.who.cancelable(recipientName);
+
+  const manageActions: ManageAction[] = [
+    ...(canPause ? [{ key: 'pause', label: STREAM_DETAIL.manage.pause, onClick: () => setReview('pause') }] : []),
+    ...(canResume ? [{ key: 'resume', label: STREAM_DETAIL.manage.resume, onClick: () => setReview('resume') }] : []),
+    ...(canChangeRecipient
+      ? [
+          {
+            key: 'recipient',
+            label: STREAM_DETAIL.manage.changeRecipient,
+            onClick: () => {
+              setNewRecipient('');
+              setRecipientChecked(false);
+              setRecipientDialog(true);
+            },
+          },
+        ]
+      : []),
+    ...(canCancel
+      ? [{ key: 'cancel', label: STREAM_DETAIL.manage.cancel, danger: true, onClick: () => setReview('cancel') }]
+      : []),
+  ];
+
+  const roleLine =
+    role === 'sender'
+      ? STREAM_DETAIL.roleLine.sender(recipientShort)
+      : role === 'recipient'
+        ? STREAM_DETAIL.roleLine.recipient(senderShort)
+        : STREAM_DETAIL.roleLine.viewer(senderShort, recipientShort);
+  const created = formatDate(stream.created_at);
+
+  const recipientSame = sameAddress(newRecipient, stream.recipient);
+  const recipientReason =
+    !recipientValid || recipientSame
+      ? STREAM_DETAIL.recipientDialog.needsAddress
+      : !recipientChecked
+        ? STREAM_DETAIL.recipientDialog.needsCheck
+        : null;
+
+  const addValue = Number(addAmount);
+  const addValid = Number.isFinite(addValue) && addValue > 0 && (each === null || addValue >= each);
+  const addError =
+    addAmount.trim() === ''
+      ? undefined
+      : !Number.isFinite(addValue) || addValue <= 0
+        ? STREAM_DETAIL.addFundsDialog.invalid
+        : each !== null && addValue < each
+          ? STREAM_DETAIL.addFundsDialog.tooSmall(money(each, asset))
+          : undefined;
+  const addPayments = each !== null && addValid ? Math.floor(addValue / each + 1e-9) : null;
+
+  const reviewProps = (() => {
+    const base = { network } as const;
+    switch (review) {
+      case 'fund':
+        return {
+          title: STREAM_DETAIL.review.fund.title,
+          plan: plan ? (
+            <PlanSentence recipient={{ address: stream.recipient }} schedule={plan} />
+          ) : undefined,
+          consequence: isToken
+            ? { tone: 'info' as const, body: STREAM_DETAIL.review.fund.twoSteps }
+            : undefined,
+          summary: {
+            ...base,
+            direction: 'out',
+            leavesWallet: { amount: amountText(stream.total_amount, asset), asset },
+            goesTo: { address: stream.recipient },
+          } satisfies ReviewSummary,
+          steps: isToken ? 2 : 1,
+          run: runWith(() => fundStreamContract(wallet, stream.id), isToken ? 2 : 1),
+          next: <p>{STREAM_DETAIL.review.fund.next(recipientShort)}</p>,
+        };
+      case 'claim':
+        return {
+          summary: {
+            ...base,
+            direction: 'in',
+            youReceive: { amount: amountText(ready, asset), asset },
+            from: { address: stream.sender },
+            whoCanStop: STREAM_DETAIL.review.claim.who,
+          } satisfies ReviewSummary,
+          run: runWith(() => claimStreamFunds(wallet, stream.id)),
+          next: <p>{STREAM_DETAIL.review.claim.next}</p>,
+        };
+      case 'cancel':
+        return {
+          title: STREAM_DETAIL.review.cancel.title,
+          consequence: {
+            tone: 'danger' as const,
+            body: isRecurring
+              ? STREAM_DETAIL.review.cancel.recurring
+              : releasedNotClaimed > 0
+                ? STREAM_DETAIL.review.cancel.vesting(
+                    recipientShort,
+                    money(releasedNotClaimed, asset),
+                    money(unreleased, asset)
+                  )
+                : STREAM_DETAIL.review.cancel.vestingAllBack(money(unreleased, asset)),
+          },
+          confirmLabel: STREAM_DETAIL.review.cancel.confirm,
+          keepLabel: STREAM_DETAIL.review.cancel.keep,
+          summary: (isRecurring
+            ? {
+                ...base,
+                direction: 'returns',
+                comesBack: { amount: amountText(notClaimed, asset), asset },
+              }
+            : {
+                ...base,
+                direction: 'returns',
+                comesBack: { amount: amountText(unreleased, asset), asset },
+                recipientKeeps:
+                  releasedNotClaimed > 0
+                    ? { amount: amountText(releasedNotClaimed, asset), asset }
+                    : undefined,
+              }) satisfies ReviewSummary,
+          run: runWith(() => cancelStreamOnChain(wallet, stream.id)),
+          next: <p>{STREAM_DETAIL.review.cancel.next}</p>,
+        };
+      case 'pause':
+        return {
+          title: STREAM_DETAIL.review.pause.title,
+          consequence: {
+            tone: 'warning' as const,
+            body: STREAM_DETAIL.review.pause.body(recipientShort),
+          },
+          confirmLabel: STREAM_DETAIL.review.pause.confirm,
+          keepLabel: STREAM_DETAIL.review.pause.keep,
+          summary: { ...base, direction: 'fee-only' } satisfies ReviewSummary,
+          run: runWith(() => pauseStreamOnChain(wallet, stream.id)),
+          next: <p>{STREAM_DETAIL.review.pause.next}</p>,
+        };
+      case 'resume':
+        return {
+          confirmLabel: STREAM_DETAIL.review.resume.confirm,
+          summary: { ...base, direction: 'fee-only' } satisfies ReviewSummary,
+          run: runWith(() => resumeStreamOnChain(wallet, stream.id)),
+          next: <p>{STREAM_DETAIL.review.resume.next}</p>,
+        };
+      case 'recipient':
+        return {
+          title: STREAM_DETAIL.review.recipient.title,
+          consequence: {
+            tone: 'danger' as const,
+            body: (
+              <div className="flex flex-col gap-2">
+                <p>{STREAM_DETAIL.review.recipient.body}</p>
+                <p>
+                  {STREAM_DETAIL.review.recipient.amounts(money(ready, asset), money(later, asset))}
+                </p>
+                <div>
+                  <p className="text-ink-secondary">{STREAM_DETAIL.review.recipient.newAddress}</p>
+                  <Address value={newRecipient.trim()} variant="full" />
+                </div>
+              </div>
+            ),
+          },
+          confirmLabel: STREAM_DETAIL.review.recipient.confirm,
+          keepLabel: STREAM_DETAIL.review.recipient.keep,
+          summary: { ...base, direction: 'fee-only' } satisfies ReviewSummary,
+          run: runWith(() => transferStreamOnChain(wallet, stream.id, newRecipient.trim())),
+          next: <p>{STREAM_DETAIL.review.recipient.next}</p>,
+        };
+      case 'addFunds':
+        return {
+          summary: {
+            ...base,
+            direction: 'out',
+            leavesWallet: { amount: addAmount, asset },
+            goesTo: { address: stream.recipient },
+          } satisfies ReviewSummary,
+          run: runWith(() => refillStreamOnChain(wallet, stream.id, addValue)),
+          next: (
+            <p>
+              {addPayments !== null
+                ? STREAM_DETAIL.addFundsDialog.preview(addPayments)
+                : STREAM_DETAIL.review.addFunds.next}
+            </p>
+          ),
+        };
+      default:
+        return null;
+    }
+  })();
 
   return (
-    <div className="px-4 py-6 md:px-8 md:py-8">
-      {/* Header */}
-      <div className="mb-8">
-        <Link
-          to={backDestination}
-          className="inline-flex items-center gap-2 text-textSecondary hover:text-primary transition-colors mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          {backLabel}
-        </Link>
+    <PageContainer>
+      <PageHeader
+        title={title}
+        description={roleLine}
+        breadcrumbs={[{ label: STREAM_DETAIL.breadcrumb, to: '/streams' }, { label: title }]}
+        status={status ?? undefined}
+        role={role}
+        plan={
+          role === 'sender' && plan ? (
+            <PlanSentence recipient={{ address: stream.recipient }} schedule={plan} />
+          ) : undefined
+        }
+        stateLine={[created ? STREAM_DETAIL.stateLine.created(created) : null, ROLE_LINES[role]]
+          .filter(Boolean)
+          .join(' · ')}
+      />
 
-        {(effectiveDaoContext || stream.vault_id) && (
-          <Card className="mb-4 p-4 md:p-5">
-            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-primary font-mono mb-2">
-                  {stream.vault_id ? 'Treasury-backed stream' : 'Organization workspace'}
-                </p>
-                <h2 className="font-display text-xl text-textPrimary mb-2">
-                  {effectiveDaoContext?.title || 'Treasury execution context'}
-                </h2>
-                <p className="text-sm text-textSecondary">
-                  {stream.vault_id
-                    ? `This schedule is linked to vault ${stream.vault_id} and should be managed inside the treasury workflow.`
-                    : effectiveDaoContext?.description}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                {stream.vault_id && (
-                  <Button variant="outline" onClick={() => navigate(`/vaults/${stream.vault_id}?tab=streams`)}>
-                    Open Treasury
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  onClick={() => navigate(effectiveDaoContext ? '/app/dao/stream-activity' : '/streams/activity', {
-                    state: effectiveDaoContext ? { daoContext: effectiveDaoContext } : undefined,
-                  })}
-                >
-                  View Stream Activity
-                </Button>
-                {effectiveDaoContext && (
-                  <Button variant="outline" onClick={() => navigate('/app/dao')}>
-                    Return to Organization Workspace
-                  </Button>
-                )}
-              </div>
-            </div>
-          </Card>
-        )}
-
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-textPrimary mb-1">
-              {stream.stream_type === 'LINEAR' && 'Linear Vesting Stream'}
-              {stream.stream_type === 'RECURRING' && (stream.refillable ? 'Open-Ended Recurring Stream' : 'Recurring Payout Stream')}
-              {stream.stream_type === 'STEP' && 'Milestone Vesting Stream'}
-              {stream.stream_type === 'TRANCHE' && 'Custom Tranche Stream'}
-              {stream.stream_type === 'HYBRID' && 'Upfront + Linear Stream'}
-            </h1>
-            {templateLabel && (
-              <p className="text-sm font-mono text-textSecondary mb-2">
-                Template: {templateLabel}
-              </p>
-            )}
-            <button
-              onClick={() => copyToClipboard(stream.stream_id, 'stream_id')}
-              className="flex items-center gap-2 group"
-              title="Click to copy full ID"
-            >
-              <p className="text-sm font-mono text-textMuted truncate max-w-[300px] md:max-w-[500px]">
-                {displayStreamId}
-              </p>
-              {copiedAddress === 'stream_id' ? (
-                <Check className="w-3 h-3 text-green-600" />
-              ) : (
-                <Copy className="w-3 h-3 text-textMuted opacity-0 group-hover:opacity-100 transition-opacity" />
-              )}
-            </button>
-            <p className="text-textSecondary text-sm mt-1">
-              Created {formatDate(stream.created_at)}
-            </p>
-          </div>
-          {getStatusBadge(stream.status)}
-        </div>
-      </div>
-
-      {feedback && (
-        <Card
-          padding="lg"
-          className={`mb-6 border ${feedbackToneClasses[feedback.tone]}`}
-        >
-          <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold">{feedback.title}</p>
-              {feedback.description && (
-                <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
-              )}
-              {feedback.details && (
-                <details className="mt-3">
-                  <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
-                    Show technical details
-                  </summary>
-                  <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
-                    {feedback.details}
-                  </pre>
-                </details>
-              )}
-              {feedback.txHash && (
-                <a
-                  href={getExplorerTxUrl(feedback.txHash, network)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
-                >
-                  View transaction
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              )}
-            </div>
-          </div>
-        </Card>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Main Content - Left 2/3 */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Progress Ring Card */}
-          <Card className="p-8">
-            <div className="flex flex-col md:flex-row items-center gap-8">
-              {/* Circular Progress */}
-              <CircularProgress
-                percentage={stream.progress_percentage}
-                size={240}
-                strokeWidth={16}
-                label="Vested"
-              />
-
-              {/* Stats */}
-              <div className="flex-1 grid w-full grid-cols-1 gap-6 sm:grid-cols-2">
-                <div>
-                  <p className="text-sm text-textMuted mb-1">Total Amount</p>
-                  <p className="text-lg md:text-xl lg:text-2xl font-bold text-textPrimary">
-                    {formatAssetAmount(stream.total_amount, stream.token_type, stream.token_category, stream.token_decimals)}
+      <TwoColumn
+        main={
+          <>
+            {notices}
+            <Card as="section">
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-1">
+                  <p className="text-label text-ink-secondary">
+                    {role === 'recipient'
+                      ? STREAM_DETAIL.action.readyLabel
+                      : STREAM_DETAIL.action.releasedLabel}
                   </p>
-                  {stream.stream_type === 'RECURRING' && stream.refillable && (
-                    <p className="text-xs font-mono text-textMuted mt-1">Current funded runway</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-sm text-textMuted mb-1">Vested</p>
-                  <p className="text-lg md:text-xl lg:text-2xl font-bold text-primary">
-                    {formatAssetAmount(stream.vested_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-textMuted mb-1">Withdrawn</p>
-                  <p className="text-lg md:text-xl lg:text-2xl font-bold text-textSecondary">
-                    {formatAssetAmount(stream.withdrawn_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-textMuted mb-1">Claimable Now</p>
-                  <p className="text-lg md:text-xl lg:text-2xl font-bold text-green-600">
-                    {formatAssetAmount(stream.claimable_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6 sm:flex-row sm:flex-wrap">
-              {/* Fund Button (for PENDING streams) */}
-              {stream.status === 'PENDING' && isSender && (
-                <Button
-                  variant="primary"
-                  size="lg"
-                  onClick={handleFund}
-                  disabled={funding}
-                  className="flex-1"
-                >
-                  <TrendingUp className="w-5 h-5 mr-2" />
-                  {funding ? 'Funding...' : 'Fund Stream'}
-                </Button>
-              )}
-
-              {/* Claim Button (for ACTIVE streams) */}
-              {isRecipient && stream.status === 'ACTIVE' && (
-                <Button
-                  variant="primary"
-                  size="lg"
-                  onClick={handleClaim}
-                  disabled={stream.claimable_amount <= 0 || claiming}
-                  className="flex-1"
-                >
-                  <Download className="w-5 h-5 mr-2" />
-                  {claiming ? 'Claiming...' : `Claim ${formatAssetAmount(stream.claimable_amount, stream.token_type, stream.token_category, stream.token_decimals)}`}
-                </Button>
-              )}
-
-              {/* Cancel Button (for sender) */}
-              {stream.cancelable && isSender && stream.status === 'ACTIVE' && (
-                <Button
-                  variant="outline"
-                  onClick={handlePause}
-                  disabled={pausing}
-                >
-                  <Clock className="w-5 h-5 mr-2" />
-                  {pausing ? 'Pausing...' : 'Pause Stream'}
-                </Button>
-              )}
-
-              {stream.cancelable && isSender && stream.status === 'PAUSED' && (
-                <Button
-                  variant="primary"
-                  onClick={handleResume}
-                  disabled={resuming}
-                >
-                  <CheckCircle2 className="w-5 h-5 mr-2" />
-                  {resuming ? 'Resuming...' : 'Resume Stream'}
-                </Button>
-              )}
-
-              {stream.cancelable && isSender && (stream.status === 'ACTIVE' || stream.status === 'PAUSED') && (
-                <Button
-                  variant="outline"
-                  onClick={handleCancel}
-                  disabled={cancelling}
-                >
-                  <XCircle className="w-5 h-5 mr-2" />
-                  {cancelling ? 'Cancelling...' : 'Cancel Stream'}
-                </Button>
-              )}
-            </div>
-          </Card>
-
-          {/* Timeline Card */}
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold text-textPrimary mb-4">Timeline</h3>
-
-            <div className="space-y-4">
-              {/* Start */}
-              <div className="flex items-start gap-4">
-                <div className="mt-1 p-2 bg-green-100 rounded-full">
-                  <Calendar className="w-4 h-4 text-green-600" />
-                </div>
-                <div>
-                  <p className="font-medium text-textPrimary">Stream Started</p>
-                  <p className="text-sm text-textMuted">{formatDate(stream.start_time)}</p>
-                </div>
-              </div>
-
-              {/* Cliff */}
-              {stream.cliff_timestamp && (
-                <div className="flex items-start gap-4">
-                  <div className="mt-1 p-2 bg-purple-100 rounded-full">
-                    <Clock className="w-4 h-4 text-purple-600" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-textPrimary">
-                      {stream.stream_type === 'HYBRID' ? 'Upfront unlock checkpoint' : 'Cliff Period Ended'}
-                    </p>
-                    <p className="text-sm text-textMuted">{formatDate(stream.cliff_timestamp)}</p>
-                  </div>
-                </div>
-              )}
-
-              {/* End */}
-              {stream.end_time && (
-                <div className="flex items-start gap-4">
-                  <div className="mt-1 p-2 bg-blue-100 rounded-full">
-                    <CheckCircle2 className="w-4 h-4 text-blue-600" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-textPrimary">
-                      {Date.now() / 1000 < stream.end_time ? 'Stream Ends' : 'Stream Ended'}
-                    </p>
-                    <p className="text-sm text-textMuted">{formatDate(stream.end_time)}</p>
-                    {stream.start_time && stream.end_time && (
-                      <p className="text-xs text-textMuted mt-1">
-                        Duration: {formatDuration(stream.end_time - stream.start_time)}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {!stream.end_time && stream.stream_type === 'RECURRING' && (
-                <div className="flex items-start gap-4">
-                  <div className="mt-1 p-2 bg-surfaceAlt rounded-full">
-                    <Repeat className="w-4 h-4 text-textMuted" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-textPrimary">Open-ended recurring stream</p>
-                    <p className="text-sm text-textMuted">Runs until cancelled or until its funded runway is exhausted.</p>
-                  </div>
-                </div>
-              )}
-
-              {stream.next_payment_time && (
-                <div className="flex items-start gap-4">
-                  <div className="mt-1 p-2 bg-accent/10 rounded-full">
-                    <Clock className="w-4 h-4 text-accent" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-textPrimary">Next release time</p>
-                    <p className="text-sm text-textMuted">{formatDate(stream.next_payment_time)}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </Card>
-
-          {/* Schedule Card */}
-          <Card className="p-6">
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-textPrimary">Schedule Shape</h3>
-                <p className="text-sm text-textMuted mt-1">
-                  {stream.stream_type === 'LINEAR' && 'Continuous vesting across the configured duration.'}
-                  {stream.stream_type === 'HYBRID' && 'A fixed share unlocks at one checkpoint, then the remaining balance vests linearly through the end of the schedule.'}
-                  {stream.stream_type === 'RECURRING' && (
-                    stream.refillable
-                      ? 'Fixed recurring payouts unlock on cadence, and the sender can extend runway by refilling the same stream.'
-                      : 'Fixed payouts become claimable on each configured release date.'
-                  )}
-                  {stream.stream_type === 'STEP' && 'Milestones unlock chunked balances at each schedule boundary.'}
-                  {stream.stream_type === 'TRANCHE' && 'Each checkpoint unlocks a custom share of the total allocation at an immutable vesting timestamp.'}
-                </p>
-              </div>
-              <div className="rounded-full border border-border bg-surfaceAlt px-3 py-1 text-xs font-mono text-textMuted">
-                {templateLabel || stream.stream_type}
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-3 mb-5">
-              <div className="rounded-xl border border-border bg-surfaceAlt p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-textMuted mb-2">Cadence</p>
-                <p className="font-display text-lg text-textPrimary">{cadenceLabel}</p>
-              </div>
-              <div className="rounded-xl border border-border bg-surfaceAlt p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-textMuted mb-2">Per Unlock</p>
-                <p className="font-display text-lg text-textPrimary">{trancheLabel}</p>
-              </div>
-              <div className="rounded-xl border border-border bg-surfaceAlt p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-textMuted mb-2">Unlock Count</p>
-                <p className="font-display text-lg text-textPrimary">
-                  {stream.stream_type === 'LINEAR'
-                    ? 'Continuous'
-                    : stream.stream_type === 'HYBRID'
-                      ? '2-stage hybrid unlock'
-                    : stream.stream_type === 'RECURRING' && stream.refillable
-                      ? fundedRunwayLabel
-                      : stream.stream_type === 'TRANCHE'
-                        ? `${stream.tranche_schedule?.length || 0} custom unlocks`
-                      : `${stream.schedule_count || 0} unlocks`}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-              <StreamScheduleChart
-                shape={stream.stream_type}
-                points={scheduleChartPoints}
-                title={
-                  stream.stream_type === 'LINEAR'
-                    ? stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time
-                      ? 'Linear vesting with cliff release'
-                      : 'Continuous vesting curve'
-                    : stream.stream_type === 'HYBRID'
-                      ? 'Upfront unlock + linear tail'
-                    : stream.stream_type === 'RECURRING'
-                      ? stream.refillable
-                        ? 'Open-ended recurring runway'
-                        : 'Recurring payout curve'
-                      : stream.stream_type === 'STEP'
-                        ? 'Milestone unlock curve'
-                        : 'Custom tranche unlock curve'
-                }
-                subtitle={
-                  stream.stream_type === 'LINEAR'
-                    ? stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time
-                      ? 'The curve stays flat until the cliff unlocks the accrued balance, then continues vesting linearly.'
-                      : 'Value accrues linearly across the full stream duration.'
-                    : stream.stream_type === 'HYBRID'
-                      ? 'The curve stays flat until the upfront unlock date, then the remaining balance continues vesting linearly to schedule completion.'
-                    : stream.stream_type === 'RECURRING'
-                      ? stream.refillable
-                        ? 'The chart reflects the currently funded runway. Additional refills extend the same cadence without changing recipients or interval.'
-                        : 'Each step is a fixed payout released on the configured cadence.'
-                      : stream.stream_type === 'STEP'
-                        ? 'Each step marks a milestone unlock rather than continuous vesting.'
-                        : 'Each step can carry a different allocation size, letting BCH schedules model non-uniform unlock plans.'
-                }
-              />
-
-              <div className="space-y-3">
-                {scheduleRows.map((row) => (
-                  <div
-                    key={`${row.label}-${row.date}`}
-                    className="flex flex-col gap-2 rounded-xl border border-border bg-background px-4 py-3 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div>
-                      <p className="font-medium text-textPrimary">{row.label}</p>
-                      <p className="text-sm text-textMuted">{row.date}</p>
-                    </div>
-                    <p className="text-sm font-mono text-primary">{row.note}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {stream.description && (
-              <div className="mt-5 rounded-xl border border-border bg-surfaceAlt p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-textMuted mb-2">Description</p>
-                <p className="text-sm text-textPrimary leading-6">{stream.description}</p>
-              </div>
-            )}
-
-            {stream.launch_context && (
-              <div className="mt-5 rounded-xl border border-border bg-surfaceAlt p-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-textMuted mb-2">Organization context</p>
-                    <p className="text-sm font-semibold text-textPrimary">
-                      {effectiveDaoContext?.title || 'Organization stream workflow'}
-                    </p>
-                    <p className="text-sm text-textSecondary mt-1 leading-6">
-                      {effectiveDaoContext?.description}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="rounded-full border border-border bg-background px-3 py-1 text-xs font-mono text-textMuted">
-                      Source • {stream.launch_context.source}
-                    </span>
-                    {stream.launch_context.preferredLane && (
-                      <span className="rounded-full border border-border bg-background px-3 py-1 text-xs font-mono text-textMuted">
-                        Lane • {stream.launch_context.preferredLane}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-
-          {/* Activity Timeline */}
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold text-textPrimary mb-4">Activity Timeline</h3>
-
-            {events.length === 0 ? (
-              <p className="text-sm font-mono text-textMuted">No activity events recorded yet.</p>
-            ) : (
-              <div className="space-y-3 max-h-[18rem] overflow-y-auto pr-1">
-                {events.map((event) => {
-                  const cancelDetails = event.event_type === 'cancelled'
-                    ? parseStreamCancelDetails(event.details)
-                    : null;
-
-                  return (
-                    <div key={event.id} className="rounded-lg border border-border bg-surfaceAlt p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-textPrimary">
-                            {formatStreamEventLabel(event.event_type)}
-                          </p>
-                          <p className="text-xs text-textMuted">
-                            {formatDate(event.created_at)}
-                          </p>
-                          {event.actor && (
-                            <p className="text-xs font-mono text-textMuted mt-1 break-all">
-                              actor: {event.actor}
-                            </p>
-                          )}
-                          {typeof event.amount === 'number'
-                            && (cancelDetails?.unvestedAmount === null || cancelDetails?.unvestedAmount === undefined) && (
-                            <p className="text-xs font-mono text-textMuted mt-1">
-                              amount: {formatAssetAmount(event.amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                            </p>
-                            )}
-                          {typeof cancelDetails?.vestedAmount === 'number' && (
-                            <p className="text-xs font-mono text-textMuted mt-1 break-words">
-                              recipient received: {formatAssetAmount(cancelDetails.vestedAmount, stream.token_type, stream.token_category, stream.token_decimals)}
-                            </p>
-                          )}
-                          {typeof cancelDetails?.unvestedAmount === 'number' && (
-                            <p className="text-xs font-mono text-textMuted mt-1 break-words">
-                              sender refunded: {formatAssetAmount(cancelDetails.unvestedAmount, stream.token_type, stream.token_category, stream.token_decimals)}
-                            </p>
-                          )}
-                          {cancelDetails?.cancelReturnAddress && (
-                            <p className="text-xs font-mono text-textMuted mt-1 break-all">
-                              refund address: {cancelDetails.cancelReturnAddress}
-                            </p>
-                          )}
-                        </div>
-                        {event.tx_hash && (
-                          <a
-                            href={getExplorerUrl(event.tx_hash)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-xs text-primary hover:text-primaryHover"
-                          >
-                            tx
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-
-          {relatedActivity.length > 0 && (
-            <Card className="p-6">
-              <div className="flex items-start justify-between gap-4 mb-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-textPrimary">Related Organization Activity</h3>
-                  <p className="text-sm text-textMuted mt-1">
-                    Other treasury-backed stream events in this same organization context.
-                  </p>
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <p className="text-xs font-mono text-textMuted">
-                    {relatedActivity.length} related event{relatedActivity.length === 1 ? '' : 's'}
-                  </p>
-                  <Button
-                    variant="outline"
-                    onClick={() => navigate(effectiveDaoContext ? '/app/dao/stream-activity' : '/streams/activity', {
-                      state: effectiveDaoContext ? { daoContext: effectiveDaoContext } : undefined,
-                    })}
-                  >
-                    Open Full Feed
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {relatedActivity.map((event) => (
-                  <div
-                    key={event.id}
-                    className="rounded-xl border border-border bg-surfaceAlt p-4"
-                  >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-textPrimary">
-                          {formatStreamEventLabel(event.event_type)} • {formatLogicalId(event.stream.stream_id)}
-                        </p>
-                        <p className="text-xs text-textSecondary mt-1">
-                          {getStreamScheduleTemplateLabel(event.stream.schedule_template || '') || event.stream.stream_type}
-                        </p>
-                        <p className="text-xs text-textMuted font-mono mt-2">
-                          {formatDate(event.created_at)}
-                        </p>
-                        {event.stream.launch_context?.preferredLane && (
-                          <p className="text-xs text-textMuted font-mono mt-1">
-                            Lane • {event.stream.launch_context.preferredLane}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {event.tx_hash && (
-                          <a
-                            href={getExplorerUrl(event.tx_hash)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-3 py-1 text-xs text-primary hover:text-primaryHover"
-                          >
-                            View tx
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-
-          {/* Claim History */}
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold text-textPrimary mb-4">Claim History</h3>
-
-            {claims.length === 0 ? (
-              <div className="text-center py-8">
-                <TrendingUp className="w-12 h-12 text-textMuted mx-auto mb-3" />
-                <p className="text-textSecondary">No claims yet</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {claims.map((claim) => (
-                  <div
-                    key={claim.id}
-                    className="flex flex-col gap-3 rounded-lg bg-surfaceAlt p-4 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-semibold text-textPrimary">
-                        {formatAssetAmount(claim.amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                      </p>
-                      <p className="text-sm text-textMuted">
-                        {formatDate(claim.claimed_at)}
-                      </p>
-                    </div>
-                    {claim.tx_hash && (
-                      <a
-                        href={getExplorerUrl(claim.tx_hash)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 text-sm text-primary hover:text-primaryHover"
-                      >
-                        View TX
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
-
-        {/* Sidebar - Right 1/3 */}
-        <div className="space-y-6">
-          {/* Attributes */}
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold text-textPrimary mb-4">Attributes</h3>
-
-            <div className="space-y-4">
-              {/* Sender */}
-              <div>
-                <p className="text-xs text-textMuted mb-1">Sender</p>
-                <div className="flex items-start justify-between gap-2">
-                  <p className="min-w-0 flex-1 break-all text-sm font-mono text-textPrimary sm:break-normal sm:truncate">
-                    {formatAddress(stream.sender)}
-                  </p>
-                  <button
-                    onClick={() => copyToClipboard(stream.sender, 'sender')}
-                    className="p-1 hover:bg-surfaceAlt rounded transition-colors"
-                  >
-                    {copiedAddress === 'sender' ? (
-                      <Check className="w-4 h-4 text-green-600" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-textMuted" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Recipient */}
-              <div>
-                <p className="text-xs text-textMuted mb-1">Recipient</p>
-                <div className="flex items-start justify-between gap-2">
-                  <p className="min-w-0 flex-1 break-all text-sm font-mono text-textPrimary sm:break-normal sm:truncate">
-                    {formatAddress(stream.recipient)}
-                  </p>
-                  <button
-                    onClick={() => copyToClipboard(stream.recipient, 'recipient')}
-                    className="p-1 hover:bg-surfaceAlt rounded transition-colors"
-                  >
-                    {copiedAddress === 'recipient' ? (
-                      <Check className="w-4 h-4 text-green-600" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-textMuted" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Divider */}
-              <div className="border-t border-border" />
-
-              {/* Type */}
-              <div className="flex justify-between">
-                <p className="text-xs text-textMuted">Stream Type</p>
-                <p className="text-sm font-medium text-textPrimary">{stream.stream_type}</p>
-              </div>
-
-              {/* Token */}
-              <div>
-                <p className="text-xs text-textMuted mb-1.5">Token</p>
-                {stream.token_type === 'CASHTOKENS' && stream.token_category ? (
-                  <TokenIdentity category={stream.token_category} />
-                ) : (
-                  <p className="text-sm font-medium text-textPrimary">Bitcoin Cash</p>
-                )}
-              </div>
-
-              {stream.stream_type !== 'LINEAR' && stream.stream_type !== 'HYBRID' && stream.interval_seconds && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Cadence</p>
-                  <p className="text-sm font-medium text-textPrimary">{formatIntervalLabel(stream.interval_seconds)}</p>
-                </div>
-              )}
-
-              {stream.stream_type === 'HYBRID' && stream.hybrid_unlock_time && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Upfront Unlock</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {formatDate(stream.hybrid_unlock_time)}
-                  </p>
-                </div>
-              )}
-
-              {stream.stream_type === 'HYBRID' && stream.hybrid_upfront_amount !== undefined && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Upfront Amount</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {formatAssetAmount(stream.hybrid_upfront_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                  </p>
-                </div>
-              )}
-
-              {stream.stream_type === 'TRANCHE' && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Unlock Points</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {stream.tranche_schedule?.length || 0}
-                  </p>
-                </div>
-              )}
-
-              {stream.stream_type === 'RECURRING' && stream.amount_per_interval !== undefined && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Per Release</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {formatAssetAmount(stream.amount_per_interval, stream.token_type, stream.token_category, stream.token_decimals)}
-                  </p>
-                </div>
-              )}
-
-              {stream.stream_type === 'RECURRING' && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Refillable</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {stream.refillable ? 'Yes' : 'No'}
-                  </p>
-                </div>
-              )}
-
-              {stream.stream_type === 'STEP' && stream.step_amount !== undefined && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Per Milestone</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {formatAssetAmount(stream.step_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                  </p>
-                </div>
-              )}
-
-              {stream.stream_type === 'TRANCHE' && stream.tranche_schedule && stream.tranche_schedule.length > 0 && (
-                <div className="flex justify-between">
-                  <p className="text-xs text-textMuted">Final Unlock</p>
-                  <p className="text-sm font-medium text-textPrimary">
-                    {formatDate(stream.tranche_schedule[stream.tranche_schedule.length - 1].unlock_time)}
-                  </p>
-                </div>
-              )}
-
-              {/* Cancelable */}
-              <div className="flex justify-between">
-                <p className="text-xs text-textMuted">Cancelable</p>
-                <p className="text-sm font-medium text-textPrimary">
-                  {stream.cancelable ? 'Yes' : 'No'}
-                </p>
-              </div>
-
-              {/* Transferable */}
-              <div className="flex justify-between">
-                <p className="text-xs text-textMuted">Transferable</p>
-                <p className="text-sm font-medium text-textPrimary">
-                  {stream.transferable ? 'Yes' : 'No'}
-                </p>
-              </div>
-
-              {/* Divider */}
-              <div className="border-t border-border" />
-
-              {/* Vault Link */}
-              {stream.vault_id ? (
-                <div>
-                  <p className="text-xs text-textMuted mb-2">Treasury</p>
-                  <Link
-                    to={`/vaults/${stream.vault_id}`}
-                    className="text-sm text-primary hover:text-primaryHover flex items-center gap-1"
-                  >
-                    View Treasury
-                    <ExternalLink className="w-3 h-3" />
-                  </Link>
-                </div>
-              ) : (
-                <div>
-                  <p className="text-xs text-textMuted mb-2">Treasury</p>
-                  <p className="text-sm text-textPrimary">Standalone stream</p>
-                </div>
-              )}
-            </div>
-          </Card>
-
-          {stream.stream_type === 'RECURRING' && stream.refillable && isSender && (stream.status === 'ACTIVE' || stream.status === 'PAUSED') && (
-            <Card className="p-6">
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-textPrimary">Refill Runway</h3>
-                  <p className="text-sm text-textMuted mt-1">
-                    Extend this open-ended recurring stream by adding more {tokenSymbol(stream.token_type, stream.token_category)} to the existing state UTXO.
-                  </p>
-                </div>
-                <span className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-mono text-accent">
-                  Sender only
-                </span>
-              </div>
-
-              <div className="space-y-4">
-                <Input
-                  label={`Refill amount (${tokenSymbol(stream.token_type, stream.token_category)})`}
-                  type="number"
-                  min="0"
-                  step={stream.token_type === 'BCH' ? '0.00000001' : '1'}
-                  value={refillAmountInput}
-                  onChange={(event) => setRefillAmountInput(event.target.value)}
-                  helpText="This adds more funded runway without changing cadence, recipient, or schedule state."
-                />
-                <Button
-                  variant="primary"
-                  onClick={handleRefill}
-                  disabled={refilling || !refillAmountInput.trim()}
-                  className="w-full"
-                >
-                  {refilling ? 'Refilling...' : 'Refill Stream Runway'}
-                </Button>
-              </div>
-            </Card>
-          )}
-
-          {stream.transferable && stream.stream_type !== 'RECURRING' && (
-            <Card className="p-6">
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-textPrimary">Recipient Transfer</h3>
-                  <p className="text-sm text-textMuted mt-1">
-                    Transferable vesting lets the current recipient reassign future claims to a new BCH address.
-                  </p>
-                </div>
-                <span className="rounded-full border border-border bg-surfaceAlt px-3 py-1 text-xs font-mono text-textMuted">
-                  Vesting only
-                </span>
-              </div>
-
-              {isRecipient && stream.status === 'ACTIVE' ? (
-                <div className="space-y-4">
-                  <Input
-                    label="New Recipient Address"
-                    placeholder="bchtest:..."
-                    value={nextRecipientAddress}
-                    onChange={(event) => setNextRecipientAddress(event.target.value)}
-                    helpText="The new recipient will become the on-chain owner of future vesting claims once this transfer confirms."
+                  <Amount
+                    value={amountText(role === 'recipient' ? ready : releasedSoFar, asset)}
+                    asset={asset}
+                    size="xl"
                   />
-                  <Button
-                    variant="primary"
-                    onClick={handleTransfer}
-                    disabled={transferring || !nextRecipientAddress.trim()}
-                    className="w-full"
-                  >
-                    {transferring ? 'Transferring...' : 'Transfer Recipient Rights'}
-                  </Button>
+                  <p className="text-small text-ink-muted">
+                    {STREAM_DETAIL.action.ofTotal(money(stream.total_amount, asset))}
+                  </p>
                 </div>
-              ) : (
-                <p className="text-sm text-textSecondary leading-6">
-                  {stream.status !== 'ACTIVE'
-                    ? 'Recipient transfer is only available while the stream is active.'
-                    : 'Only the current recipient can transfer this vesting stream.'}
-                </p>
-              )}
+                <ReleaseBar
+                  asset={asset}
+                  claimed={amountText(claimed, asset)}
+                  ready={amountText(ready, asset)}
+                  later={amountText(later, asset)}
+                />
+                {primaryAction ? (
+                  <div className="flex flex-wrap items-center gap-3">{primaryAction}</div>
+                ) : null}
+                {role === 'recipient' && isActive ? (
+                  <p className="text-small text-ink-muted">{STREAM_DETAIL.action.claimLag}</p>
+                ) : null}
+              </div>
             </Card>
-          )}
 
-          {/* Quick Stats */}
-          <Card className="p-6 bg-gradient-to-br from-primary/5 to-white">
-            <h3 className="text-sm font-semibold text-textMuted mb-4">Quick Stats</h3>
+            <Panel title={STREAM_DETAIL.schedule.heading}>
+              {scheduleLine ? <p className="text-body text-ink-secondary">{scheduleLine}</p> : null}
+              {isPaused ? (
+                <p className="text-body text-ink-secondary">{pausedScheduleLine}</p>
+              ) : blocks.length > 0 ? (
+                <>
+                  {isContinuous(stream) ? (
+                    <p className="text-small text-ink-muted">
+                      {STREAM_DETAIL.schedule.aboutWeekly}
+                    </p>
+                  ) : null}
+                  <ScheduleTimeline asset={asset} blocks={blocks} now={nowMs} />
+                </>
+              ) : (
+                <p className="text-body text-ink-secondary">{STREAM_DETAIL.schedule.empty}</p>
+              )}
+            </Panel>
 
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-xs text-textMuted">Progress</span>
-                <span className="text-sm font-bold text-primary">
-                  {stream.progress_percentage.toFixed(1)}%
-                </span>
+            <Panel title={STREAM_DETAIL.activityHeading}>
+              <ActivityList
+                events={events
+                  .slice(0, ACTIVITY_SHOWN)
+                  .map((event) => toActivity(event, asset, address))}
+                state="ready"
+                network={network}
+                seeAllHref="/explorer?scope=personal&type=stream"
+              />
+            </Panel>
+          </>
+        }
+        side={
+          <>
+            <Panel title={STREAM_DETAIL.detailsHeading}>
+              <DetailList items={details} />
+            </Panel>
+            <Card as="section">
+              <div className="flex flex-col gap-2">
+                <Heading level="item" as="h2">
+                  {STREAM_DETAIL.whoHeading}
+                </Heading>
+                <p className="text-body text-ink-secondary">{whoLine}</p>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs text-textMuted">Unclaimed</span>
-                <span className="text-sm font-bold text-green-600">
-                  {formatAssetAmount(stream.vested_amount - stream.withdrawn_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs text-textMuted">Remaining</span>
-                <span className="text-sm font-bold text-textSecondary">
-                  {formatAssetAmount(stream.total_amount - stream.vested_amount, stream.token_type, stream.token_category, stream.token_decimals)}
-                </span>
-              </div>
-            </div>
-          </Card>
+            </Card>
+            {manageActions.length > 0 ? (
+              <Card as="section">
+                <div className="flex flex-col gap-3">
+                  <Heading level="item" as="h2">
+                    {STREAM_DETAIL.manageHeading}
+                  </Heading>
+                  <ManageActions actions={manageActions} />
+                </div>
+              </Card>
+            ) : null}
+          </>
+        }
+      />
+
+      <Dialog
+        open={recipientDialog}
+        onClose={() => setRecipientDialog(false)}
+        title={STREAM_DETAIL.recipientDialog.title}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRecipientDialog(false)}>
+              {STREAM_DETAIL.recipientDialog.cancel}
+            </Button>
+            {recipientReason ? (
+              <Button variant="primary" disabled disabledReason={recipientReason}>
+                {STREAM_DETAIL.recipientDialog.continue}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setRecipientDialog(false);
+                  setReview('recipient');
+                }}
+              >
+                {STREAM_DETAIL.recipientDialog.continue}
+              </Button>
+            )}
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <AddressInput
+            label={STREAM_DETAIL.recipientDialog.address}
+            value={newRecipient}
+            onChange={setNewRecipient}
+            onValidChange={setRecipientValid}
+            network={network}
+            helper={STREAM_DETAIL.recipientDialog.helper}
+            error={recipientSame ? STREAM_DETAIL.recipientDialog.sameAddress : undefined}
+          />
+          {ready > 0 ? (
+            <p className="text-small text-ink-secondary">
+              {STREAM_DETAIL.review.recipient.claimFirst(money(ready, asset))}
+            </p>
+          ) : null}
+          <Checkbox
+            label={STREAM_DETAIL.recipientDialog.check}
+            description={STREAM_DETAIL.recipientDialog.checkLine}
+            checked={recipientChecked}
+            onChange={setRecipientChecked}
+          />
         </div>
-      </div>
-    </div>
+      </Dialog>
+
+      <Dialog
+        open={addFundsDialog}
+        onClose={() => setAddFundsDialog(false)}
+        title={STREAM_DETAIL.addFundsDialog.title}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setAddFundsDialog(false)}>
+              {STREAM_DETAIL.addFundsDialog.cancel}
+            </Button>
+            {addValid ? (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setAddFundsDialog(false);
+                  setReview('addFunds');
+                }}
+              >
+                {STREAM_DETAIL.addFundsDialog.continue}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                disabled
+                disabledReason={STREAM_DETAIL.addFundsDialog.needsAmount}
+              >
+                {STREAM_DETAIL.addFundsDialog.continue}
+              </Button>
+            )}
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <AmountInput
+            label={STREAM_DETAIL.addFundsDialog.amount}
+            asset={asset}
+            value={addAmount}
+            onChange={setAddAmount}
+            helper={
+              each !== null
+                ? STREAM_DETAIL.addFundsDialog.helper(money(each, asset))
+                : STREAM_DETAIL.addFundsDialog.helperPlain
+            }
+            error={addError}
+          />
+          {addPayments !== null && addPayments > 0 ? (
+            <p role="status" className="text-small text-ink-secondary">
+              {STREAM_DETAIL.addFundsDialog.preview(addPayments)}
+            </p>
+          ) : null}
+        </div>
+      </Dialog>
+
+      {reviewProps ? (
+        <TransactionReview
+          key={review ?? 'none'}
+          open
+          onClose={() => setReview(null)}
+          {...reviewProps}
+        />
+      ) : null}
+    </PageContainer>
   );
-}
-
-function formatStreamEventLabel(eventType: string): string {
-  switch (eventType) {
-    case 'created':
-      return 'Stream Created';
-    case 'funded':
-      return 'Stream Funded';
-    case 'claim':
-      return 'Stream Claimed';
-    case 'paused':
-      return 'Stream Paused';
-    case 'resumed':
-      return 'Stream Resumed';
-    case 'refilled':
-      return 'Runway Refilled';
-    case 'transferred':
-      return 'Recipient Transferred';
-    case 'cancelled':
-      return 'Stream Cancelled';
-    default:
-      return eventType
-        .split('_')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
-  }
-}
-
-interface StreamCancelDetails {
-  vestedAmount: number | null;
-  unvestedAmount: number | null;
-  cancelReturnAddress: string | null;
-}
-
-function parseStreamCancelDetails(details: unknown): StreamCancelDetails | null {
-  if (!details || typeof details !== 'object' || Array.isArray(details)) {
-    return null;
-  }
-
-  const raw = details as Record<string, unknown>;
-  const parsed: StreamCancelDetails = {
-    vestedAmount: parseOptionalNumber(raw.vestedAmount),
-    unvestedAmount: parseOptionalNumber(raw.unvestedAmount),
-    cancelReturnAddress: parseOptionalString(raw.cancelReturnAddress),
-  };
-
-  if (
-    parsed.vestedAmount === null
-    && parsed.unvestedAmount === null
-    && parsed.cancelReturnAddress === null
-  ) {
-    return null;
-  }
-
-  return parsed;
-}
-
-function parseOptionalNumber(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return null;
-  }
-  return value;
-}
-
-function parseOptionalString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }

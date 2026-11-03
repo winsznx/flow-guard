@@ -6,8 +6,12 @@
  * is a single-line swap inside this module: each `fetch(...)` becomes
  * `authFetch(...)` and pages stay unchanged.
  *
+ * Failures throw catalog errors from `copy/errors.ts`. The server's own wording goes
+ * to `details`, never to the message.
+ *
  * Backend surface (see `backend/src/api/grants.ts`):
  *   GET    /api/grants?creator=<addr>&showDeprecated=<bool>
+ *   GET    /api/grants?recipient=<addr>&showDeprecated=<bool>
  *   GET    /api/grants/:id
  *   POST   /api/grants/create
  *   GET    /api/grants/:id/funding-info
@@ -16,11 +20,15 @@
  *   POST   /api/grants/:id/confirm-release
  *   POST   /api/grants/:id/pause
  *   POST   /api/grants/:id/confirm-pause
+ *   POST   /api/grants/:id/resume
+ *   POST   /api/grants/:id/confirm-resume
  *   POST   /api/grants/:id/cancel
  *   POST   /api/grants/:id/confirm-cancel
  *   POST   /api/grants/:id/transfer
  *   POST   /api/grants/:id/confirm-transfer
  */
+
+import { apiErrorDetails, flowFailure, readApiError, type ErrorCode, type ErrorParams } from '../copy/errors';
 
 const API_BASE_URL = '/api';
 
@@ -69,6 +77,8 @@ export interface GrantRow {
   description?: string | null;
   token_type: GrantTokenType;
   token_category?: string | null;
+  /** 0 for BCH and for every grant created before token decimals were stored. */
+  token_decimals?: number | null;
   vault_id?: string | null;
   milestones_total: number;
   milestones_completed: number;
@@ -113,6 +123,7 @@ export interface CreateGrantInput {
   totalAmount: number;
   tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number;
   cancelable?: boolean;
   transferable?: boolean;
   milestones: CreateGrantMilestoneInput[];
@@ -139,18 +150,14 @@ export interface CreateGrantResponse {
   };
 }
 
-interface ApiErrorShape {
-  message?: unknown;
-  error?: unknown;
-  userMessage?: unknown;
-}
+type FailureCopy = { fallback: ErrorCode; params?: ErrorParams; notFound?: boolean };
 
 /**
- * Parse a fetch Response, throwing a typed Error on non-2xx. The parser is
+ * Parse a fetch Response, throwing a catalog error on non-2xx. The parser is
  * defensive against text/HTML bodies (e.g. when an upstream proxy returns an
- * error page) so we never leak `[object Object]` to the user.
+ * error page), which only ever reach the error's details.
  */
-async function parseJsonOrThrow(response: Response, fallback: string): Promise<unknown> {
+async function parseJsonOrThrow(response: Response, copy: FailureCopy): Promise<unknown> {
   let payload: unknown = null;
   try {
     payload = await response.json();
@@ -160,20 +167,16 @@ async function parseJsonOrThrow(response: Response, fallback: string): Promise<u
 
   if (response.ok) return payload;
 
-  const errorMessage = extractErrorMessage(payload, fallback);
-  throw new Error(errorMessage);
+  const code: ErrorCode =
+    copy.notFound && response.status === 404
+      ? 'NOT_FOUND'
+      : readApiError(payload, { status: response.status, fallback: copy.fallback });
+  throw flowFailure(code, { params: copy.params, details: apiErrorDetails(payload, response.status) });
 }
 
-function extractErrorMessage(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== 'object') return fallback;
-  const record = payload as ApiErrorShape;
-  const message =
-    (typeof record.message === 'string' && record.message) ||
-    (typeof record.error === 'string' && record.error) ||
-    (typeof record.userMessage === 'string' && record.userMessage) ||
-    fallback;
-  return String(message);
-}
+const LIST_FAILURE: FailureCopy = { fallback: 'LOAD_FAILED', params: { things: 'Your grants' } };
+const DETAIL_FAILURE: FailureCopy = { fallback: 'LOAD_FAILED', params: { things: 'This grant' }, notFound: true };
+const CREATE_FAILURE: FailureCopy = { fallback: 'SERVER_PREPARE_FAILED' };
 
 /**
  * List grants created by a specific address. Returns the full payload so
@@ -188,7 +191,28 @@ export async function fetchGrants(
   if (options?.showDeprecated) qs.set('showDeprecated', 'true');
 
   const response = await fetch(`${API_BASE_URL}/grants?${qs.toString()}`);
-  const payload = (await parseJsonOrThrow(response, 'Failed to fetch grants')) as Partial<GrantListResponse>;
+  const payload = (await parseJsonOrThrow(response, LIST_FAILURE)) as Partial<GrantListResponse>;
+  return {
+    success: true,
+    grants: Array.isArray(payload?.grants) ? payload.grants : [],
+    total: typeof payload?.total === 'number' ? payload.total : 0,
+  };
+}
+
+/**
+ * List grants paid to a specific address (current recipient, so transferred
+ * grants follow the new holder). Same payload and deprecated handling as
+ * `fetchGrants`.
+ */
+export async function fetchReceivedGrants(
+  recipient: string,
+  options?: { showDeprecated?: boolean },
+): Promise<GrantListResponse> {
+  const qs = new URLSearchParams({ recipient });
+  if (options?.showDeprecated) qs.set('showDeprecated', 'true');
+
+  const response = await fetch(`${API_BASE_URL}/grants?${qs.toString()}`);
+  const payload = (await parseJsonOrThrow(response, LIST_FAILURE)) as Partial<GrantListResponse>;
   return {
     success: true,
     grants: Array.isArray(payload?.grants) ? payload.grants : [],
@@ -198,13 +222,13 @@ export async function fetchGrants(
 
 /**
  * Fetch a single grant with its ordered milestone list and the last 200
- * activity events. Returns 404 from the backend as a thrown Error.
+ * activity events. A 404 from the backend throws NOT_FOUND.
  */
 export async function fetchGrant(id: string): Promise<GrantDetailResponse> {
   const response = await fetch(`${API_BASE_URL}/grants/${id}`);
-  const payload = (await parseJsonOrThrow(response, 'Failed to fetch grant')) as Partial<GrantDetailResponse>;
+  const payload = (await parseJsonOrThrow(response, DETAIL_FAILURE)) as Partial<GrantDetailResponse>;
   if (!payload?.grant) {
-    throw new Error('Grant payload missing in API response');
+    throw flowFailure('LOAD_FAILED', { params: DETAIL_FAILURE.params, details: 'The grant response had no grant in it.' });
   }
   return {
     success: true,
@@ -231,6 +255,6 @@ export async function createGrant(
     },
     body: JSON.stringify(data),
   });
-  const payload = (await parseJsonOrThrow(response, 'Failed to create grant')) as CreateGrantResponse;
+  const payload = (await parseJsonOrThrow(response, CREATE_FAILURE)) as CreateGrantResponse;
   return payload;
 }

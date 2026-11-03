@@ -1,5 +1,5 @@
 /**
- * WalletConnect v2 Connector with Web3Modal UI
+ * WalletConnect v2 connector. The pairing QR code shows in FlowGuard's own dialog.
  *
  * Based on reference implementations from:
  * - https://github.com/mainnet-pat/wc2-bch-bcr
@@ -11,9 +11,8 @@
  * - Paytaca (mobile via WC2)
  */
 
-import SignClient from '@walletconnect/sign-client';
+import type SignClient from '@walletconnect/sign-client';
 import type { SessionTypes } from '@walletconnect/types';
-import { Web3Modal } from '@web3modal/standalone';
 import { stringify } from '@bitauth/libauth';
 import type {
   IWalletConnector,
@@ -26,6 +25,14 @@ import type {
   CashScriptSignResponse,
 } from '../types/wallet';
 import { normalizeSignatureResponse } from '../utils/signature';
+import { flowFailure, walletRequestFailure } from '../copy/errors';
+import { PAIRING, WALLET_PROMPTS } from '../copy/wallets';
+import { abandonPairing, getSignClient, isAbandonedPairing } from './signClient';
+import { showPairingDialog } from './pairingDialog';
+
+const PAIRING_TIMEOUT_MS = 120_000;
+
+export type PairingCopy = { title: string; line: string; qrCaption: string; openLabel: string };
 
 // WalletConnect Project ID - sourced exclusively from env. Free at
 // https://cloud.walletconnect.com. No hardcoded fallback so a misconfigured
@@ -41,10 +48,14 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
 
   private client: SignClient | null = null;
   private session: any | null = null;
-  private web3Modal: Web3Modal | null = null;
+  private hidePairing: (() => void) | null = null;
+  private cancelPairing: (() => void) | null = null;
+  /** What the pairing dialog says. OPTN overrides it with its own name. */
+  protected pairingCopy: PairingCopy = PAIRING.walletconnect;
   private currentAddress: string | null = null;
   private eventListeners: Map<string, Function[]> = new Map();
   private clientEventsSubscribed = false;
+  private staleTopicCleanup: Promise<void> | null = null;
 
   private _isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -224,112 +235,108 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    */
   async connect(): Promise<WalletInfo> {
     try {
-      // Validate project ID
-      if (!WALLETCONNECT_PROJECT_ID) {
-        throw new Error(
-          'WalletConnect requires a Project ID.\n\n' +
-            'Get one free at: https://cloud.walletconnect.com\n' +
-            'Then add to .env.local:\n' +
-            'VITE_WALLETCONNECT_PROJECT_ID=your-project-id'
-        );
-      }
+      await this._ensureClient();
 
-      // Reuse existing SignClient if already initialized. Re-initializing
-      // creates a new WalletConnect Core, leaks event listeners, and
-      // accumulates relayer subscriptions every call.
-      if (this.client) {
-        console.log('[Web3ModalWC] Reusing existing SignClient');
-      } else {
-        console.log('[Web3ModalWC] Initializing WalletConnect...');
-        this.client = await SignClient.init({
-          projectId: WALLETCONNECT_PROJECT_ID!,
-          metadata: {
-            name: 'FlowGuard',
-            description: 'BCH-native treasuries, streams, payments, and governance',
-            url: window.location.origin,
-            icons: [`${window.location.origin}/favicon.svg`],
-          },
-        });
-        console.log('[Web3ModalWC] SignClient initialized');
-      }
-
-      // Check for existing sessions
-      const existingSessions = this.client.session.getAll();
-      if (existingSessions.length > 0) {
-        await this._subscribeToEvents();
-        console.log('[Web3ModalWC] Found existing session(s), validating...');
-
-        const sortedSessions = [...existingSessions].sort((a, b) => (b.expiry || 0) - (a.expiry || 0));
-        for (const candidate of sortedSessions) {
-          if (!this._isSessionStructurallyUsable(candidate)) {
-            continue;
-          }
-
-          this.session = candidate;
-          try {
-            console.log('[Web3ModalWC] Reusing active WalletConnect session');
-            // Clean up stale sessions/pairings so the relay isn't subscribed to
-            // dead topics. Without this, the relay floods the client with old
-            // messages from prior sessions and onRelayMessage() spams decryption failures.
-            void this._cleanupStaleTopics(candidate.topic);
-
-            const info = await this._getSessionInfo();
-
-            // Probe session health in the background without blocking restore.
-            void this._validateSession(candidate).then((isUsable) => {
-              if (!isUsable) {
-                console.warn('[Web3ModalWC] Reused session failed live probe; will request fresh session on next connect');
-              }
-            });
-
-            return info;
-          } catch (error) {
-            console.warn('[Web3ModalWC] Failed to hydrate existing session candidate:', error);
-            this.session = null;
-          }
-        }
-
-        console.warn('[Web3ModalWC] Existing WalletConnect sessions are stale; creating a new session');
-        // Disconnect everything before requesting a fresh session
-        void this._cleanupStaleTopics(null);
-        this.session = null;
+      const reused = await this._reuseExistingSession();
+      if (reused) {
+        return reused;
       }
 
       // Create new session
       await this._createNewSession();
 
       return await this._getSessionInfo();
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Web3ModalWC] Connection failed:', error);
-      const message = this._extractErrorMessage(error, 'Unknown connection error');
-
-      // Handle specific errors
-      if (message.includes('Project ID')) {
-        throw error; // Re-throw project ID errors as-is
-      }
-
-      if (message.includes('timeout')) {
-        throw new Error(
-          'Connection timeout.\n\n' +
-            'Possible issues:\n' +
-            '1. Wallet app not responding\n' +
-            '2. Network/firewall blocking WalletConnect\n' +
-            '3. Try using Paytaca extension instead'
-        );
-      }
-
-      if (message.includes('WebSocket')) {
-        throw new Error(
-          'Cannot connect to WalletConnect relay.\n\n' +
-            'This might be due to:\n' +
-            '- Network/firewall blocking websockets\n' +
-            '- VPN/proxy interference\n\n' +
-            'Try using Paytaca extension (desktop) or Testing Wallet instead.'
-        );
-      }
-
-      throw new Error(`WalletConnect connection failed: ${message}`);
+      throw walletRequestFailure(error, 'transaction');
     }
+  }
+
+  /**
+   * Resume a stored WalletConnect session without prompting. Returns null when
+   * no stored session is usable, so a page load never opens a pairing QR.
+   */
+  async restore(): Promise<WalletInfo | null> {
+    await this._ensureClient();
+    const info = await this._reuseExistingSession();
+    if (!info && this.staleTopicCleanup) {
+      // Cleanup publishes over the relay, so a slow or unreachable relay must
+      // not hold page-load init open.
+      const cleanupTimeoutMs = Number(
+        import.meta.env.VITE_WALLETCONNECT_STALE_CLEANUP_TIMEOUT_MS || 3000
+      );
+      try {
+        await this._withRequestTimeout(
+          this.staleTopicCleanup,
+          'WalletConnect stale session cleanup',
+          cleanupTimeoutMs,
+        );
+      } catch (error) {
+        console.warn('[Web3ModalWC] Continuing restore without waiting for cleanup:', error);
+      }
+    }
+    return info;
+  }
+
+  private async _ensureClient(): Promise<SignClient> {
+    if (!WALLETCONNECT_PROJECT_ID) {
+      throw flowFailure('MISCONFIGURED', { details: 'No WalletConnect project ID in this build.' });
+    }
+
+    if (this.client) {
+      return this.client;
+    }
+
+    this.client = await getSignClient(WALLETCONNECT_PROJECT_ID);
+    return this.client;
+  }
+
+  private async _reuseExistingSession(): Promise<WalletInfo | null> {
+    if (!this.client) return null;
+
+    const existingSessions = this.client.session.getAll();
+    if (existingSessions.length === 0) {
+      return null;
+    }
+
+    console.log('[Web3ModalWC] Found existing session(s), validating...');
+
+    const sortedSessions = [...existingSessions].sort((a, b) => (b.expiry || 0) - (a.expiry || 0));
+    for (const candidate of sortedSessions) {
+      if (!this._isSessionStructurallyUsable(candidate)) {
+        continue;
+      }
+
+      this.session = candidate;
+      try {
+        console.log('[Web3ModalWC] Reusing active WalletConnect session');
+        // Clean up stale sessions/pairings so the relay isn't subscribed to
+        // dead topics. Without this, the relay floods the client with old
+        // messages from prior sessions and onRelayMessage() spams decryption failures.
+        void this._cleanupStaleTopics(candidate.topic);
+
+        const info = await this._getSessionInfo();
+        await this._subscribeToEvents();
+
+        // Probe session health in the background without blocking restore.
+        void this._validateSession(candidate).then((isUsable) => {
+          if (!isUsable) {
+            console.warn('[Web3ModalWC] Reused session failed live probe; will request fresh session on next connect');
+          }
+        });
+
+        return info;
+      } catch (error) {
+        console.warn('[Web3ModalWC] Failed to hydrate existing session candidate:', error);
+        this.session = null;
+      }
+    }
+
+    console.warn('[Web3ModalWC] Existing WalletConnect sessions are stale');
+    // Disconnect everything before a fresh session is requested
+    this.staleTopicCleanup = this._cleanupStaleTopics(null);
+    this.session = null;
+    return null;
   }
 
   /**
@@ -353,7 +360,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
 
       console.log(`[Web3ModalWC] Cleaning up ${staleSessions.length} stale session(s)`);
 
-      const disconnectReason = { code: 6000, message: 'Stale session cleanup' };
+      const disconnectReason = { code: 6000, message: WALLET_PROMPTS.replaced };
       await Promise.allSettled(
         staleSessions.map((s) =>
           this.client!.disconnect({ topic: s.topic, reason: disconnectReason })
@@ -443,7 +450,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    * Create new WalletConnect session
    */
   private async _createNewSession(): Promise<void> {
-    if (!this.client) throw new Error('SignClient not initialized');
+    if (!this.client) throw flowFailure('UNKNOWN', { details: 'WalletConnect client is not set up.' });
 
     console.log('[Web3ModalWC] Creating new session...');
 
@@ -464,39 +471,46 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
     });
 
     if (!uri) {
-      throw new Error('Failed to generate WalletConnect URI');
+      throw flowFailure('RELAY_UNREACHABLE', { details: 'WalletConnect returned no pairing link.' });
     }
 
-    // Initialize Web3Modal
-    this.web3Modal = new Web3Modal({
-      projectId: WALLETCONNECT_PROJECT_ID!,
-      walletConnectVersion: 2,
-      enableExplorer: false,
-      enableAccountView: true,
-    });
-
-    // Open modal with QR code
-    console.log('[Web3ModalWC] Opening QR code modal...');
-    this.web3Modal.openModal({ uri });
-
-    // Wait for approval (with timeout)
     const approvalPromise = approval();
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('timeout')), 120000); // 2 minutes
+    approvalPromise.catch((error: unknown) => console.debug('[Web3ModalWC] Pairing proposal ended:', error));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopped = new Promise<never>((_, reject) => {
+      this.cancelPairing = () => reject(flowFailure('PAIRING_CANCELLED'));
+      timer = setTimeout(() => reject(flowFailure('PAIRING_TIMEOUT')), PAIRING_TIMEOUT_MS);
     });
 
     try {
-      this.session = (await Promise.race([approvalPromise, timeoutPromise])) as SessionTypes.Struct;
+      await this._showPairingDialog(uri);
+      this.session = (await Promise.race([approvalPromise, stopped])) as SessionTypes.Struct;
       console.log('[Web3ModalWC] Session approved');
+    } catch (error) {
+      if (isAbandonedPairing(error)) abandonPairing(this.client, uri, approvalPromise);
+      throw error;
     } finally {
-      // Close modal
-      if (this.web3Modal) {
-        this.web3Modal.closeModal();
-      }
+      if (timer) clearTimeout(timer);
+      this.cancelPairing = null;
+      this.hidePairing?.();
+      this.hidePairing = null;
     }
 
     // Subscribe to events
     await this._subscribeToEvents();
+  }
+
+  private async _showPairingDialog(uri: string): Promise<void> {
+    const copy = this.pairingCopy;
+    this.hidePairing = showPairingDialog({
+      title: copy.title,
+      line: copy.line,
+      qrValue: uri,
+      qrCaption: copy.qrCaption,
+      link: uri,
+      open: { label: copy.openLabel, href: uri },
+      onClose: () => this.cancelPairing?.(),
+    });
   }
 
   /**
@@ -577,13 +591,13 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    */
   private async _getSessionInfo(): Promise<WalletInfo> {
     if (!this.session) {
-      throw new Error('No active session');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     // Get BCH accounts from session
     const bchNamespace = this.session.namespaces.bch;
     if (!bchNamespace || !bchNamespace.accounts || bchNamespace.accounts.length === 0) {
-      throw new Error('No BCH accounts in session');
+      throw flowFailure('WALLET_UNSUPPORTED', { details: 'The wallet session has no Bitcoin Cash account.' });
     }
 
     // Format: bch:bitcoincash:qr... or bch:bchtest:qr...
@@ -648,7 +662,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
           topic: this.session.topic,
           reason: {
             code: 6000,
-            message: 'User disconnected',
+            message: WALLET_PROMPTS.disconnected,
           },
         });
         console.log('[Web3ModalWC] Disconnected');
@@ -669,7 +683,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
       await this._syncAddressFromWallet({ logErrors: false });
     }
     if (!this.currentAddress) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
     return this.currentAddress;
   }
@@ -679,25 +693,23 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    * WalletConnect uses placeholder substitution like Paytaca
    */
   async getPublicKey(): Promise<string> {
-    throw new Error(
-      'WalletConnect uses automatic pubkey substitution during signing.\n\n' +
-        'For contract interactions, use 33-byte zero placeholder:\n' +
-        'new Uint8Array(33) // Wallet will replace with actual pubkey'
-    );
+    throw flowFailure('WALLET_UNSUPPORTED', {
+      details: 'WalletConnect wallets fill in the public key while signing. Use a 33-byte zero placeholder.',
+    });
   }
 
   // In-memory balance cache. Prevents back-to-back fetches from spamming
   // the rate-limited backend when reconnect/init effects race.
   private balanceCache: { address: string; value: WalletBalance; expiresAt: number } | null = null;
-  private balanceInFlight: Promise<WalletBalance> | null = null;
+  private balanceInFlight: Promise<WalletBalance | null> | null = null;
 
   /**
    * Get wallet balance via backend API. Cached for 10s per address;
    * concurrent callers share the same in-flight promise.
    */
-  async getBalance(): Promise<WalletBalance> {
+  async getBalance(): Promise<WalletBalance | null> {
     if (!this.currentAddress) {
-      return { bch: 0, sat: 0 };
+      return null;
     }
 
     const address = this.currentAddress;
@@ -721,7 +733,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
         );
         if (!response.ok) {
           console.warn('[Web3ModalWC] Balance API returned error:', response.status);
-          return { bch: 0, sat: 0 };
+          return null;
         }
         const data = await response.json();
         const value: WalletBalance = { sat: data.sat || 0, bch: data.bch || 0 };
@@ -729,7 +741,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
         return value;
       } catch (error) {
         console.error('[Web3ModalWC] Failed to fetch balance:', error);
-        return { bch: 0, sat: 0 };
+        return null;
       } finally {
         this.balanceInFlight = null;
       }
@@ -742,10 +754,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    * Sign simple transaction
    */
   async signTransaction(_tx: Transaction): Promise<SignedTransaction> {
-    throw new Error(
-      'Use signCashScriptTransaction() for all WalletConnect transactions.\n\n' +
-        'WalletConnect requires full transaction construction with sourceOutputs.'
-    );
+    throw flowFailure('WALLET_UNSUPPORTED', { details: 'WalletConnect wallets only sign fully built transactions.' });
   }
 
   /**
@@ -777,7 +786,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    */
   async signCashScriptTransaction(options: CashScriptSignOptions): Promise<CashScriptSignResponse> {
     if (!this.client || !this.session) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     try {
@@ -794,7 +803,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
           transaction: options.transaction,
           sourceOutputs: options.sourceOutputs,
           broadcast: options.broadcast ?? true,
-          userPrompt: options.userPrompt,
+          userPrompt: options.userPrompt || WALLET_PROMPTS.transaction,
         })
       );
 
@@ -823,35 +832,19 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
         signedTransaction: typedResult.signedTransaction,
         signedTransactionHash: typedResult.signedTransactionHash,
       };
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Web3ModalWC] Signing failed:', error);
 
-      const reason = this._extractErrorMessage(
-        error,
-        'WalletConnect returned an empty error response'
-      );
-
-      if (/(rejected|cancelled|declined|denied|disapproved)/i.test(reason)) {
-        throw new Error('Transaction rejected by user');
-      }
-      if (/(timed out|timeout)/i.test(reason)) {
+      const reason = this._extractErrorMessage(error, 'Wallet returned an empty error response');
+      const failure = walletRequestFailure(reason, 'transaction');
+      if (failure.code === 'WALLET_TIMEOUT') {
         try {
           await this.disconnect();
-        } catch {
-          // Best-effort reset for stale WalletConnect sessions.
+        } catch (disconnectError) {
+          console.warn('[Web3ModalWC] Reset after a signing timeout failed:', disconnectError);
         }
-        throw new Error(
-          'WalletConnect signing timed out. Reconnect wallet and try again (old WC sessions can hang).'
-        );
       }
-
-      if (/empty error response/i.test(reason)) {
-        throw new Error(
-          'Transaction signing failed: wallet returned no error details. Reconnect WalletConnect and try again.'
-        );
-      }
-
-      throw new Error(`Transaction signing failed: ${reason}`);
+      throw failure;
     }
   }
 
@@ -860,7 +853,7 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
    */
   async signMessage(message: string, userPrompt?: string): Promise<string> {
     if (!this.client || !this.session) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     try {
@@ -868,28 +861,25 @@ export class Web3ModalWalletConnectConnector implements IWalletConnector {
 
       console.log('[Web3ModalWC] Signing message...');
 
-      const result = await this._requestWithoutRedirect(() =>
-        this.client!.request({
-          topic: this.session!.topic,
-          chainId: connectedChain,
-          request: {
-            method: 'bch_signMessage',
-            params: { message, userPrompt },
-          },
-        })
+      const result = await this._withRequestTimeout(
+        this._requestWithoutRedirect(() =>
+          this.client!.request({
+            topic: this.session!.topic,
+            chainId: connectedChain,
+            request: {
+              method: 'bch_signMessage',
+              params: { message, userPrompt: userPrompt || WALLET_PROMPTS.signInMessage },
+            },
+          })
+        ),
+        'WalletConnect sign message request'
       );
 
       console.log('[Web3ModalWC] Message signed');
       return normalizeSignatureResponse(result);
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Web3ModalWC] Message signing failed:', error);
-      const message = this._extractErrorMessage(error, 'Unknown wallet error');
-
-      if (/(rejected|cancelled|declined|denied|disapproved)/i.test(message)) {
-        throw new Error('Message signing rejected by user');
-      }
-
-      throw new Error(`Message signing failed: ${message}`);
+      throw walletRequestFailure(this._extractErrorMessage(error, 'Wallet returned an empty error response'), 'signIn');
     }
   }
 

@@ -1,1025 +1,268 @@
-import { useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import React from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { ClosingBand } from '../components/marketing/ClosingBand';
+import { FactStrip } from '../components/marketing/FactStrip';
+import { FactsCard } from '../components/marketing/FactsCard';
+import { FeatureModule } from '../components/marketing/FeatureModule';
+import { HeroProductCard } from '../components/marketing/HeroProductCard';
+import { MarketingHero } from '../components/marketing/MarketingHero';
+import { NumberedFaq } from '../components/marketing/NumberedFaq';
+import { MarketingFooter } from '../components/layout/Footer';
+import { MarketingNav } from '../components/layout/MarketingNav';
+import { MarketingSection } from '../components/layout/MarketingSection';
+import { ApprovalMeter, type ApprovalMeterProps } from '../components/ui/ApprovalMeter';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Card } from '../components/ui/Card';
+import { Display } from '../components/ui/Display';
+import { Eyebrow } from '../components/ui/Eyebrow';
+import { Heading } from '../components/ui/Heading';
+import { MilestoneList, type MilestoneListProps } from '../components/ui/MilestoneList';
+import { ScheduleTimeline, type ScheduleTimelineProps } from '../components/ui/ScheduleTimeline';
+import { StatusPill } from '../components/ui/StatusPill';
+import type { Asset } from '../components/ui/types';
 import {
-  Shield,
-  Lock,
-  Vote,
-  Zap,
-  CheckCircle2,
-  ArrowRight,
-  Database,
-  Clock,
-  Coins,
-  Users,
-  PieChart,
-  Gift,
-  Eye,
-  Menu,
-  X,
-  ChevronDown,
-} from 'lucide-react';
-import { Footer } from '../components/layout/Footer';
-import { SolutionsDropdown } from '../components/ui/SolutionsDropdown';
-import { ResourcesDropdown } from '../components/ui/ResourcesDropdown';
-import { MobileMenu } from '../components/layout/MobileMenu';
-import Hero3D from '../components/hero/Hero3D';
-import { NoiseBackground } from '../components/ui/NoiseBackground';
-import { PageMeta } from '../components/seo/PageMeta';
-import { APP_SITE_URL } from '../utils/publicUrls';
+  HOME_CLOSING,
+  HOME_FACTS,
+  HOME_HERO,
+  HOME_QUESTIONS,
+  HOW_IT_WORKS,
+  SAMPLE_CAPTION,
+  WHAT_IT_COSTS,
+  WHAT_YOU_CAN_DO,
+  WHO_CAN_MOVE,
+} from '../copy/marketingHome';
 
-const fadeInUp = {
-  initial: { opacity: 0, y: 60 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.6, ease: 'easeOut' as const },
+const LEGACY_SECURITY_HASH = '#security';
+const SECURITY_PATH = '/security';
+const HOME_PREVIEW_IMAGE = '/images/og-home.png';
+
+const BCH: Asset = { kind: 'bch' };
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SAMPLE_NOW = Date.now();
+
+const SAMPLE_TIMELINE: ScheduleTimelineProps = {
+  asset: BCH,
+  now: SAMPLE_NOW,
+  blocks: [-60, -30, -1, 29, 59, 89].map((days, index) => ({
+    at: SAMPLE_NOW + days * DAY_MS,
+    amount: '2.00',
+    state: index < 2 ? 'claimed' : index === 2 ? 'ready' : 'later',
+  })),
 };
 
-const staggerContainer = {
-  animate: {
-    transition: {
-      staggerChildren: 0.1,
-    },
-  },
+const SAMPLE_SIGNERS: ApprovalMeterProps['signers'] = [
+  { name: 'Sam', address: 'bitcoincash:qr6m7j9njldwwzlg9v7v53unlr4jkmx6eylep8ekg2', approved: true },
+  { name: 'Maya', address: 'bitcoincash:qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy', approved: false },
+  { name: 'Ade', address: 'bitcoincash:qz2708636snqhsxu8wnlka78h6fdp77ar59jrf5035', approved: false },
+];
+
+const SAMPLE_MILESTONES: MilestoneListProps['milestones'] = [
+  { id: 'draft', title: 'Write the first draft', amount: '4.00', status: 'released' },
+  { id: 'review', title: 'Review with the community', amount: '4.00', status: 'pending' },
+  { id: 'publish', title: 'Publish the guide', amount: '4.00', status: 'pending' },
+];
+
+const GROUP_VISUALS: Record<(typeof WHAT_YOU_CAN_DO.groups)[number]['id'], React.ReactNode> = {
+  'pay-people': <ScheduleTimeline {...SAMPLE_TIMELINE} />,
+  'shared-funds': <ApprovalMeter required={2} signers={SAMPLE_SIGNERS} />,
+  'send-to-many': <MilestoneList asset={BCH} milestones={SAMPLE_MILESTONES} />,
 };
 
-export default function Home() {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [openFaq, setOpenFaq] = useState<number>(0);
-
+function SampleVisual({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <main className="bg-background min-h-screen">
-      <PageMeta
-        title="FlowGuard - The Operating Layer for On-Chain Finance"
-        description="Contract-backed treasuries, streams, payments, distributions, and governance workflows on Bitcoin Cash."
-        path="/"
-      />
-      <MobileMenu isOpen={isMobileMenuOpen} onClose={() => setIsMobileMenuOpen(false)} />
-      <nav className="fixed top-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-b border-border/30 h-20">
-        <div className="max-w-7xl mx-auto px-6 lg:px-12 h-full flex justify-between items-center">
-          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
-            <Link to="/">
-              <img src="/assets/flow-green.png" alt="FlowGuard" className="h-8 object-contain" />
-            </Link>
-          </motion.div>
-          <div className="hidden md:flex items-center space-x-10">
-            <SolutionsDropdown />
-            <a
-              href="https://docs.flowguard.cash"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors"
-            >
-              Developers
-            </a>
-            <a
-              href="#security"
-              className="text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors"
-            >
-              Security
-            </a>
-            <ResourcesDropdown />
-            <a href={APP_SITE_URL}>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="bg-primary text-white px-6 py-2.5 rounded-full text-sm font-medium hover:bg-primaryHover transition-all shadow-lg hover:shadow-xl"
-              >
-                Launch App
-              </motion.button>
-            </a>
-          </div>
-
-          {/* Mobile Menu Button */}
-          <div className="md:hidden">
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2 text-textPrimary hover:bg-surfaceAlt rounded-lg transition-colors relative z-50"
-            >
-              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
-        </div>
-      </nav>
-
-      <section className="pt-24 md:pt-28 lg:pt-32 pb-8 md:pb-10 px-4 md:px-6 lg:px-12 bg-surface overflow-hidden">
-        <div className="max-w-7xl mx-auto">
-          <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center">
-            <div className="flex flex-col">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.5 }}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surfaceAlt/50 border border-border mb-6 w-fit"
-              >
-                <span className="w-2 h-2 rounded-full bg-brand300 animate-pulse" />
-                <span className="text-xs font-mono text-textSecondary">Live on Bitcoin Cash mainnet</span>
-              </motion.div>
-
-              <motion.h1
-                {...fadeInUp}
-                className="font-display text-4xl md:text-5xl lg:text-6xl leading-[0.95] mb-4 text-textPrimary"
-              >
-                The Operating Layer
-                <br />
-                <span className="text-brand300">for On-Chain Finance</span>
-              </motion.h1>
-
-              <motion.p
-                {...fadeInUp}
-                transition={{ delay: 0.1, duration: 0.6 }}
-                className="text-lg md:text-xl text-textSecondary mb-6 leading-relaxed"
-              >
-                Contract-backed treasuries, streams, payments, distributions, and governance
-                workflows on Bitcoin Cash.
-              </motion.p>
-
-              <motion.div
-                {...fadeInUp}
-                transition={{ delay: 0.2, duration: 0.6 }}
-                className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-10"
-              >
-                <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
-                  <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium text-textPrimary mb-1 text-sm">
-                      Rules enforced Onchain
-                    </p>
-                    <p className="text-xs text-textSecondary">
-                      Spending limits and release conditions cannot be overridden
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 p-4 rounded-2xl bg-surface border border-border">
-                  <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium text-textPrimary mb-1 text-sm">
-                      Time-locked by default
-                    </p>
-                    <p className="text-xs text-textSecondary">
-                      Funds unlock only when the time conditions are met
-                    </p>
-                  </div>
-                </div>
-              </motion.div>
-
-              <motion.div
-                {...fadeInUp}
-                transition={{ delay: 0.3, duration: 0.6 }}
-                className="flex flex-col sm:flex-row gap-4"
-              >
-                <a href={APP_SITE_URL}>
-                  <motion.button
-                    whileHover={{ scale: 1.02, y: -2 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="group bg-primary text-white px-8 py-4 rounded-full text-base font-semibold hover:bg-primaryHover transition-all shadow-2xl hover:shadow-brand300/20 flex items-center gap-3"
-                  >
-                    Launch App
-                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                  </motion.button>
-                </a>
-                <a
-                  href="#features"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    document
-                      .querySelector('#features')
-                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                  }}
-                >
-                  <motion.button
-                    whileHover={{ scale: 1.02, y: -2 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="border-2 border-border text-textPrimary px-8 py-4 rounded-full text-base font-semibold hover:border-primary hover:bg-surfaceAlt/30 transition-all"
-                  >
-                    See Payment Flows
-                  </motion.button>
-                </a>
-              </motion.div>
-            </div>
-
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 1, delay: 0.2 }}
-              className="w-full h-[400px] lg:h-[600px]"
-            >
-              <Hero3D />
-            </motion.div>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-6 md:py-8 px-4 md:px-6 border-y border-border/30 bg-surfaceAlt/20 mt-8">
-        <div className="max-w-7xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            className="flex flex-wrap justify-center md:justify-between items-center gap-6 md:gap-8"
-          >
-            {[
-              'You Control the Funds',
-              'Built on Bitcoin Cash',
-              'Publicly Verifiable',
-              'CashTokens Support',
-              'Open Source',
-            ].map((item, i) => (
-              <motion.span
-                key={item}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.1 }}
-                className="text-xs font-mono uppercase tracking-wider text-textMuted"
-              >
-                {item}
-              </motion.span>
-            ))}
-          </motion.div>
-        </div>
-      </section>
-
-      <section id="problem" className="py-16 md:py-20 lg:py-24 px-4 md:px-6 lg:px-12 bg-surface">
-        <div className="max-w-7xl mx-auto">
-          <div className="grid lg:grid-cols-2 gap-16 items-center">
-            <motion.div
-              initial={{ opacity: 0, x: -40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.7 }}
-            >
-              <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl mb-8 text-textPrimary leading-tight">
-                The problem with manual treasury and payout operations
-              </h2>
-              <div className="space-y-6 text-lg text-textSecondary">
-                <p>
-                  Traditional multisig wallets require manual coordination for every payment.
-                  Budgets are tracked in spreadsheets. Spending caps aren't enforced - they're just
-                  guidelines.
-                </p>
-                <p>
-                  Every payment requires manual coordination. Budget tracking is error-prone.
-                  There's no automatic audit trail. Trust is social, not technical.
-                </p>
-              </div>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, x: 40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.7 }}
-              className="relative"
-            >
-              <div className="bg-surfaceAlt/30 border border-border rounded-3xl p-6 sm:p-10">
-                <h3 className="font-display text-2xl sm:text-3xl lg:text-4xl mb-6 text-textPrimary">
-                  FlowGuard automates this
-                </h3>
-                <div className="space-y-6 text-lg text-textSecondary">
-                  <p>
-                    Set the rules once, and the blockchain enforces them automatically. Spending
-                    caps that can't be exceeded. Approval requirements that can't be bypassed.
-                  </p>
-                  <p>
-                    Payments happen on schedule without manual intervention. All activity is
-                    publicly visible. Rules are locked in - no one can change them, not even the
-                    signers.
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        </div>
-      </section>
-
-      <section
-        id="features"
-        className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-4 md:px-6 lg:px-12 bg-surfaceAlt/10"
-      >
-        <div className="max-w-7xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="text-center mb-10 md:mb-12 lg:mb-16"
-          >
-            <h2 className="font-display text-3xl md:text-5xl lg:text-6xl mb-4 md:mb-6 text-textPrimary">
-              What FlowGuard Can Do
-            </h2>
-            <p className="text-base md:text-lg lg:text-xl text-textSecondary max-w-3xl mx-auto">
-              BCH-native treasuries, vesting, payments, distributions, and governance in one
-              contract-backed product surface
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:auto-rows-fr"
-          >
-            {/* Treasury Management - Large Feature */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.1 }}
-              className="lg:col-span-2 lg:row-span-2 bg-white border border-border rounded-2xl p-5 md:p-6 lg:p-8 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="h-full flex flex-col">
-                <div className="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16 mb-4 md:mb-5 lg:mb-6">
-                  <img
-                    src="/assets/features/treasury.png"
-                    alt="Treasury"
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <h3 className="font-display text-lg md:text-xl lg:text-2xl mb-2 md:mb-3 lg:mb-4 text-textPrimary">
-                  Treasury Management
-                </h3>
-                <p className="text-sm md:text-base text-textSecondary leading-relaxed mb-4 md:mb-5 lg:mb-6 lg:flex-grow">
-                  Run BCH and CashToken treasuries with signer thresholds, spending policies,
-                  proposal execution, and multi-asset activity tracking.
-                </p>
-                <div className="space-y-2">
-                  <div className="flex items-center text-sm text-textSecondary">
-                    <CheckCircle2 className="w-4 h-4 mr-2 text-accent" />
-                    Multi-signature security
-                  </div>
-                  <div className="flex items-center text-sm text-textSecondary">
-                    <CheckCircle2 className="w-4 h-4 mr-2 text-accent" />
-                    Spending limits & controls
-                  </div>
-                  <div className="flex items-center text-sm text-textSecondary">
-                    <CheckCircle2 className="w-4 h-4 mr-2 text-accent" />
-                    Real-time activity tracking
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-
-            {/* Vesting */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.2 }}
-              className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/vesting.png"
-                  alt="Vesting"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Streams & Vesting
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Launch linear, cliffed, hybrid, milestone, and tranche schedules with previews,
-                claims, and transferable state where supported.
-              </p>
-            </motion.div>
-
-            {/* Payments */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.3 }}
-              className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/payments.png"
-                  alt="Payments"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Payments
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Execute one-time, recurring, and refillable recurring payouts with explicit cadence,
-                auditable execution, and BCH-native settlement.
-              </p>
-            </motion.div>
-
-            {/* Proposals */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.4 }}
-              className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/proposals.png"
-                  alt="Proposals"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Proposals
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Create and vote on treasury proposals. Transparent decision-making with configurable
-                approval thresholds.
-              </p>
-            </motion.div>
-
-            {/* Budget Plans */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.5 }}
-              className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/budget.png"
-                  alt="Budget Plans"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Budget Plans
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Define spending budgets by category, time period, or recipient. Automatic
-                enforcement prevents overspending.
-              </p>
-            </motion.div>
-
-            {/* Explorer - Wide Feature */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.6 }}
-              className="lg:col-span-2 bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/explorer.png"
-                  alt="Activity Explorer"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Activity Explorer
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Track all treasury activity in real-time. View approvals, payments, unlocks, and
-                governance actions. Complete transparency with blockchain verification.
-              </p>
-            </motion.div>
-
-            {/* Governance */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.7 }}
-              className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/governance.png"
-                  alt="Governance"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Governance
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Connect proposals, approvals, and treasury actions with vote-lock governance and
-                contract-backed execution traces.
-              </p>
-            </motion.div>
-
-            {/* Airdrops */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.8 }}
-              className="bg-white border border-border rounded-2xl p-4 md:p-5 lg:p-6 hover:border-primary/50 transition-all duration-300 group"
-            >
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 mb-3 md:mb-4">
-                <img
-                  src="/assets/features/airdrops.png"
-                  alt="Airdrops"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <h3 className="font-display text-base md:text-lg lg:text-xl mb-2 md:mb-3 text-textPrimary">
-                Airdrops
-              </h3>
-              <p className="text-xs md:text-sm text-textSecondary leading-relaxed">
-                Distribute tokens to multiple recipients efficiently. Batch processing with
-                automated execution.
-              </p>
-            </motion.div>
-          </motion.div>
-        </div>
-      </section>
-
-      <section className="py-16 md:py-20 lg:py-24 px-4 md:px-6 lg:px-12 bg-surface">
-        <div className="max-w-7xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="text-center mb-16"
-          >
-            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-6 text-textPrimary">How FlowGuard Works</h2>
-            <p className="text-xl text-textSecondary max-w-3xl mx-auto">
-              Four steps to move treasury and payout operations onto contract-backed rails
-            </p>
-          </motion.div>
-
-          <div className="grid md:grid-cols-4 gap-8">
-            {[
-              {
-                num: '01',
-                title: 'Create Treasury',
-                desc: 'Set signer thresholds, spending policy, and treasury limits. Fund the vault or linked payment flow with BCH or CashTokens.',
-              },
-              {
-                num: '02',
-                title: 'Choose a Schedule',
-                desc: 'Launch linear, hybrid, milestone, tranche, or recurring payout flows and preview how each unlock path behaves.',
-              },
-              {
-                num: '03',
-                title: 'Approve Sensitive Actions',
-                desc: 'Use proposals and signer policy for treasury actions that require review before funds move.',
-              },
-              {
-                num: '04',
-                title: 'Execute or Claim',
-                desc: 'Valid contract transitions can be signed, claimed, resumed, paused, or refilled directly from the product.',
-              },
-            ].map((step, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 40 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.1 }}
-                className="relative group"
-              >
-                <div className="relative p-8 rounded-3xl border border-border hover:border-brand300/50 transition-all hover:bg-surfaceAlt/10">
-                  <div className="text-7xl font-display text-brand300/20 mb-6">{step.num}</div>
-                  <h3 className="font-display text-2xl mb-4 text-textPrimary">{step.title}</h3>
-                  <p className="text-textSecondary leading-relaxed">{step.desc}</p>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section
-        id="security"
-        className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-6 lg:px-12 bg-surfaceAlt/10"
-      >
-        <div className="max-w-7xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="text-center mb-16"
-          >
-            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-6 text-textPrimary">Built on Bitcoin Cash</h2>
-            <p className="text-xl text-textSecondary max-w-3xl mx-auto">
-              FlowGuard uses native Bitcoin Cash features to enforce treasury rules
-            </p>
-          </motion.div>
-
-          <div className="grid lg:grid-cols-3 gap-8">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.1 }}
-              className="bg-surface border border-border rounded-3xl p-8 text-center"
-            >
-              <div className="w-16 h-16 rounded-full bg-brand300/20 flex items-center justify-center mx-auto mb-6">
-                <Shield className="w-8 h-8 text-brand300" />
-              </div>
-              <h3 className="font-display text-2xl text-textPrimary mb-4">
-                Rules locked into the blockchain
-              </h3>
-              <p className="text-textSecondary">
-                Spending rules are part of the blockchain itself. They can't be bypassed or changed
-                after creation.
-              </p>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.2 }}
-              className="bg-surface border border-border rounded-3xl p-8 text-center"
-            >
-              <div className="w-16 h-16 rounded-full bg-brand300/20 flex items-center justify-center mx-auto mb-6">
-                <Lock className="w-8 h-8 text-brand300" />
-              </div>
-              <h3 className="font-display text-2xl text-textPrimary mb-4">You control the funds</h3>
-              <p className="text-textSecondary">
-                FlowGuard doesn't have access to your treasury. No third party controls your funds.
-              </p>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.3 }}
-              className="bg-surface border border-border rounded-3xl p-8 text-center"
-            >
-              <div className="w-16 h-16 rounded-full bg-brand300/20 flex items-center justify-center mx-auto mb-6">
-                <Eye className="w-8 h-8 text-brand300" />
-              </div>
-              <h3 className="font-display text-2xl text-textPrimary mb-4">
-                All activity is publicly verifiable
-              </h3>
-              <p className="text-textSecondary">
-                Every approval, payment, and unlock is recorded on the blockchain for anyone to
-                audit.
-              </p>
-            </motion.div>
-          </div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="text-center mt-12"
-          >
-            <a
-              href="https://docs.flowguard.cash/security"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <button className="text-primary hover:text-primaryHover font-semibold inline-flex items-center gap-2 group">
-                Learn more about security
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </button>
-            </a>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* Removed detailed security model - moved to /security page */}
-
-      {/* KEEP: Old security section for reference, can delete after /security page is created */}
-      {/* <section id="security-old" className="hidden">
-        <div className="grid lg:grid-cols-2 gap-12">
-            <motion.div
-              initial={{ opacity: 0, x: -40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              className="bg-surface border border-border rounded-3xl p-10"
-            >
-              <div className="flex items-center gap-3 mb-8">
-                <div className="w-12 h-12 rounded-full bg-brand300/20 flex items-center justify-center">
-                  <Code2 className="w-6 h-6 text-brand300" />
-                </div>
-                <h3 className="font-display text-2xl sm:text-3xl text-textPrimary">On-Chain Enforcement</h3>
-              </div>
-              <ul className="space-y-4">
-                {[
-                  'Spending guardrails validated by covenant logic',
-                  'M-of-N signature verification in script',
-                  'Timelock enforcement via CLTV/CSV primitives',
-                  'Treasury state transitions validated by protocol',
-                  'Token-weighted vote commitments enforced'
-                ].map((item, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <CheckCircle2 className="w-5 h-5 text-brand300 mt-0.5 flex-shrink-0" />
-                    <span className="text-textSecondary">{item}</span>
-                  </li>
-                ))}
-              </ul>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, x: 40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              className="bg-warning/5 border border-warning/30 rounded-3xl p-10"
-            >
-              <div className="flex items-center gap-3 mb-8">
-                <div className="w-12 h-12 rounded-full bg-warning/20 flex items-center justify-center">
-                  <Network className="w-6 h-6 text-warning" />
-                </div>
-                <h3 className="font-display text-2xl sm:text-3xl text-textPrimary">Off-Chain Services</h3>
-              </div>
-              <ul className="space-y-4 mb-6">
-                {[
-                  'Indexer reconstructs state (verifiable by validators)',
-                  'Executors provide liveness (economic incentive)',
-                  'Vote tallies for large sets use M-of-N attestation',
-                  'Metadata storage (IPFS or centralized with hash verification)'
-                ].map((item, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-warning mt-0.5 flex-shrink-0" />
-                    <span className="text-textSecondary">{item}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="p-4 bg-warning/10 rounded-2xl border border-warning/30">
-                <p className="text-sm text-textPrimary font-medium">
-                  FlowGuard cannot auto-execute. The UTXO model requires off-chain transaction construction and broadcasting.
-                </p>
-              </div>
-            </motion.div>
-          </div>
-        </div>
-      </section> */}
-
-      {/* Verified contract addresses — anti-impersonation trust signal */}
-      <VerifiedContractsSection />
-
-      <section className="py-16 md:py-20 lg:py-24 px-4 md:px-6 lg:px-12 bg-surface">
-        <div className="max-w-7xl mx-auto">
-          <div className="grid lg:grid-cols-2 gap-16 items-center">
-            <motion.div
-              initial={{ opacity: 0, x: -40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              className="relative"
-            >
-              <div className="border-2 border-brand300/40 bg-brand300/5 p-10 rounded-3xl">
-                <div className="flex items-center gap-3 mb-6">
-                  <span className="w-3 h-3 rounded-full bg-brand300 animate-pulse" />
-                  <h3 className="text-brand300 text-sm font-mono uppercase tracking-wider">
-                    Production Status
-                  </h3>
-                </div>
-                <p className="font-display text-2xl sm:text-3xl lg:text-4xl mb-6 text-textPrimary">
-                  Live on Bitcoin Cash mainnet
-                </p>
-                <p className="text-textSecondary leading-relaxed">
-                  Treasuries, streams, payouts, distributions, and governance flows run on
-                  mainnet under contract-backed enforcement. Templates ship with audited m-of-n
-                  covenant paths, mutable state NFTs, and BCMR-rendered receipts that any
-                  CashTokens-aware wallet can recognize.
-                </p>
-              </div>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, x: 40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-            >
-              <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl mb-8 text-textPrimary leading-tight">
-                Production-grade BCH treasury infrastructure
-              </h2>
-              <p className="text-lg text-textSecondary mb-8 leading-relaxed">
-                Every product surface in FlowGuard runs on audited CashScript covenants
-                with mutable NFT state, two-slot authority models, and BCMR-rendered
-                receipts. The same primitive set drives vesting, payroll, budgets, grants,
-                airdrops, bounties, rewards, and governance, so policy ships once and
-                every wallet that speaks CashTokens recognizes the receipts without a
-                bespoke integration.
-              </p>
-              <div className="space-y-3 font-mono text-sm text-textMuted">
-                <div className="flex items-center gap-3">
-                  <span className="text-brand300">✓</span>
-                  <span>Bounded loops drive batched releases and tallies</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-brand300">✓</span>
-                  <span>Modular covenant functions keep each entry point auditable</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-brand300">✓</span>
-                  <span>Bitwise commitment encoding for compact NFT state</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-brand300">✓</span>
-                  <span>P2SH32 addresses for collision-resistant contracts</span>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        </div>
-      </section>
-
-      <section
-        id="faq"
-        className="pt-12 md:pt-16 lg:pt-20 pb-16 md:pb-20 lg:pb-24 px-6 lg:px-12 bg-surfaceAlt/10"
-      >
-        <div className="max-w-4xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="text-center mb-16"
-          >
-            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-6 text-textPrimary">
-              Frequently asked questions
-            </h2>
-          </motion.div>
-
-          <div className="space-y-3">
-            {[
-              {
-                q: 'Who controls the funds?',
-                a: "You do. FlowGuard doesn't hold your keys or have access to treasury funds. You set the rules, and the blockchain enforces them - no middleman.",
-              },
-              {
-                q: 'Do payments happen automatically?',
-                a: 'Yes and no. Payments unlock automatically when the schedule allows, but someone (you or an executor service) must broadcast the transaction to the network. Think of it like a time-locked safe - it opens on time, but someone still needs to take the funds out.',
-              },
-              {
-                q: 'Can spending rules be changed after creation?',
-                a: 'No. Once a treasury is created with specific rules, those rules are permanent. This prevents anyone from changing the limits or bypassing approvals later.',
-              },
-              {
-                q: 'What happens if a signer loses access?',
-                a: 'Choose your signer set and threshold at vault creation. The covenant locks them in. Plan emergency procedures up front, since the only way to change a signer set is to migrate funds to a new vault with a new policy.',
-              },
-              {
-                q: 'Is this production-ready?',
-                a: 'FlowGuard runs on Bitcoin Cash mainnet. Covenant templates have been audited and the contract code is open source. As with any non-custodial protocol, you keep the keys and you carry the risk of any signing decision your team makes.',
-              },
-              {
-                q: 'How do I get started?',
-                a: 'Connect a BCH wallet (Paytaca recommended), create a treasury with your spending rules, then set up vesting, payroll, or budget plans as needed.',
-              },
-            ].map((faq, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.05 }}
-                className={`bg-surface border rounded-2xl overflow-hidden transition-colors ${
-                  openFaq === i ? 'border-brand300/60' : 'border-border hover:border-brand300/30'
-                }`}
-              >
-                <button
-                  onClick={() => setOpenFaq(openFaq === i ? -1 : i)}
-                  className="w-full flex items-center justify-between gap-4 px-8 py-6 text-left"
-                >
-                  <span
-                    className={`font-display text-xl transition-colors ${
-                      openFaq === i ? 'text-brand300' : 'text-textPrimary'
-                    }`}
-                  >
-                    {faq.q}
-                  </span>
-                  <motion.div
-                    animate={{ rotate: openFaq === i ? 180 : 0 }}
-                    transition={{ duration: 0.25 }}
-                    className="flex-shrink-0"
-                  >
-                    <ChevronDown
-                      className={`w-5 h-5 transition-colors ${
-                        openFaq === i ? 'text-brand300' : 'text-textMuted'
-                      }`}
-                    />
-                  </motion.div>
-                </button>
-                <AnimatePresence initial={false}>
-                  {openFaq === i && (
-                    <motion.div
-                      key="answer"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.28, ease: 'easeInOut' }}
-                      className="overflow-hidden"
-                    >
-                      <p className="px-8 pb-6 text-textSecondary leading-relaxed">{faq.a}</p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-20 md:py-28 lg:py-32 px-4 md:px-6 lg:px-12 relative overflow-hidden border-t border-border/30 bg-[#F1F3E0]">
-        <NoiseBackground />
-
-        <div className="max-w-4xl mx-auto text-center relative z-10">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            whileInView={{ opacity: 1, scale: 1 }}
-            viewport={{ once: true }}
-          >
-            <h2 className="font-display text-5xl md:text-6xl mb-6 leading-tight text-textPrimary">
-              Ready to enforce your treasury on-chain?
-            </h2>
-            <p className="text-xl mb-10 text-textSecondary leading-relaxed max-w-2xl mx-auto">
-              Deploy your first non-custodial treasury with predictable budget automation
-            </p>
-            <a href={APP_SITE_URL}>
-              <motion.button
-                whileHover={{ scale: 1.05, y: -4 }}
-                whileTap={{ scale: 0.95 }}
-                className="group bg-primary text-white px-12 py-6 rounded-full text-lg font-bold hover:bg-primaryHover transition-all shadow-2xl flex items-center gap-3 mx-auto"
-              >
-                Launch App
-                <ArrowRight className="w-6 h-6 group-hover:translate-x-2 transition-transform" />
-              </motion.button>
-            </a>
-          </motion.div>
-        </div>
-      </section>
-
-      <Footer />
-    </main>
+    <figure className="flex flex-col gap-4">
+      <div className="flex items-start justify-between gap-4">
+        <figcaption className="text-small text-ink-secondary">{label}</figcaption>
+        <StatusPill status="sample" size="sm" />
+      </div>
+      {children}
+      <p className="sr-only">{SAMPLE_CAPTION}</p>
+    </figure>
   );
 }
 
-function VerifiedContractsSection() {
-  const [copied, setCopied] = useState<string | null>(null);
-  const copy = useCallback((value: string, label: string) => {
-    navigator.clipboard?.writeText(value).then(() => {
-      setCopied(label);
-      window.setTimeout(() => setCopied(null), 1800);
-    }).catch(() => {});
-  }, []);
+function ChapterHeader({
+  id,
+  number,
+  eyebrow,
+  title,
+  lead,
+}: {
+  id: string;
+  number: string;
+  eyebrow: string;
+  title: string;
+  lead?: string;
+}) {
+  return (
+    <div className="flex max-w-reading flex-col gap-4">
+      <Eyebrow number={number}>{eyebrow}</Eyebrow>
+      <Display size="headline" as="h2" id={id}>
+        {title}
+      </Display>
+      {lead ? <p className="text-body-lg text-ink-secondary">{lead}</p> : null}
+    </div>
+  );
+}
 
-  const covenants: Array<{ label: string; artifact: string; hash?: string }> = [
-    { label: 'VaultCovenant', artifact: 'contracts/artifacts/treasury/VaultCovenant.json' },
-    { label: 'ProposalCovenant', artifact: 'contracts/artifacts/treasury/ProposalCovenant.json' },
-    { label: 'VestingCovenant', artifact: 'contracts/artifacts/streaming/VestingCovenant.json' },
-    { label: 'HybridVestingCovenant', artifact: 'contracts/artifacts/streaming/HybridVestingCovenant.json' },
-    { label: 'TrancheVestingCovenant', artifact: 'contracts/artifacts/streaming/TrancheVestingCovenant.json' },
-    { label: 'RecurringPaymentCovenant', artifact: 'contracts/artifacts/streaming/RecurringPaymentCovenant.json' },
-    { label: 'AirdropCovenant', artifact: 'contracts/artifacts/distribution/AirdropCovenant.json' },
-    { label: 'BountyCovenant', artifact: 'contracts/artifacts/distribution/BountyCovenant.json' },
-    { label: 'RewardCovenant', artifact: 'contracts/artifacts/distribution/RewardCovenant.json' },
-    { label: 'GrantCovenant', artifact: 'contracts/artifacts/distribution/GrantCovenant.json' },
-    { label: 'VoteLockCovenant', artifact: 'contracts/artifacts/governance/VoteLockCovenant.json' },
-  ];
+export default function Home() {
+  const { hash } = useLocation();
+
+  if (hash === LEGACY_SECURITY_HASH) return <Navigate to={SECURITY_PATH} replace />;
 
   return (
-    <section id="contract-addresses" className="py-16 md:py-20 lg:py-24 px-4 md:px-6 lg:px-12 bg-surface border-t border-border/30">
-      <div className="max-w-5xl mx-auto">
-        <div className="mb-10 md:mb-12">
-          <p className="mb-3 text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Verify before trust</p>
-          <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl mb-4 text-textPrimary leading-tight">
-            FlowGuard contracts, on-chain and audited.
-          </h2>
-          <p className="max-w-2xl text-base md:text-lg leading-relaxed text-textSecondary">
-            Every product surface in FlowGuard is a CashScript covenant. The compiled artifacts below are deterministic from the source at <a href="https://github.com/winsznx/flow-guard/tree/main/contracts/core" className="text-primary hover:text-primaryHover">contracts/core/</a>. Verify any contract address you transact with against the artifact hash here before signing — third-party impersonation tokens cannot reproduce these.
-          </p>
+    <div className="flex min-h-screen flex-col bg-canvas">
+      <MarketingNav />
+      <main className="min-w-0 flex-1">
+        <MarketingHero
+          livePill
+          headline={HOME_HERO.headline}
+          accent={HOME_HERO.accent}
+          lead={HOME_HERO.lead}
+          primary={HOME_HERO.primary}
+          secondary={HOME_HERO.secondary}
+          note={
+            <>
+              {HOME_HERO.need}{' '}
+              <ButtonLink variant="link" to={HOME_HERO.getWallet.href}>
+                {HOME_HERO.getWallet.label}
+              </ButtonLink>
+            </>
+          }
+          visual={<HeroProductCard kind="stream" />}
+          image={HOME_PREVIEW_IMAGE}
+        />
+
+        <div className="mx-auto w-full min-w-0 max-w-page px-4 sm:px-6 lg:px-8">
+          <FactStrip facts={HOME_FACTS} />
         </div>
 
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {covenants.map((c) => (
-            <button
-              key={c.label}
-              type="button"
-              onClick={() => copy(c.artifact, c.label)}
-              className="text-left rounded-xl border border-border bg-surfaceAlt/40 p-4 hover:border-primary/40 hover:bg-surfaceAlt transition-colors group"
-              aria-label={`Copy artifact path for ${c.label}`}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="font-mono text-sm font-semibold text-textPrimary">{c.label}</span>
-                <span className={`text-xs font-mono ${copied === c.label ? 'text-primary' : 'text-textMuted group-hover:text-textSecondary'}`}>
-                  {copied === c.label ? 'copied ✓' : 'copy'}
-                </span>
-              </div>
-              <p className="font-mono text-xs text-textMuted truncate">{c.artifact}</p>
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-10 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between rounded-xl border border-border bg-surfaceAlt/40 p-5">
-          <div>
-            <p className="font-display text-base text-textPrimary mb-1">Reproduce these locally</p>
-            <p className="font-mono text-xs text-textMuted">
-              git clone github.com/winsznx/flow-guard && cd flow-guard/contracts && pnpm run build
-            </p>
-          </div>
-          <a
-            href="https://github.com/winsznx/flow-guard/tree/main/contracts"
-            className="font-mono text-sm text-primary hover:text-primaryHover whitespace-nowrap"
-            target="_blank"
-            rel="noopener noreferrer"
+        {WHAT_YOU_CAN_DO.groups.map((group, index) => (
+          <MarketingSection
+            key={group.id}
+            tone={index % 2 === 0 ? 'canvas' : 'surface'}
+            labelledBy={`${group.id}-title`}
           >
-            view source →
-          </a>
-        </div>
-      </div>
-    </section>
+            <div className="flex flex-col gap-8">
+              {index === 0 ? <Eyebrow number={WHAT_YOU_CAN_DO.number}>{WHAT_YOU_CAN_DO.eyebrow}</Eyebrow> : null}
+              <FeatureModule
+                id={group.id}
+                eyebrow={{ label: group.eyebrow }}
+                title={group.title}
+                body={group.body}
+                action={group.action}
+                facts={group.facts}
+                visual={<SampleVisual label={group.visualLabel}>{GROUP_VISUALS[group.id]}</SampleVisual>}
+              />
+            </div>
+          </MarketingSection>
+        ))}
+
+        <MarketingSection id={HOW_IT_WORKS.id} tone="surface" labelledBy={`${HOW_IT_WORKS.id}-title`}>
+          <div className="flex flex-col gap-12">
+            <ChapterHeader
+              id={`${HOW_IT_WORKS.id}-title`}
+              number={HOW_IT_WORKS.number}
+              eyebrow={HOW_IT_WORKS.eyebrow}
+              title={HOW_IT_WORKS.title}
+            />
+            <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {HOW_IT_WORKS.steps.map((step, index) => (
+                <Card key={step.title} as="li">
+                  <div className="flex flex-col gap-3">
+                    <span className="text-label text-brand">{String(index + 1).padStart(2, '0')}</span>
+                    <Heading level="item" as="h3">
+                      {step.title}
+                    </Heading>
+                    <p className="text-small text-ink-secondary">{step.body}</p>
+                  </div>
+                </Card>
+              ))}
+            </ol>
+          </div>
+        </MarketingSection>
+
+        <MarketingSection id={WHO_CAN_MOVE.id} labelledBy={`${WHO_CAN_MOVE.id}-title`}>
+          <div className="flex flex-col gap-12">
+            <ChapterHeader
+              id={`${WHO_CAN_MOVE.id}-title`}
+              number={WHO_CAN_MOVE.number}
+              eyebrow={WHO_CAN_MOVE.eyebrow}
+              title={WHO_CAN_MOVE.title}
+              lead={WHO_CAN_MOVE.lead}
+            />
+            <div className="flex flex-col gap-6">
+              {WHO_CAN_MOVE.cards.map((card) => (
+                <FactsCard
+                  key={card.eyebrow}
+                  eyebrow={card.eyebrow}
+                  rows={[
+                    { label: WHO_CAN_MOVE.rowLabels.who, value: card.who },
+                    { label: WHO_CAN_MOVE.rowLabels.away, value: card.away },
+                    {
+                      label: WHO_CAN_MOVE.rowLabels.source,
+                      value: (
+                        <ButtonLink variant="link" external href={card.href}>
+                          {WHO_CAN_MOVE.sourceLink}
+                          <span className="sr-only"> {card.sourceFor}</span>
+                        </ButtonLink>
+                      ),
+                    },
+                  ]}
+                />
+              ))}
+            </div>
+            <div>
+              <ButtonLink variant="secondary" to={WHO_CAN_MOVE.more.href}>
+                {WHO_CAN_MOVE.more.label}
+              </ButtonLink>
+            </div>
+          </div>
+        </MarketingSection>
+
+        <MarketingSection id={WHAT_IT_COSTS.id} tone="surface" labelledBy={`${WHAT_IT_COSTS.id}-title`}>
+          <div className="flex flex-col items-start gap-6">
+            <ChapterHeader
+              id={`${WHAT_IT_COSTS.id}-title`}
+              number={WHAT_IT_COSTS.number}
+              eyebrow={WHAT_IT_COSTS.eyebrow}
+              title={WHAT_IT_COSTS.title}
+              lead={WHAT_IT_COSTS.body}
+            />
+            <ButtonLink variant="secondary" to={WHAT_IT_COSTS.more.href}>
+              {WHAT_IT_COSTS.more.label}
+            </ButtonLink>
+          </div>
+        </MarketingSection>
+
+        <MarketingSection id={HOME_QUESTIONS.id} labelledBy={`${HOME_QUESTIONS.id}-title`}>
+          <div className="flex flex-col gap-12">
+            <ChapterHeader
+              id={`${HOME_QUESTIONS.id}-title`}
+              number={HOME_QUESTIONS.number}
+              eyebrow={HOME_QUESTIONS.eyebrow}
+              title={HOME_QUESTIONS.title}
+            />
+            <NumberedFaq items={[...HOME_QUESTIONS.items]} />
+            <div>
+              <ButtonLink variant="secondary" to={HOME_QUESTIONS.more.href}>
+                {HOME_QUESTIONS.more.label}
+              </ButtonLink>
+            </div>
+          </div>
+        </MarketingSection>
+
+        <ClosingBand
+          eyebrow={HOME_CLOSING.eyebrow}
+          headline={HOME_CLOSING.headline}
+          accent={HOME_CLOSING.accent}
+          lead={HOME_CLOSING.lead}
+          primary={HOME_CLOSING.primary}
+          secondary={HOME_CLOSING.secondary}
+          facts={HOME_CLOSING.facts}
+        />
+      </main>
+      <MarketingFooter />
+    </div>
   );
 }

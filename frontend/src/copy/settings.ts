@@ -1,0 +1,30 @@
+import { NETWORK_NAME } from './network';
+
+export const SETTINGS = {
+  title: 'Settings',
+  description: 'Your connected wallet, the network, and display choices.',
+  walletTitle: 'Wallet',
+  walletDescription: 'The wallet FlowGuard is connected to in this browser.',
+  address: 'Address',
+  connectedWith: 'Connected with',
+  publicKey: 'Public key',
+  publicKeyLine: 'Send this to whoever is creating a vault with you as a signer.',
+  copyPublicKey: 'Copy public key',
+  noPublicKey: "Your wallet didn't share it",
+  balance: 'Balance',
+  disconnectLine: `Disconnecting only affects this browser. Your vaults, streams and payments stay on ${NETWORK_NAME}.`,
+  disconnectWallet: 'Disconnect wallet',
+  networkTitle: 'Network',
+  networkLine: `This version of FlowGuard runs on ${NETWORK_NAME}. Your wallet needs to use the same network.`,
+  mismatchTitle: 'Your wallet is on another network',
+  mismatch: (walletNetwork: string, appNetwork: string) =>
+    `Your wallet is on ${walletNetwork}, but FlowGuard is on ${appNetwork}. Switch your wallet to ${appNetwork} before you approve anything.`,
+  displayTitle: 'Display',
+  displayDescription: 'Choices saved in this browser only.',
+  collapseSidebar: 'Collapse the sidebar',
+  collapseSidebarLine: 'Show only icons in the sidebar on wide screens.',
+  saveFailed: "Your browser is blocking site storage, so this choice won't be remembered next time.",
+  notificationsTitle: 'Notifications',
+  notificationsLine: 'Not available yet.',
+  unknownWallet: 'Wallet',
+} as const;

@@ -1,930 +1,662 @@
-/**
- * RewardDetailPage - A→Z detail view for a single Reward campaign.
- *
- * Sections mirror AirdropDetailPage: back link, header + status badge, action
- * cluster (role + state gated), feedback banner, hero stats, two-column
- * details/schedule, on-chain links + activity timeline, distribution history.
- *
- * Role gates:
- *   - Creator: Fund (PENDING) → Distribute (ACTIVE) → Pause (ACTIVE) →
- *     Cancel (ACTIVE | PAUSED).
- *   - Non-creator: read-only. Rewards are creator-pushed, not pull-claimed.
- */
-
-import {
-  ChangeEvent,
-  FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import {
-  AlertCircle,
-  ArrowLeft,
-  Award,
-  Calendar,
-  Coins,
-  DollarSign,
-  ExternalLink,
-  History,
-  Pause,
-  Send,
-  Trophy,
-  Users,
-  Wallet,
-  X,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { FormEvent } from 'react';
+import { useParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { TwoColumn } from '../components/layout/TwoColumn';
+import { ActivityList } from '../components/ui/ActivityList';
+import { Address } from '../components/ui/Address';
+import { AddressInput } from '../components/ui/AddressInput';
+import { Amount } from '../components/ui/Amount';
+import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
+import { ButtonLink } from '../components/ui/ButtonLink';
 import { Card } from '../components/ui/Card';
-import { Input } from '../components/ui/Input';
-import { SkeletonCard, SkeletonStats } from '../components/ui/Skeleton';
+import { Code } from '../components/ui/Code';
+import { CopyButton } from '../components/ui/CopyButton';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorState } from '../components/ui/ErrorState';
+import { ErrorSummary } from '../components/ui/ErrorSummary';
+import { Heading } from '../components/ui/Heading';
+import { ArrowUpFromLine } from '../components/ui/Icon';
+import { InsetBlock } from '../components/ui/InsetBlock';
+import { List, type Column } from '../components/ui/List';
+import { Notice } from '../components/ui/Notice';
+import { ManageActions } from '../components/ui/ManageActions';
+import { Panel } from '../components/ui/Panel';
+import { ProgressMeter } from '../components/ui/ProgressMeter';
+import { Skeleton } from '../components/ui/Skeleton';
+import { TransactionReview, type TxStep } from '../components/ui/TransactionReview';
+import { TxLink } from '../components/ui/TxLink';
+import type { Asset } from '../components/ui/types';
 import { useNetwork } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
+import { ACTIONS } from '../copy/common';
+import { asFlowError, type FlowError } from '../copy/errors';
+import { toEventKind, type ActivityEvent } from '../copy/events';
+import { formatAmount, formatDate, formatShortId } from '../copy/format';
 import {
-  cancelRewardOnChain,
-  distributeRewardOnChain,
-  fundRewardContract,
-  getExplorerTxUrl,
-  pauseRewardOnChain,
-} from '../utils/blockchain';
-import { formatLogicalId } from '../utils/display';
-import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
-import { toUserFacingError } from '../utils/userError';
-import { fetchReward } from '../services/rewardApi';
-import type {
-  RewardActivityEvent,
-  RewardDistributionRow,
-  RewardRow,
+  REWARD_DETAIL,
+  REWARD_TYPE,
+  budgetUsed,
+  cancelConsequence,
+  endedLine,
+  fundButton,
+  fundLine,
+  overBudget,
+  overLimit,
+  sendButton,
+  sendLine,
+  sendPlan,
+  sendsFrom,
+  stateLine,
+  tooManyDecimals,
+  upTo,
+  viewerLine,
+  viewerWho,
+} from '../copy/rewards';
+import {
+  fetchReward,
+  type RewardActivityEvent,
+  type RewardDistributionRow,
+  type RewardRow,
+  type RewardStatus,
 } from '../services/rewardApi';
+import { cancelRewardOnChain, distributeRewardOnChain, fundRewardContract, setPausedOnChain } from '../utils/blockchain';
+import { formatLogicalId } from '../utils/display';
+import {
+  amountEntry,
+  campaignAsset,
+  campaignStatus,
+  parseAmount,
+  parsedUnits,
+  storedUnits,
+  unitsToStored,
+} from '../utils/campaignAmounts';
+import { resolveTokenMeta, type TokenMeta } from '../utils/tokenMeta';
 
-type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
+const ADDRESS_PREFIX = { mainnet: 'bitcoincash', chipnet: 'bchtest' } as const;
+const BCH: Asset = { kind: 'bch' };
 
-interface FeedbackState {
-  tone: FeedbackTone;
-  title: string;
-  description?: string;
-  details?: string;
-  txHash?: string;
+type ActionResult = { txHash: string; confirmed: boolean };
+
+function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  return Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
 }
 
-type RewardAction = 'fund' | 'distribute' | 'pause' | 'cancel';
-
-const FEEDBACK_TONE_CLASSES: Record<FeedbackTone, string> = {
-  success: 'border-primary/30 bg-primary/5 text-primary',
-  warning: 'border-secondary/30 bg-secondary/5 text-secondary',
-  error: 'border-error/30 bg-error/5 text-error',
-  info: 'border-border bg-surfaceAlt text-textPrimary',
-};
-
-function buildErrorFeedback(title: string, error: unknown, fallback: string): FeedbackState {
-  const parsed = toUserFacingError(error, fallback);
-  return {
-    tone: 'error',
-    title,
-    description: parsed.message,
-    details: parsed.details,
-  };
+function withPrefix(address: string, network: 'mainnet' | 'chipnet'): string {
+  const value = address.trim();
+  return value.includes(':') ? value : `${ADDRESS_PREFIX[network]}:${value}`;
 }
 
-function formatEventLabel(eventType: string): string {
-  switch (eventType) {
-    case 'created':
-      return 'Reward Created';
-    case 'funded':
-      return 'Reward Funded';
-    case 'distribute':
-    case 'distributed':
-      return 'Reward Distributed';
-    case 'paused':
-      return 'Reward Paused';
-    case 'resumed':
-      return 'Reward Resumed';
-    case 'cancelled':
-      return 'Reward Cancelled';
-    default:
-      return eventType
-        .split('_')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
-  }
+function toActivity(
+  events: RewardActivityEvent[],
+  campaign: RewardRow,
+  asset: Asset,
+  viewer: string | null,
+): ActivityEvent[] {
+  return events
+    .map((event) => {
+      const kind = toEventKind(event.event_type, 'rewardProgram');
+      const withAmount = (kind === 'funded' || kind === 'cancelled' || kind === 'rewardSent') && event.amount !== null;
+      return {
+        id: event.id,
+        kind,
+        object: {
+          kind: 'rewardProgram' as const,
+          owner: { address: campaign.creator, isYou: sameAddress(campaign.creator, viewer) },
+        },
+        at: event.created_at,
+        actor: event.actor ? { address: event.actor, isYou: sameAddress(event.actor, viewer) } : undefined,
+        amount: withAmount
+          ? { value: formatAmount(storedUnits(event.amount, campaign), asset, { unit: false }) ?? '0', asset }
+          : undefined,
+        txid: event.tx_hash ?? undefined,
+      };
+    });
 }
 
-function statusBadgeClasses(status: string): string {
-  switch (status) {
-    case 'ACTIVE':
-      return 'bg-accent/20 text-accent';
-    case 'PAUSED':
-      return 'bg-secondary/20 text-textPrimary border border-secondary/40';
-    case 'COMPLETED':
-      return 'bg-primary/20 text-primary';
-    case 'CANCELLED':
-      return 'bg-error/15 text-error';
-    case 'PENDING':
-    default:
-      return 'bg-surfaceAlt text-textPrimary border border-border';
-  }
-}
+type Load =
+  | { state: 'loading' }
+  | { state: 'error'; error: FlowError }
+  | { state: 'ready'; campaign: RewardRow; distributions: RewardDistributionRow[]; events: RewardActivityEvent[] };
 
-/**
- * Reward campaign detail page. Lazy-loaded in Phase 3.
- */
+type Review = 'fund' | 'send' | 'pause' | 'resume' | 'cancel' | null;
+type SendInput = { recipient: string; amount: number; units: bigint };
+
 export default function RewardDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const location = useLocation();
   const wallet = useWallet();
   const network = useNetwork();
 
-  const routeState = location.state as { freshCreate?: boolean } | null;
+  const [load, setLoad] = useState<Load>({ state: 'loading' });
+  const [tokenMeta, setTokenMeta] = useState<TokenMeta | null>(null);
+  const [review, setReview] = useState<Review>(null);
+  const [recipient, setRecipient] = useState('');
+  const [recipientValid, setRecipientValid] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [sendErrors, setSendErrors] = useState<{ recipient?: string; amount?: string }>({});
+  const [sendSummary, setSendSummary] = useState<string | null>(null);
+  const [sendInput, setSendInput] = useState<SendInput | null>(null);
 
-  const [campaign, setCampaign] = useState<RewardRow | null>(null);
-  const [distributions, setDistributions] = useState<RewardDistributionRow[]>([]);
-  const [events, setEvents] = useState<RewardActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState<RewardAction | null>(null);
-  const [isFundingSyncing, setIsFundingSyncing] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackState | null>(
-    routeState?.freshCreate
-      ? {
-          tone: 'info',
-          title: 'Reward campaign created. Funding is the next step.',
-          description:
-            'The campaign record is live now. Fund the contract from this page to unlock distributions.',
-        }
-      : null,
-  );
-
-  const [distributeRecipient, setDistributeRecipient] = useState('');
-  const [distributeAmount, setDistributeAmount] = useState('');
-  const [distributeError, setDistributeError] = useState<string | null>(null);
-
-  const refreshCampaign = useCallback(async (): Promise<RewardRow | null> => {
+  const refresh = useCallback(async (): Promise<RewardStatus | null> => {
     if (!id) return null;
     const data = await fetchReward(id);
-    setCampaign(data.campaign ?? null);
-    setDistributions(data.distributions ?? []);
-    setEvents(data.events ?? []);
-    return data.campaign ?? null;
+    setLoad({ state: 'ready', campaign: data.campaign, distributions: data.distributions, events: data.events });
+    return data.campaign.status;
   }, [id]);
 
-  const pollForCampaignStatus = useCallback(
-    async (targetStatuses: string[], attempts = 8, delayMs = 1500): Promise<RewardRow | null> => {
-      setIsFundingSyncing(true);
-      try {
-        for (let attempt = 1; attempt <= attempts; attempt += 1) {
-          const latest = await refreshCampaign();
-          if (latest && targetStatuses.includes(latest.status)) {
-            return latest;
-          }
-          if (attempt < attempts) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-        }
-        return null;
-      } finally {
-        setIsFundingSyncing(false);
-      }
-    },
-    [refreshCampaign],
-  );
+  const reload = useCallback(async (): Promise<void> => {
+    setLoad({ state: 'loading' });
+    try {
+      await refresh();
+    } catch (error) {
+      setLoad({ state: 'error', error: asFlowError(error) });
+    }
+  }, [refresh]);
 
   useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
+    void reload();
+  }, [reload]);
 
-    const load = async () => {
-      try {
-        setLoading(true);
-        await refreshCampaign();
-      } catch (error) {
-        if (cancelled) return;
-        // eslint-disable-next-line no-console
-        console.error('[RewardDetailPage] Failed to load campaign:', error);
-        setFeedback(
-          buildErrorFeedback(
-            'Failed to load reward campaign.',
-            error,
-            'Try refreshing the page.',
-          ),
-        );
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
+  const tokenCategory = load.state === 'ready' && load.campaign.token_type !== 'BCH' ? load.campaign.token_category : null;
 
-    load();
-
+  useEffect(() => {
+    if (!tokenCategory) return undefined;
+    let current = true;
+    resolveTokenMeta(tokenCategory, network)
+      .then((meta) => {
+        if (current) setTokenMeta(meta);
+      })
+      .catch(() => {
+        if (current) setTokenMeta(null);
+      });
     return () => {
-      cancelled = true;
+      current = false;
     };
-  }, [id, refreshCampaign]);
+  }, [tokenCategory, network]);
 
-  const isCreator = useMemo(() => {
-    if (!campaign || !wallet.address) return false;
-    return wallet.address.toLowerCase() === String(campaign.creator || '').toLowerCase();
-  }, [campaign, wallet.address]);
+  const refreshQuietly = useCallback(() => {
+    void refresh().catch(() => null);
+  }, [refresh]);
 
-  const remainingPool = useMemo(() => {
-    if (!campaign) return 0;
-    return Math.max(0, (campaign.total_pool ?? 0) - (campaign.distributed_total ?? 0));
-  }, [campaign]);
-
-  const drawdownPercent = useMemo(() => {
-    if (!campaign || !campaign.total_pool) return 0;
-    return Math.min(100, (campaign.distributed_total / campaign.total_pool) * 100);
-  }, [campaign]);
-
-  const requireWallet = useCallback((): boolean => {
-    if (wallet.isConnected) return true;
-    setFeedback({
-      tone: 'info',
-      title: 'Connect your wallet first.',
-      description: 'Wallet access is required before performing this action.',
-    });
-    return false;
-  }, [wallet.isConnected]);
-
-  const handleFund = async () => {
-    if (!id || !requireWallet()) return;
-    setActionLoading('fund');
-    try {
-      const result = await fundRewardContract(wallet, id);
-      await refreshCampaign();
-
-      if (result.confirmation === 'confirmed') {
-        setFeedback({
-          tone: 'success',
-          title: 'Reward funded successfully.',
-          description: 'The contract output is confirmed and the campaign can begin distributions.',
-          txHash: result.txHash,
-        });
-      } else {
-        setFeedback({
-          tone: 'warning',
-          title: 'Funding transaction broadcast. Waiting for backend confirmation.',
-          description:
-            result.detail ||
-            'The contract transaction is on-chain, but the backend has not flipped the campaign to ACTIVE yet. This page will keep checking.',
-          txHash: result.txHash,
-        });
-        const activated = await pollForCampaignStatus(['ACTIVE', 'PAUSED', 'CANCELLED']);
-        if (activated?.status === 'ACTIVE') {
-          setFeedback({
-            tone: 'success',
-            title: 'Reward campaign is now active.',
-            description: 'The funding output has been indexed and rewards can be distributed.',
-            txHash: result.txHash,
-          });
-        }
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[RewardDetailPage] Fund failed:', error);
-      setFeedback(buildErrorFeedback('Failed to fund reward.', error, 'Unable to fund reward.'));
-    } finally {
-      setActionLoading(null);
+  const waitForActive = useCallback(async () => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const status = await refresh().catch(() => null);
+      if (status && status !== 'PENDING') return;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     }
-  };
+  }, [refresh]);
 
-  const handlePause = async () => {
-    if (!id || !requireWallet()) return;
-    setActionLoading('pause');
-    try {
-      const txHash = await pauseRewardOnChain(wallet, id);
-      await refreshCampaign();
-      setFeedback({
-        tone: 'success',
-        title: 'Reward paused on-chain.',
-        description: 'Distributions are temporarily blocked. Resume from the covenant once ready.',
-        txHash,
-      });
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[RewardDetailPage] Pause failed:', error);
-      setFeedback(buildErrorFeedback('Failed to pause reward.', error, 'Unable to pause reward.'));
-    } finally {
-      setActionLoading(null);
-    }
-  };
+  const ready = load.state === 'ready' ? load : null;
+  const campaign = ready?.campaign ?? null;
+  const asset = useMemo(() => (campaign ? campaignAsset(campaign, tokenMeta) : BCH), [campaign, tokenMeta]);
 
-  const handleCancel = async () => {
-    if (!id || !requireWallet() || !campaign) return;
-    const confirmed = window.confirm(
-      `Cancel this reward campaign?\n\nRemaining pool (${formatTokenAmount(
-        remainingPool,
-        campaign.token_type,
-        campaign.token_category,
-      )}) will be refunded to the original authority address. This action is irreversible.`,
-    );
-    if (!confirmed) return;
-
-    setActionLoading('cancel');
-    try {
-      const result = await cancelRewardOnChain(wallet, id);
-      setFeedback({
-        tone: 'success',
-        title: 'Reward campaign cancelled.',
-        description:
-          result.warning ||
-          (result.cancelReturnAddress
-            ? `Remaining pool refunded to ${result.cancelReturnAddress}.`
-            : 'Remaining pool refunded to the authority address.'),
-        txHash: result.txHash,
-      });
-      navigate('/rewards');
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[RewardDetailPage] Cancel failed:', error);
-      setFeedback(
-        buildErrorFeedback('Failed to cancel reward.', error, 'Unable to cancel reward.'),
-      );
-      setActionLoading(null);
-    }
-  };
-
-  const handleDistribute = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!id || !campaign || !requireWallet()) return;
-
-    const recipient = distributeRecipient.trim();
-    const amount = Number.parseFloat(distributeAmount);
-
-    if (!recipient) {
-      setDistributeError('Recipient address is required.');
-      return;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setDistributeError('Reward amount must be greater than 0.');
-      return;
-    }
-    if (amount > campaign.max_reward_amount) {
-      setDistributeError(
-        `Amount cannot exceed the max reward (${formatTokenAmount(campaign.max_reward_amount, campaign.token_type, campaign.token_category)}).`,
-      );
-      return;
-    }
-    if (amount > remainingPool) {
-      setDistributeError(
-        `Amount exceeds remaining pool (${formatTokenAmount(remainingPool, campaign.token_type, campaign.token_category)}).`,
-      );
-      return;
-    }
-
-    setDistributeError(null);
-    setActionLoading('distribute');
-    try {
-      const txHash = await distributeRewardOnChain(wallet, id, recipient, amount);
-      await refreshCampaign();
-      setFeedback({
-        tone: 'success',
-        title: `Distributed ${formatTokenAmount(amount, campaign.token_type, campaign.token_category)}.`,
-        description: `Reward sent to ${recipient.slice(0, 14)}…${recipient.slice(-10)}.`,
-        txHash,
-      });
-      setDistributeRecipient('');
-      setDistributeAmount('');
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[RewardDetailPage] Distribute failed:', error);
-      setFeedback(
-        buildErrorFeedback(
-          'Failed to distribute reward.',
-          error,
-          'Unable to distribute reward.',
-        ),
-      );
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  if (loading) {
+  if (load.state === 'loading') {
     return (
-      <div className="min-h-screen bg-background">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8 space-y-6">
-          <SkeletonCard lines={2} />
-          <SkeletonStats count={4} />
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
-            <div className="lg:col-span-2 space-y-4">
-              <SkeletonCard lines={4} />
-              <SkeletonCard lines={3} />
+      <PageContainer>
+        <Stack>
+          <Skeleton kind="text" lines={2} />
+          <TwoColumn
+            main={
+              <Panel>
+                <Skeleton kind="text" lines={4} />
+              </Panel>
+            }
+            side={
+              <Panel>
+                <Skeleton kind="text" lines={5} />
+              </Panel>
+            }
+          />
+        </Stack>
+      </PageContainer>
+    );
+  }
+
+  if (load.state === 'error' || !ready || !campaign) {
+    const error = load.state === 'error' ? load.error : null;
+    return (
+      <PageContainer>
+        <Panel>
+          <ErrorState
+            title={REWARD_DETAIL.loadFailed}
+            reason={error?.message}
+            onRetry={error?.code === 'NOT_FOUND' ? undefined : reload}
+            action={
+              error?.code === 'NOT_FOUND' ? (
+                <ButtonLink variant="secondary" to="/rewards">
+                  {REWARD_DETAIL.back}
+                </ButtonLink>
+              ) : undefined
+            }
+          />
+        </Panel>
+      </PageContainer>
+    );
+  }
+
+  const { distributions, events } = ready;
+  const isSender = sameAddress(wallet.address, campaign.creator);
+  const title = campaign.title?.trim() || REWARD_DETAIL.untitled;
+  const budgetUnits = storedUnits(campaign.total_pool, campaign);
+  const paidUnits = storedUnits(campaign.distributed_total, campaign);
+  const limitUnits = storedUnits(campaign.max_reward_amount, campaign);
+  const leftUnits = budgetUnits > paidUnits ? budgetUnits - paidUnits : 0n;
+  const maxUnits = leftUnits < limitUnits ? leftUnits : limitUnits;
+  const budget = formatAmount(budgetUnits, asset) ?? '';
+  const left = formatAmount(leftUnits, asset) ?? '';
+  const limit = formatAmount(limitUnits, asset) ?? '';
+  const paid = formatAmount(paidUnits, asset) ?? '';
+  const budgetValue = formatAmount(budgetUnits, asset, { unit: false }) ?? '0';
+  const leftValue = formatAmount(leftUnits, asset, { unit: false }) ?? '0';
+  const sentCount = campaign.distributed_count ?? distributions.length;
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const notStarted = Boolean(campaign.start_date && nowSeconds < campaign.start_date);
+  const ended = Boolean(campaign.end_date && campaign.end_date > 0 && nowSeconds > campaign.end_date);
+  const status = campaignStatus(campaign);
+  const canCancel = isSender && (campaign.status === 'ACTIVE' || campaign.status === 'PAUSED') && leftUnits > 0n;
+  const canPause = canCancel && campaign.status === 'ACTIVE' && !ended;
+  const canResume = isSender && campaign.status === 'PAUSED';
+  const startText = formatDate(campaign.start_date);
+  const endText = formatDate(campaign.end_date ?? null);
+  const contract = campaign.contract_address ?? null;
+  const entry = amountEntry(campaign, asset);
+  const parsed = parseAmount(amount, entry.decimals);
+  const typed = parsedUnits(parsed);
+
+  const submitSend = (event: FormEvent): void => {
+    event.preventDefault();
+    const nextErrors: { recipient?: string; amount?: string } = {};
+    if (!recipient.trim()) nextErrors.recipient = REWARD_DETAIL.send.recipientMissing;
+    else if (!recipientValid) nextErrors.recipient = REWARD_DETAIL.send.recipientHelper;
+    if (parsed && 'tooPrecise' in parsed) nextErrors.amount = tooManyDecimals(entry.decimals);
+    else if (typed === null || typed <= 0n) nextErrors.amount = REWARD_DETAIL.send.amountMissing;
+    else if (typed > limitUnits) nextErrors.amount = overLimit(limit);
+    else if (typed > leftUnits) nextErrors.amount = overBudget(left);
+    setSendErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0 || typed === null) {
+      setSendSummary(REWARD_DETAIL.send.fixFields);
+      return;
+    }
+    setSendSummary(null);
+    setSendInput({ recipient: withPrefix(recipient, network), amount: unitsToStored(typed, campaign), units: typed });
+    setReview('send');
+  };
+
+  const runAction = (action: () => Promise<ActionResult>, after?: (result: ActionResult) => void) =>
+    async (report: (step: TxStep) => void): Promise<{ txid?: string }> => {
+      const result = await action();
+      if (result.confirmed) report({ step: 'confirmed', status: 'done' });
+      refreshQuietly();
+      after?.(result);
+      return { txid: result.txHash };
+    };
+
+  const sentColumns: Column<RewardDistributionRow>[] = [
+    {
+      key: 'recipient',
+      header: REWARD_DETAIL.sent.recipient,
+      primary: true,
+      cell: (row) => <Address value={row.recipient} isYou={sameAddress(row.recipient, wallet.address)} />,
+    },
+    {
+      key: 'amount',
+      header: REWARD_DETAIL.sent.amount,
+      align: 'end',
+      mobile: 'bottom-start',
+      cell: (row) => <Amount value={storedUnits(row.amount, campaign)} asset={asset} />,
+    },
+    {
+      key: 'sent',
+      header: REWARD_DETAIL.sent.sentOn,
+      mobile: 'bottom-end',
+      cell: (row) => formatDate(row.distributed_at),
+    },
+    {
+      key: 'tx',
+      header: REWARD_DETAIL.sent.transaction,
+      mobile: 'top',
+      cell: (row) => (row.tx_hash ? <TxLink txid={row.tx_hash} network={network} /> : null),
+    },
+  ];
+
+  const cancelButton = (
+    <Button variant="danger-quiet" onClick={() => setReview('cancel')}>
+      {REWARD_DETAIL.manage.cancel}
+    </Button>
+  );
+
+  const actionCard = (() => {
+    if (!isSender) return null;
+    if (campaign.status === 'PENDING') {
+      return (
+        <Panel title={REWARD_DETAIL.fund.title} description={fundLine(budget)}>
+          <Stack gap={4}>
+            <p className="text-small text-ink-secondary">{REWARD_DETAIL.fund.twoSteps}</p>
+            <div>
+              {contract ? (
+                <Button variant="primary" size="lg" leadingIcon={ArrowUpFromLine} onClick={() => setReview('fund')}>
+                  {fundButton(budget)}
+                </Button>
+              ) : (
+                <Button variant="primary" size="lg" leadingIcon={ArrowUpFromLine} disabled disabledReason={REWARD_DETAIL.fund.noAddress}>
+                  {fundButton(budget)}
+                </Button>
+              )}
             </div>
-            <SkeletonCard lines={5} />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!campaign) {
+          </Stack>
+        </Panel>
+      );
+    }
+    if (campaign.status === 'PAUSED') {
+      return (
+        <Panel title={REWARD_DETAIL.send.title}>
+          <Stack gap={4}>
+            <Notice tone="warning" title={REWARD_DETAIL.send.pausedTitle}>
+              {REWARD_DETAIL.send.pausedLine}
+            </Notice>
+            <div className="flex flex-wrap gap-3">
+              {canResume ? (
+                <Button variant="primary" onClick={() => setReview('resume')}>
+                  {REWARD_DETAIL.manage.resume}
+                </Button>
+              ) : null}
+              {canCancel ? cancelButton : null}
+            </div>
+          </Stack>
+        </Panel>
+      );
+    }
+    if (campaign.status !== 'ACTIVE') return null;
+    if (leftUnits === 0n) return <Notice tone="success" title={REWARD_DETAIL.send.usedUp} />;
+    if (ended) {
+      return (
+        <Panel title={REWARD_DETAIL.send.title}>
+          <Stack gap={4}>
+            <p className="text-body text-ink-secondary">{endedLine(left)}</p>
+            {canCancel ? <div>{cancelButton}</div> : null}
+          </Stack>
+        </Panel>
+      );
+    }
+    if (notStarted) {
+      return (
+        <Panel title={REWARD_DETAIL.send.title} description={sendLine(limit, left)}>
+          <Notice tone="info" title={sendsFrom(startText ?? '')} />
+        </Panel>
+      );
+    }
+    const sendLabel = typed !== null && typed > 0n ? sendButton(formatAmount(typed, asset) ?? '') : REWARD_DETAIL.send.submit;
     return (
-      <div className="p-8">
-        <Card padding="xl" className="text-center">
-          <Trophy className="w-12 h-12 text-textMuted mx-auto mb-4" />
-          <h2 className="text-xl md:text-2xl font-display font-bold text-textPrimary mb-2">
-            Reward not found
-          </h2>
-          <p className="text-textMuted font-mono mb-6">
-            This reward campaign does not exist or you don&apos;t have access.
-          </p>
-          <Button onClick={() => navigate('/rewards')}>Back to Rewards</Button>
-        </Card>
-      </div>
+      <Panel title={REWARD_DETAIL.send.title} description={sendLine(limit, left)}>
+        <form noValidate onSubmit={submitSend}>
+          <Stack gap={4}>
+            <AddressInput
+              id="reward-recipient"
+              label={REWARD_DETAIL.send.recipientLabel}
+              value={recipient}
+              onChange={(value) => {
+                setRecipient(value);
+                setSendErrors((prev) => ({ ...prev, recipient: undefined }));
+              }}
+              onValidChange={setRecipientValid}
+              network={network}
+              accept="p2pkh"
+              helper={REWARD_DETAIL.send.recipientHelper}
+              error={sendErrors.recipient}
+            />
+            <AmountInput
+              id="reward-amount"
+              label={REWARD_DETAIL.send.amountLabel}
+              asset={entry.asset}
+              unit={entry.unit}
+              value={amount}
+              onChange={(value) => {
+                setAmount(value);
+                setSendErrors((prev) => ({ ...prev, amount: undefined }));
+              }}
+              helper={upTo(formatAmount(maxUnits, asset) ?? '')}
+              error={sendErrors.amount}
+            />
+            {sendSummary ? (
+              <ErrorSummary
+                title={REWARD_DETAIL.send.errorTitle}
+                message={sendSummary}
+                fields={[
+                  ...(sendErrors.recipient ? [{ label: REWARD_DETAIL.send.recipientLabel, id: 'reward-recipient' }] : []),
+                  ...(sendErrors.amount ? [{ label: REWARD_DETAIL.send.amountLabel, id: 'reward-amount' }] : []),
+                ]}
+              />
+            ) : null}
+            <div>
+              <Button variant="primary" type="submit">
+                {sendLabel}
+              </Button>
+            </div>
+          </Stack>
+        </form>
+      </Panel>
     );
-  }
+  })();
+
+  const showManage = canCancel && campaign.status === 'ACTIVE' && !ended;
+
+  const details = [
+    { label: REWARD_DETAIL.details.sentBy, value: <Address value={campaign.creator} isYou={isSender} /> },
+    { label: REWARD_DETAIL.details.type, value: REWARD_TYPE[campaign.reward_category] ?? REWARD_TYPE.CUSTOM },
+    {
+      label: REWARD_DETAIL.details.paidIn,
+      value: asset.kind === 'bch' ? 'BCH' : asset.symbol || REWARD_DETAIL.details.tokenId,
+    },
+    ...(asset.kind === 'token'
+      ? [
+          {
+            label: REWARD_DETAIL.details.tokenId,
+            value: (
+              <span className="inline-flex items-center gap-1">
+                <Code>{formatShortId(asset.tokenId)}</Code>
+                <CopyButton value={asset.tokenId} label={ACTIONS.copyId} />
+              </span>
+            ),
+          },
+        ]
+      : []),
+    { label: REWARD_DETAIL.details.budget, value: <Amount value={budgetUnits} asset={asset} /> },
+    { label: REWARD_DETAIL.details.limit, value: <Amount value={limitUnits} asset={asset} /> },
+    { label: REWARD_DETAIL.details.starts, value: startText },
+    { label: REWARD_DETAIL.details.ends, value: endText ?? REWARD_DETAIL.details.noEnd },
+    { label: REWARD_DETAIL.details.programId, value: campaign.campaign_id ? <Code>{formatLogicalId(campaign.campaign_id)}</Code> : null },
+    { label: REWARD_DETAIL.details.address, value: contract ? <Address value={contract} /> : null },
+    { label: REWARD_DETAIL.details.funding, value: campaign.tx_hash ? <TxLink txid={campaign.tx_hash} network={network} /> : null },
+  ];
+
+  const activity = toActivity(events, campaign, asset, wallet.address ?? null);
+  const description = isSender ? REWARD_DETAIL.senderLine : viewerLine(campaign.creator);
 
   return (
-    <div className="px-4 py-6 md:px-8 md:py-8">
-      <div className="max-w-5xl mx-auto">
-        {/* Back link */}
-        <div className="mb-6">
-          <button
-            type="button"
-            onClick={() => navigate('/rewards')}
-            className="inline-flex items-center gap-2 text-primary hover:text-primaryHover font-mono mb-4 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Rewards
-          </button>
-
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-3 mb-2 flex-wrap">
-                <h1 className="text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-display font-bold text-textPrimary">
-                  {campaign.title}
-                </h1>
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-mono font-bold uppercase ${statusBadgeClasses(
-                    campaign.status,
-                  )}`}
-                >
-                  {campaign.status}
-                </span>
-                <span className="px-3 py-1 rounded-full text-xs font-mono uppercase border border-border text-textMuted">
-                  {campaign.reward_category}
-                </span>
-              </div>
-              {campaign.description && (
-                <p className="text-textMuted font-mono mb-2 break-words">{campaign.description}</p>
-              )}
-              <p className="text-sm text-textMuted font-mono">
-                {formatLogicalId(campaign.campaign_id)}
-              </p>
-            </div>
-
-            <div className="flex gap-3 flex-wrap">
-              {isCreator && campaign.status === 'PENDING' && (
-                <Button
-                  variant="primary"
-                  onClick={handleFund}
-                  disabled={actionLoading === 'fund'}
-                  loading={actionLoading === 'fund'}
-                  className="flex items-center gap-2"
-                >
-                  <Wallet className="w-4 h-4" />
-                  Fund Reward
-                </Button>
-              )}
-
-              {isCreator && campaign.status === 'ACTIVE' && (
-                <Button
-                  variant="outline"
-                  onClick={handlePause}
-                  disabled={actionLoading === 'pause'}
-                  loading={actionLoading === 'pause'}
-                  className="flex items-center gap-2"
-                >
-                  <Pause className="w-4 h-4" />
-                  Pause
-                </Button>
-              )}
-
-              {isCreator && (campaign.status === 'ACTIVE' || campaign.status === 'PAUSED') && (
-                <Button
-                  variant="outline"
-                  onClick={handleCancel}
-                  disabled={actionLoading === 'cancel'}
-                  loading={actionLoading === 'cancel'}
-                  className="flex items-center gap-2 text-error border-error hover:bg-error/5"
-                >
-                  <X className="w-4 h-4" />
-                  Cancel
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Feedback banner */}
-        {feedback && (
-          <Card padding="lg" className={`mb-6 border ${FEEDBACK_TONE_CLASSES[feedback.tone]}`}>
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold">{feedback.title}</p>
-                {feedback.description && (
-                  <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">
-                    {feedback.description}
-                  </p>
-                )}
-                {feedback.details && (
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
-                      Show technical details
-                    </summary>
-                    <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
-                      {feedback.details}
-                    </pre>
-                  </details>
-                )}
-                {feedback.txHash && (
-                  <a
-                    href={getExplorerTxUrl(feedback.txHash, network)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
-                  >
-                    View transaction
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                )}
-                {(actionLoading === 'fund' || isFundingSyncing) && (
-                  <p className="mt-3 text-xs font-mono uppercase tracking-[0.18em] text-textMuted">
-                    Syncing reward status…
-                  </p>
-                )}
-              </div>
-            </div>
-          </Card>
-        )}
-
-        {/* Hero progress */}
-        <Card padding="lg" className="mb-8">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-display font-bold text-textPrimary">Pool Drawdown</h3>
-            <span className="text-lg md:text-xl lg:text-2xl font-display font-bold text-primary">
-              {drawdownPercent.toFixed(1)}%
-            </span>
-          </div>
-          <div className="w-full h-4 bg-surfaceAlt rounded-full overflow-hidden mb-4 border border-border">
-            <div
-              className="h-full bg-primary transition-all duration-500"
-              style={{ width: `${drawdownPercent}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-sm font-mono text-textMuted">
-            <span>
-              {formatTokenAmount(campaign.distributed_total ?? 0, campaign.token_type, campaign.token_category)} distributed
-            </span>
-            <span>
-              {formatTokenAmount(remainingPool, campaign.token_type, campaign.token_category)} remaining
-            </span>
-          </div>
-        </Card>
-
-        {/* Stats grid */}
-        <div className="grid md:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Total Pool</span>
-              <DollarSign className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatTokenAmount(campaign.total_pool ?? 0, campaign.token_type, campaign.token_category, { noSuffix: true })}{' '}
-              <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
-            </p>
-          </Card>
-
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Max Reward</span>
-              <Trophy className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatTokenAmount(campaign.max_reward_amount ?? 0, campaign.token_type, campaign.token_category, { noSuffix: true })}{' '}
-              <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
-            </p>
-          </Card>
-
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Distributed</span>
-              <Coins className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatTokenAmount(campaign.distributed_total ?? 0, campaign.token_type, campaign.token_category, { noSuffix: true })}{' '}
-              <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
-            </p>
-          </Card>
-
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Recipients</span>
-              <Users className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {campaign.distributed_count ?? 0}
-            </p>
-          </Card>
-        </div>
-
-        {/* Creator distribution form */}
-        {isCreator && campaign.status === 'ACTIVE' && (
-          <Card padding="lg" className="mb-8">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0">
-                <Send className="w-6 h-6 text-accent" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">
-                  Distribute Reward
-                </h3>
-                <p className="text-sm text-textMuted font-mono">
-                  Pick a recipient and an amount. The covenant enforces 0 &lt; amount ≤ max reward and
-                  caps the total pool.
+    <PageContainer>
+      <PageHeader
+        title={title}
+        description={description}
+        breadcrumbs={[{ label: REWARD_DETAIL.breadcrumb, to: '/rewards' }, { label: title }]}
+        status={status}
+        role={isSender ? 'sender' : 'viewer'}
+        stateLine={campaign.status === 'PENDING' ? undefined : stateLine(left, sentCount)}
+      />
+      <TwoColumn
+        main={
+          <>
+            {actionCard}
+            {campaign.description?.trim() ? (
+              <Panel title={REWARD_DETAIL.about}>
+                <p className="whitespace-pre-line break-words text-body text-ink-secondary">{campaign.description}</p>
+              </Panel>
+            ) : null}
+            <Panel title={REWARD_DETAIL.sent.title}>
+              <Stack gap={4}>
+                <ProgressMeter
+                  label={budgetUsed(paid, budget)}
+                  value={Number(paidUnits)}
+                  max={Number(budgetUnits)}
+                />
+                <List
+                  label={REWARD_DETAIL.sent.label}
+                  columns={sentColumns}
+                  rows={distributions}
+                  rowKey={(row) => row.id}
+                  state={distributions.length > 0 ? 'ready' : 'empty'}
+                  empty={<p className="px-4 py-6 text-body text-ink-secondary">{REWARD_DETAIL.sent.empty}</p>}
+                  noResults={null}
+                  error={null}
+                />
+              </Stack>
+            </Panel>
+            <Panel title={REWARD_DETAIL.activity}>
+              <ActivityList events={activity} state="ready" network={network} />
+            </Panel>
+          </>
+        }
+        side={
+          <>
+            <Panel title={REWARD_DETAIL.details.title}>
+              <DetailList items={details} />
+            </Panel>
+            <Card>
+              <div className="flex flex-col gap-2">
+                <Heading level="item" as="h2">
+                  {REWARD_DETAIL.who.title}
+                </Heading>
+                <p className="text-small text-ink-secondary">
+                  {isSender ? REWARD_DETAIL.who.sender : viewerWho(campaign.creator)}
                 </p>
               </div>
-            </div>
-
-            <form onSubmit={handleDistribute} className="space-y-4">
-              <Input
-                label="Recipient Address"
-                placeholder="bitcoincash:qq..."
-                value={distributeRecipient}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setDistributeRecipient(e.target.value)
-                }
-                required
-              />
-
-              <Input
-                label={`Reward Amount (${tokenSymbol(campaign.token_type, campaign.token_category)})`}
-                type="number"
-                step={campaign.token_type === 'BCH' ? '0.00000001' : '1'}
-                min="0"
-                placeholder={`Up to ${campaign.max_reward_amount.toFixed(4)}`}
-                value={distributeAmount}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setDistributeAmount(e.target.value)
-                }
-                helpText={`Remaining pool: ${formatTokenAmount(remainingPool, campaign.token_type, campaign.token_category)}`}
-                required
-              />
-
-              {distributeError && (
-                <div className="rounded-lg border border-error/30 bg-error/5 p-3 text-sm font-mono text-error">
-                  {distributeError}
+            </Card>
+            {showManage ? (
+              <Card>
+                <div className="flex flex-col gap-3">
+                  <Heading level="item" as="h2">
+                    {REWARD_DETAIL.manage.title}
+                  </Heading>
+                  <ManageActions
+                    actions={[
+                      ...(canPause ? [{ key: 'pause', label: REWARD_DETAIL.manage.pause, onClick: () => setReview('pause') }] : []),
+                      { key: 'cancel', label: REWARD_DETAIL.manage.cancel, danger: true, onClick: () => setReview('cancel') },
+                    ]}
+                  />
                 </div>
-              )}
+              </Card>
+            ) : null}
+          </>
+        }
+      />
 
-              <Button
-                type="submit"
-                disabled={actionLoading === 'distribute' || remainingPool <= 0}
-                loading={actionLoading === 'distribute'}
-                className="flex items-center gap-2"
-              >
-                <Send className="w-4 h-4" />
-                Distribute Reward
-              </Button>
-            </form>
-          </Card>
-        )}
-
-        {/* Details + Schedule */}
-        <div className="grid md:grid-cols-2 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4">
-              Campaign Details
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Creator</span>
-                <p className="text-sm font-mono text-textPrimary break-all">{campaign.creator}</p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Asset</span>
-                <p className="text-sm font-mono text-textPrimary">{tokenSymbol(campaign.token_type, campaign.token_category)}</p>
-              </div>
-              {campaign.token_category && (
-                <div>
-                  <span className="block text-xs font-mono text-textMuted uppercase mb-1">
-                    Token Category
-                  </span>
-                  <p className="text-sm font-mono text-textPrimary break-all">
-                    {campaign.token_category}
-                  </p>
-                </div>
-              )}
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Status</span>
-                <p className="text-sm font-mono text-textPrimary">{campaign.status}</p>
-              </div>
-              {campaign.vault_id && (
-                <div>
-                  <span className="block text-xs font-mono text-textMuted uppercase mb-1">
-                    Vault Link
-                  </span>
-                  <p className="text-sm font-mono text-textPrimary break-all">{campaign.vault_id}</p>
-                </div>
-              )}
-            </div>
-          </Card>
-
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4 flex items-center gap-2">
-              <Calendar className="w-5 h-5" />
-              Schedule
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">
-                  Created
-                </span>
-                <p className="text-sm font-mono text-textPrimary">
-                  {new Date(campaign.created_at * 1000).toLocaleString()}
-                </p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Start</span>
-                <p className="text-sm font-mono text-textPrimary">
-                  {campaign.start_date
-                    ? new Date(campaign.start_date * 1000).toLocaleDateString()
-                    : 'Immediate'}
-                </p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">End</span>
-                <p className="text-sm font-mono text-textPrimary">
-                  {campaign.end_date
-                    ? new Date(campaign.end_date * 1000).toLocaleDateString()
-                    : 'Open-ended'}
-                </p>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        {/* On-chain + Activity */}
-        <div className="grid md:grid-cols-2 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4">On-Chain Links</h3>
-            <div className="space-y-3">
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">
-                  Contract Address
-                </span>
-                <p className="text-sm font-mono text-textPrimary break-all">
-                  {campaign.contract_address || ' - '}
-                </p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">
-                  Funding Transaction
-                </span>
-                {campaign.tx_hash ? (
-                  <a
-                    href={getExplorerTxUrl(campaign.tx_hash, network)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:text-primaryHover font-mono text-sm transition-colors"
-                  >
-                    {campaign.tx_hash.slice(0, 12)}…{campaign.tx_hash.slice(-10)}
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                ) : (
-                  <p className="text-sm font-mono text-textMuted">Not funded yet</p>
-                )}
-              </div>
-            </div>
-          </Card>
-
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4 flex items-center gap-2">
-              <History className="w-5 h-5" />
-              Activity Timeline
-            </h3>
-            {events.length === 0 ? (
-              <p className="text-sm font-mono text-textMuted">No activity events yet.</p>
-            ) : (
-              <div className="space-y-3 max-h-[18rem] overflow-y-auto pr-1">
-                {events.map((event) => (
-                  <div key={event.id} className="rounded-lg border border-border bg-surfaceAlt p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-display font-bold text-textPrimary">
-                          {formatEventLabel(event.event_type)}
-                        </p>
-                        <p className="text-xs font-mono text-textMuted">
-                          {new Date(event.created_at * 1000).toLocaleString()}
-                        </p>
-                        {event.actor && (
-                          <p className="text-xs font-mono text-textMuted mt-1 break-all">
-                            actor: {event.actor}
-                          </p>
-                        )}
-                        {typeof event.amount === 'number' && (
-                          <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {formatTokenAmount(event.amount, campaign.token_type, campaign.token_category)}
-                          </p>
-                        )}
-                      </div>
-                      {event.tx_hash && (
-                        <a
-                          href={getExplorerTxUrl(event.tx_hash, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-primary hover:text-primaryHover font-mono text-xs transition-colors"
-                        >
-                          tx
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
-
-        {/* Receipt-NFT placeholder + Distribution history */}
-        <Card padding="lg" className="mb-6 md:mb-8 border border-dashed border-border">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-full bg-secondary/10 flex items-center justify-center flex-shrink-0">
-              <Award className="w-6 h-6 text-secondary" />
-            </div>
-            <div>
-              <h4 className="font-display font-bold text-textPrimary mb-1">Receipt NFT</h4>
-              <p className="text-sm font-mono text-textMuted">
-                The reward covenant carries a mutable state NFT tracking distributed totals and
-                counts. A dedicated receipt view will surface here once decoded BCMR metadata is
-                wired up.
-              </p>
-            </div>
-          </div>
-        </Card>
-
-        <Card padding="lg">
-          <h3 className="text-xl font-display font-bold text-textPrimary mb-4">
-            Distribution History
-          </h3>
-
-          {distributions.length === 0 ? (
-            <div className="text-center py-8">
-              <Trophy className="w-12 h-12 text-textMuted mx-auto mb-3" />
-              <p className="text-textMuted font-mono">No rewards distributed yet</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">Date</th>
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">
-                      Recipient
-                    </th>
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">Amount</th>
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">
-                      Transaction
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {distributions.map((row) => (
-                    <tr
-                      key={row.id}
-                      className="border-b border-border/40 hover:bg-surfaceAlt transition-colors"
-                    >
-                      <td className="py-3 px-4 font-mono text-sm text-textPrimary">
-                        {new Date(row.distributed_at * 1000).toLocaleDateString()}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-sm text-textPrimary">
-                        {row.recipient.slice(0, 10)}…{row.recipient.slice(-8)}
-                      </td>
-                      <td className="py-3 px-4 font-display font-bold text-sm text-textPrimary">
-                        {formatTokenAmount(row.amount, campaign.token_type, campaign.token_category)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <a
-                          href={getExplorerTxUrl(row.tx_hash, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-primary hover:text-primaryHover font-mono text-sm transition-colors"
-                        >
-                          {row.tx_hash.slice(0, 10)}…{row.tx_hash.slice(-8)}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      {contract ? (
+        <TransactionReview
+          open={review === 'fund'}
+          onClose={() => setReview(null)}
+          summary={{
+            direction: 'out',
+            leavesWallet: { amount: budgetValue, asset },
+            goesTo: { address: contract, name: REWARD_DETAIL.thisProgram },
+            network,
+          }}
+          run={runAction(
+            async () => {
+              const result = await fundRewardContract(wallet, campaign.id);
+              return { txHash: result.txHash, confirmed: result.confirmation === 'confirmed' };
+            },
+            (result) => {
+              if (!result.confirmed) void waitForActive();
+            },
           )}
-        </Card>
-      </div>
-    </div>
+          next={<p>{REWARD_DETAIL.fund.next}</p>}
+        />
+      ) : null}
+
+      {sendInput ? (
+        <TransactionReview
+          open={review === 'send'}
+          onClose={() => setReview(null)}
+          plan={
+            <InsetBlock>
+              <p className="text-body text-ink">
+                {sendPlan(formatAmount(sendInput.units, asset) ?? '', sendInput.recipient)}
+              </p>
+            </InsetBlock>
+          }
+          summary={{
+            direction: 'out',
+            leavesLabel: REWARD_DETAIL.leavesProgram,
+            leavesWallet: { amount: formatAmount(sendInput.units, asset, { unit: false }) ?? '0', asset },
+            goesTo: { address: sendInput.recipient },
+            network,
+          }}
+          run={runAction(
+            async () => {
+              const result = await distributeRewardOnChain(wallet, campaign.id, sendInput.recipient, sendInput.amount);
+              return { txHash: result.txHash, confirmed: result.confirmation === 'confirmed' };
+            },
+            () => {
+              setRecipient('');
+              setAmount('');
+            },
+          )}
+          next={<p>{REWARD_DETAIL.send.next}</p>}
+        />
+      ) : null}
+
+      {canPause ? (
+        <TransactionReview
+          open={review === 'pause'}
+          onClose={() => setReview(null)}
+          title={REWARD_DETAIL.manage.pauseTitle}
+          consequence={{ tone: 'warning', body: REWARD_DETAIL.manage.pauseBody }}
+          confirmLabel={REWARD_DETAIL.manage.pause}
+          keepLabel={REWARD_DETAIL.manage.keep}
+          summary={{ direction: 'fee-only', network }}
+          run={runAction(async () => ({
+            txHash: await setPausedOnChain(wallet, 'rewards', campaign.id, 'pause'),
+            confirmed: true,
+          }))}
+          next={<p>{REWARD_DETAIL.manage.paused}</p>}
+        />
+      ) : null}
+
+      {canResume ? (
+        <TransactionReview
+          open={review === 'resume'}
+          onClose={() => setReview(null)}
+          title={REWARD_DETAIL.manage.resumeTitle}
+          consequence={{ tone: 'info', body: REWARD_DETAIL.manage.resumeBody }}
+          confirmLabel={REWARD_DETAIL.manage.resume}
+          summary={{ direction: 'fee-only', network }}
+          run={runAction(async () => ({
+            txHash: await setPausedOnChain(wallet, 'rewards', campaign.id, 'resume'),
+            confirmed: true,
+          }))}
+          next={<p>{REWARD_DETAIL.manage.resumed}</p>}
+        />
+      ) : null}
+
+      {canCancel ? (
+        <TransactionReview
+          open={review === 'cancel'}
+          onClose={() => setReview(null)}
+          title={REWARD_DETAIL.manage.cancelTitle}
+          consequence={{ tone: 'danger', body: cancelConsequence(left, campaign.creator) }}
+          confirmLabel={REWARD_DETAIL.manage.cancel}
+          keepLabel={REWARD_DETAIL.manage.keep}
+          summary={{ direction: 'returns', comesBack: { amount: leftValue, asset }, network }}
+          run={runAction(async () => {
+            const result = await cancelRewardOnChain(wallet, campaign.id);
+            return { txHash: result.txHash, confirmed: result.confirmation === 'confirmed' };
+          })}
+          next={<p>{REWARD_DETAIL.manage.cancelled}</p>}
+        />
+      ) : null}
+    </PageContainer>
   );
 }

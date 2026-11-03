@@ -1,50 +1,107 @@
-import React from 'react';
+import React, { useId } from 'react';
+import { CircleAlert, Icon } from './Icon';
+import { FIELD_CONTROL, FIELD_HEIGHT, Field } from './Field';
+import { cx } from './cx';
 
-interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+type NativeInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size' | 'className' | 'style'>;
+
+export type InputProps = NativeInputProps & {
+  label: string;
+  optional?: boolean;
+  helper?: string;
+  error?: string;
+  dense?: boolean;
+  className?: string;
+};
+
+type LegacyInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> & {
   label?: string;
   error?: string;
   helpText?: string;
+};
+
+type AnyInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> & {
+  label?: string;
+  optional?: boolean;
+  helper?: string;
+  helpText?: string;
+  error?: string;
+  dense?: boolean;
+};
+
+export function Input(props: InputProps | LegacyInputProps) {
+  const { label, optional, helper, helpText, error, dense, className, id, ...native }: AnyInputProps = props;
+  const controlClass = cx(FIELD_CONTROL, FIELD_HEIGHT[dense ? 'dense' : 'regular']);
+  const helperText = helper ?? helpText;
+
+  if (!label) {
+    return (
+      <UnlabeledInput
+        native={native}
+        id={id}
+        className={cx(controlClass, className)}
+        helper={helperText}
+        error={error}
+      />
+    );
+  }
+
+  return (
+    <Field label={label} optional={optional} helper={helperText} error={error} id={id} className={className}>
+      {({ id: fieldId, describedBy, invalid }) => (
+        <input
+          {...native}
+          id={fieldId}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
+          className={controlClass}
+        />
+      )}
+    </Field>
+  );
 }
 
-/**
- * Input component following FlowGuard Sage palette design system
- *
- * DESIGN RULES:
- * - Uses ONLY Sage palette colors via Tailwind tokens
- * - Border: border (brand300 #A1BC98), error state uses primary (brand700 #778873)
- * - Text: textPrimary, error text uses primary for consistency
- * - NO border-gray-300, border-red-500, or text-red-600
- */
-export const Input: React.FC<InputProps> = ({
-  label,
+function UnlabeledInput({
+  native,
+  id,
+  className,
+  helper,
   error,
-  helpText,
-  className = '',
-  ...props
-}) => {
+}: {
+  native: NativeInputProps;
+  id?: string;
+  className: string;
+  helper?: string;
+  error?: string;
+}) {
+  const generatedId = useId();
+  const baseId = id ?? generatedId;
+  const helperId = `${baseId}-helper`;
+  const errorId = `${baseId}-error`;
+  const describedBy = [helper ? helperId : undefined, error ? errorId : undefined].filter(Boolean).join(' ') || undefined;
+
   return (
-    <div>
-      {label && (
-        <label className="block text-sm font-medium text-textPrimary mb-2">
-          {label}
-        </label>
-      )}
+    <div className="min-w-0">
       <input
-        className={`w-full min-w-0 rounded-md px-4 py-3 text-base leading-6 transition-colors md:py-2 md:text-sm md:leading-5
-          ${error ? 'border-2 border-primary' : 'border border-border'}
-          appearance-none bg-surface text-textPrimary
-          focus:ring-2 focus:ring-focusRing focus:border-primary
-          placeholder:text-textMuted
-          disabled:opacity-50 disabled:cursor-not-allowed
-          ${className}`}
-        {...props}
+        {...native}
+        id={id}
+        aria-describedby={describedBy}
+        aria-invalid={error ? true : undefined}
+        className={className}
       />
-      {error && (
-        <p className="mt-1 text-sm text-primary font-medium">{error}</p>
-      )}
-      {helpText && !error && (
-        <p className="mt-1 text-sm text-textMuted">{helpText}</p>
-      )}
+      {helper ? (
+        <p id={helperId} className="mt-1.5 text-small text-ink-secondary">
+          {helper}
+        </p>
+      ) : null}
+      {error ? (
+        <p id={errorId} className="mt-1.5 flex items-start gap-1.5 text-small text-danger-ink">
+          <span className="mt-0.5 inline-flex shrink-0">
+            <Icon icon={CircleAlert} size={16} />
+          </span>
+          <span>{error}</span>
+        </p>
+      ) : null}
     </div>
   );
-};
+}

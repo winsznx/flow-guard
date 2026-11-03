@@ -1,110 +1,305 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card } from '../components/ui/Card';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { TwoColumn } from '../components/layout/TwoColumn';
+import { AddressInput, CheckedCodeInput } from '../components/ui/AddressInput';
+import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
+import { DateInput } from '../components/ui/DateInput';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorSummary } from '../components/ui/ErrorSummary';
 import { Input } from '../components/ui/Input';
+import { InsetBlock } from '../components/ui/InsetBlock';
+import { Notice } from '../components/ui/Notice';
+import { Panel } from '../components/ui/Panel';
+import { PlanSentence } from '../components/ui/PlanSentence';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
 import { Select } from '../components/ui/Select';
-import { Textarea } from '../components/ui/Textarea';
+import { Steps } from '../components/ui/Steps';
+import { useNetwork } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
+import { sameWallet } from '../utils/address';
+import { BUSY, LABELS } from '../copy/common';
+import { apiFailure, asFlowError, errorMessage } from '../copy/errors';
+import { formatAddress, formatAmount, formatDate } from '../copy/format';
+import { CREATE_PAYMENT, INTERVAL_DAYS, INTERVAL_WORD, type PaymentInterval } from '../copy/payments';
+import { FIELD_ERRORS, WHO } from '../copy/streamCreate';
 import { authFetch } from '../utils/auth';
-import { ChevronLeft, Repeat, Calendar, DollarSign, AlertCircle } from 'lucide-react';
+import { parseUnits, regularAddressProblem, unitsToDisplay } from '../utils/streamShapes';
+import { confirmToken, tokenIdCheck, useTokenChoice } from '../utils/tokenField';
 
-type PaymentInterval = 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'YEARLY';
+type StepKey = 'who' | 'when' | 'check';
 
-interface FormData {
+interface FormState {
+  step: StepKey;
   recipient: string;
   recipientName: string;
-  tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
-  tokenCategory?: string;
-  amountPerPeriod: string;
+  payWith: 'bch' | 'token';
+  tokenId: string;
+  amount: string;
   interval: PaymentInterval;
   startDate: string;
   endDate: string;
-  pausable: boolean;
-  description: string;
+}
+
+type FieldKey = 'recipient' | 'tokenId' | 'amount' | 'startDate' | 'endDate';
+
+const DAY_SECONDS = 86_400;
+const NO_END_PAYMENTS = 12;
+const STORAGE_KEY = 'flowguard:create-payment:v1';
+const STEP_ORDER: StepKey[] = ['who', 'when', 'check'];
+const STEPS = STEP_ORDER.map((key) => ({ key, label: CREATE_PAYMENT.steps[key] }));
+const INTERVALS: PaymentInterval[] = ['DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'YEARLY'];
+const INTERVAL_OPTIONS = INTERVALS.map((value) => ({ value, label: INTERVAL_WORD[value] }));
+const FIELD_ID: Record<FieldKey, string> = {
+  recipient: 'payment-recipient',
+  tokenId: 'payment-token-id',
+  amount: 'payment-amount',
+  startDate: 'payment-start',
+  endDate: 'payment-end',
+};
+const FIELD_LABEL: Record<FieldKey, string> = {
+  recipient: CREATE_PAYMENT.recipient.label,
+  tokenId: WHO.tokenIdLabel,
+  amount: CREATE_PAYMENT.amount.label,
+  startDate: CREATE_PAYMENT.start.label,
+  endDate: CREATE_PAYMENT.end.label,
+};
+const STEP_FIELDS: Record<StepKey, FieldKey[]> = {
+  who: ['recipient', 'tokenId', 'amount'],
+  when: ['startDate', 'endDate'],
+  check: [],
+};
+
+function todayLocalDate(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** Local midnight of a `YYYY-MM-DD` date input, in unix seconds. */
+function localDayStart(value: string): number {
+  return Math.floor(new Date(`${value}T00:00:00`).getTime() / 1000);
+}
+
+function freshForm(): FormState {
+  return {
+    step: 'who',
+    recipient: '',
+    recipientName: '',
+    payWith: 'bch',
+    tokenId: '',
+    amount: '',
+    interval: 'MONTHLY',
+    startDate: todayLocalDate(),
+    endDate: '',
+  };
+}
+
+function readSaved(): FormState {
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return freshForm();
+    const saved: Partial<FormState> = JSON.parse(raw);
+    const base = freshForm();
+    return {
+      step: STEP_ORDER.includes(saved.step as StepKey) ? (saved.step as StepKey) : base.step,
+      recipient: typeof saved.recipient === 'string' ? saved.recipient : base.recipient,
+      recipientName: typeof saved.recipientName === 'string' ? saved.recipientName : base.recipientName,
+      payWith: saved.payWith === 'token' ? 'token' : base.payWith,
+      tokenId: typeof saved.tokenId === 'string' ? saved.tokenId : base.tokenId,
+      amount: typeof saved.amount === 'string' ? saved.amount : base.amount,
+      interval: INTERVALS.includes(saved.interval as PaymentInterval) ? (saved.interval as PaymentInterval) : base.interval,
+      startDate: typeof saved.startDate === 'string' && saved.startDate ? saved.startDate : base.startDate,
+      endDate: typeof saved.endDate === 'string' ? saved.endDate : base.endDate,
+    };
+  } catch (error) {
+    console.warn('Saved recurring payment form could not be read', error);
+    return freshForm();
+  }
+}
+
+function writeSaved(form: FormState | null) {
+  try {
+    if (form) window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(form));
+    else window.sessionStorage.removeItem(STORAGE_KEY);
+  } catch (error) {
+    console.warn('Recurring payment form could not be saved in this browser', error);
+  }
+}
+
+function paymentCount(form: FormState): number {
+  const step = INTERVAL_DAYS[form.interval] * DAY_SECONDS;
+  if (form.endDate && form.startDate) {
+    const start = localDayStart(form.startDate);
+    const end = localDayStart(form.endDate);
+    if (end > start) return Math.max(1, Math.ceil((end - start) / step));
+  }
+  return NO_END_PAYMENTS;
+}
+
+function totalOf(amount: string, count: number, decimals: number): string | null {
+  const each = parseUnits(amount, decimals);
+  if (each === null || each <= 0n) return null;
+  return unitsToDisplay(each * BigInt(count), decimals);
 }
 
 export default function CreatePaymentPage() {
   const navigate = useNavigate();
   const wallet = useWallet();
+  const network = useNetwork();
+  const [form, setForm] = useState<FormState>(readSaved);
+  const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({});
+  const [submitError, setSubmitError] = useState<{ message: string; fields: FieldKey[] } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [checking, setChecking] = useState(false);
 
-  const [formData, setFormData] = useState<FormData>({
-    recipient: '',
-    recipientName: '',
-    tokenType: 'BCH',
-    amountPerPeriod: '',
-    interval: 'MONTHLY',
-    startDate: new Date().toISOString().split('T')[0],
-    endDate: '',
-    pausable: true,
-    description: '',
-  });
+  useEffect(() => {
+    writeSaved(form);
+  }, [form]);
 
-  const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
-  const [isCreating, setIsCreating] = useState(false);
+  const recipientValid = regularAddressProblem(form.recipient, network) === null;
+  const token = form.payWith === 'token';
+  const tokenId = token ? form.tokenId.trim() : '';
+  const tokenChoice = useTokenChoice(token, form.tokenId, network);
+  const asset = tokenChoice.asset;
 
-  const handleChange = (field: keyof FormData, value: any) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: undefined }));
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (key in FIELD_ID) setErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
+
+  const count = paymentCount(form);
+  const everyDays = INTERVAL_DAYS[form.interval];
+  const startSeconds = form.startDate ? localDayStart(form.startDate) : null;
+  const firstPayment = startSeconds !== null ? startSeconds + everyDays * DAY_SECONDS : null;
+  const lastPayment = firstPayment !== null ? firstPayment + (count - 1) * everyDays * DAY_SECONDS : null;
+  const total = totalOf(form.amount, count, tokenChoice.decimals);
+  const totalText = total ? formatAmount(total, asset) : null;
+  const recipientShort = recipientValid && form.recipient ? formatAddress(form.recipient) : null;
+  const recipientLabel = form.recipientName.trim() || recipientShort || CREATE_PAYMENT.recipientFallback;
+
+  const fieldError = (key: FieldKey): string | undefined => {
+    switch (key) {
+      case 'recipient':
+        if (!form.recipient.trim()) return CREATE_PAYMENT.recipient.missing;
+        if (!recipientValid) return undefined;
+        if (sameWallet(form.recipient, wallet.address, network)) return CREATE_PAYMENT.recipient.yourself;
+        return undefined;
+      case 'tokenId': {
+        if (!token) return undefined;
+        if (!tokenId) return FIELD_ERRORS.tokenMissing;
+        const check = tokenIdCheck(tokenId);
+        return check.ok ? undefined : check.message;
+      }
+      case 'amount':
+        if (!(Number(form.amount) > 0)) return token ? CREATE_PAYMENT.amount.missingToken : CREATE_PAYMENT.amount.missing;
+        if (tokenChoice.pending || parseUnits(form.amount, tokenChoice.decimals) !== null) return undefined;
+        return token ? FIELD_ERRORS.amountTokenDecimals(tokenChoice.decimals) : FIELD_ERRORS.amountBchDecimals;
+      case 'startDate':
+        return form.startDate ? undefined : CREATE_PAYMENT.start.missing;
+      case 'endDate':
+        return form.endDate && form.startDate && localDayStart(form.endDate) <= localDayStart(form.startDate)
+          ? CREATE_PAYMENT.end.beforeStart
+          : undefined;
     }
   };
 
-  const validate = (): boolean => {
-    const newErrors: Partial<Record<keyof FormData, string>> = {};
-    const isValidCashAddr = (addr: string) =>
-      addr.startsWith('bitcoincash:') || addr.startsWith('bchtest:');
+  const blur = (key: FieldKey) => setErrors((prev) => ({ ...prev, [key]: fieldError(key) }));
 
-    if (!formData.recipient) {
-      newErrors.recipient = 'Recipient address is required';
-    } else if (!isValidCashAddr(formData.recipient)) {
-      newErrors.recipient = 'Must be a valid BCH address (bitcoincash:... or bchtest:...)';
+  const checkFields = (keys: FieldKey[]): FieldKey[] => {
+    const next: Partial<Record<FieldKey, string>> = {};
+    const bad: FieldKey[] = [];
+    for (const key of keys) {
+      const message = fieldError(key);
+      next[key] = message;
+      if (message || (key === 'recipient' && !recipientValid)) bad.push(key);
     }
-
-    if (formData.tokenType === 'FUNGIBLE_TOKEN' && !formData.tokenCategory) {
-      newErrors.tokenCategory = 'Token category ID is required for CashTokens';
-    }
-
-    if (!formData.amountPerPeriod || parseFloat(formData.amountPerPeriod) <= 0) {
-      newErrors.amountPerPeriod = 'Amount must be greater than 0';
-    }
-
-    if (formData.endDate && new Date(formData.endDate) <= new Date(formData.startDate)) {
-      newErrors.endDate = 'End date must be after start date';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    setErrors((prev) => ({ ...prev, ...next }));
+    return bad;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const goTo = (step: StepKey) => {
+    setSubmitError(null);
+    set('step', step);
+  };
 
-    if (!validate()) return;
+  /** Shows the step that holds the first bad field, so every link in the error summary has a target. */
+  const showFieldErrors = (bad: FieldKey[]) => {
+    const step = STEP_ORDER.find((key) => STEP_FIELDS[key].some((field) => bad.includes(field))) ?? form.step;
+    set('step', step);
+    setSubmitError({ message: CREATE_PAYMENT.fieldErrors, fields: bad.filter((field) => STEP_FIELDS[step].includes(field)) });
+  };
+
+  /** Looks the token up on the network, so a wrong ID or amount shows on the first step instead of at funding. */
+  const tokenProblem = async (): Promise<boolean> => {
+    if (!token) return false;
+    setChecking(true);
+    try {
+      const result = await confirmToken(tokenId, form.amount, network);
+      if (result.ok) return false;
+      setErrors((prev) => ({ ...prev, [result.field]: result.message }));
+      showFieldErrors([result.field]);
+      return true;
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const advance = async () => {
+    const bad = checkFields(STEP_FIELDS[form.step]);
+    if (bad.length > 0) {
+      showFieldErrors(bad);
+      return;
+    }
+    if (form.step === 'who' && (await tokenProblem())) return;
+    const index = STEP_ORDER.indexOf(form.step);
+    goTo(STEP_ORDER[Math.min(index + 1, STEP_ORDER.length - 1)]);
+  };
+
+  const submit = async () => {
+    const bad = checkFields([...STEP_FIELDS.who, ...STEP_FIELDS.when]);
+    if (bad.length > 0) {
+      showFieldErrors(bad);
+      return;
+    }
     if (!wallet.isConnected || !wallet.address) {
-      setErrors({ recipient: 'Please connect your wallet first.' });
+      setSubmitError({ message: errorMessage('NOT_CONNECTED'), fields: [] });
       return;
     }
     if (!wallet.signCashScriptTransaction) {
-      setErrors({ recipient: 'Connected wallet does not support CashScript transactions.' });
+      setSubmitError({ message: errorMessage('WALLET_UNSUPPORTED'), fields: [] });
       return;
     }
 
-    setIsCreating(true);
-
+    setCreating(true);
+    setSubmitError(null);
     try {
+      let tokenDecimals = 0;
+      if (token) {
+        const result = await confirmToken(tokenId, form.amount, network);
+        if (!result.ok) {
+          setErrors((prev) => ({ ...prev, [result.field]: result.message }));
+          showFieldErrors([result.field]);
+          setCreating(false);
+          return;
+        }
+        tokenDecimals = result.decimals;
+      }
       const payload = {
         sender: wallet.address,
-        recipient: formData.recipient,
-        recipientName: formData.recipientName || undefined,
-        tokenType: formData.tokenType,
-        tokenCategory: formData.tokenCategory,
-        amountPerPeriod: parseFloat(formData.amountPerPeriod),
-        interval: formData.interval,
-        startDate: Math.floor(new Date(formData.startDate).getTime() / 1000),
-        endDate: formData.endDate ? Math.floor(new Date(formData.endDate).getTime() / 1000) : undefined,
-        pausable: formData.pausable,
-        description: formData.description,
+        recipient: form.recipient.trim(),
+        recipientName: form.recipientName.trim() || undefined,
+        tokenType: token ? 'FUNGIBLE_TOKEN' : 'BCH',
+        tokenCategory: token ? tokenId : undefined,
+        tokenDecimals,
+        amountPerPeriod: parseFloat(form.amount),
+        interval: form.interval,
+        startDate: localDayStart(form.startDate),
+        // Local midnight, not end of day: the backend funds ceil((end - start) / interval) periods.
+        endDate: form.endDate ? localDayStart(form.endDate) : undefined,
+        pausable: true,
       };
 
       const response = await authFetch('/api/payments/create', {
@@ -113,315 +308,212 @@ export default function CreatePaymentPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      const body: unknown = await response.json().catch((error: unknown) => {
+        console.warn('Create payment response was not JSON', error);
+        return null;
+      });
+      if (!response.ok) throw apiFailure(body, response.status, 'UNKNOWN');
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create payment');
-      }
-
-      const result = await response.json();
-      navigate(`/payments/${result.payment.id}`, { state: { freshCreate: true } });
-    } catch (error: any) {
-      console.error('Failed to create payment:', error);
-      setErrors({ recipient: error.message || 'Failed to create payment. Please try again.' });
-    } finally {
-      setIsCreating(false);
+      const created = body as { payment?: { id?: string } } | null;
+      const createdId = created?.payment?.id;
+      if (!createdId) throw apiFailure(body, response.status, 'SERVER_PREPARE_FAILED');
+      writeSaved(null);
+      navigate(`/payments/${createdId}`, { state: { freshCreate: true } });
+    } catch (error) {
+      console.error('Recurring payment was not created', error);
+      setSubmitError({ message: asFlowError(error).message, fields: [] });
+      setCreating(false);
     }
   };
 
-  const getIntervalLabel = (interval: PaymentInterval) => {
-    switch (interval) {
-      case 'DAILY': return 'day';
-      case 'WEEKLY': return 'week';
-      case 'BIWEEKLY': return '2 weeks';
-      case 'MONTHLY': return 'month';
-      case 'YEARLY': return 'year';
-    }
-  };
+  const plan = (
+    <PlanSentence
+      recipient={recipientShort ? { address: form.recipient, name: form.recipientName.trim() || undefined } : undefined}
+      schedule={{
+        kind: 'recurring',
+        perRelease: Number(form.amount) > 0 ? form.amount : '',
+        asset,
+        everyDays,
+        count,
+        start: (firstPayment ?? 0) * 1000,
+      }}
+      sticky
+    />
+  );
 
-  const INTERVAL_SECONDS: Record<PaymentInterval, number> = {
-    DAILY: 86400,
-    WEEKLY: 604800,
-    BIWEEKLY: 1209600,
-    MONTHLY: 2592000,
-    YEARLY: 31536000,
-  };
+  const summary = submitError ? (
+    <ErrorSummary
+      title={CREATE_PAYMENT.errorTitle}
+      message={submitError.message}
+      fields={submitError.fields.map((key) => ({ id: FIELD_ID[key], label: FIELD_LABEL[key] }))}
+    />
+  ) : null;
 
-  const getEstimatedPeriods = (): number => {
-    if (formData.endDate && formData.startDate) {
-      const start = new Date(formData.startDate).getTime() / 1000;
-      const end = new Date(formData.endDate).getTime() / 1000;
-      const intervalSec = INTERVAL_SECONDS[formData.interval];
-      if (end > start && intervalSec > 0) {
-        return Math.max(1, Math.ceil((end - start) / intervalSec));
-      }
-    }
-    return 12;
-  };
+  const stepIndex = STEP_ORDER.indexOf(form.step);
+  const footer = (
+    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {stepIndex > 0 ? (
+        <Button variant="ghost" onClick={() => goTo(STEP_ORDER[stepIndex - 1])}>
+          {CREATE_PAYMENT.backLabel}
+        </Button>
+      ) : (
+        <span />
+      )}
+      {form.step === 'check' ? (
+        <Button variant="primary" size="lg" busy={creating} busyLabel={CREATE_PAYMENT.busy} onClick={() => void submit()}>
+          {CREATE_PAYMENT.submit}
+        </Button>
+      ) : (
+        <Button variant="primary" busy={checking} busyLabel={BUSY.checking} onClick={() => void advance()}>
+          {CREATE_PAYMENT.continueLabel}
+        </Button>
+      )}
+    </div>
+  );
 
-  const estimatedPeriods = getEstimatedPeriods();
-  const amountNum = parseFloat(formData.amountPerPeriod) || 0;
-  const totalDeposit = amountNum * estimatedPeriods;
+  const main = (
+    <Panel>
+      <div className="flex flex-col gap-6">
+        {form.step === 'who' ? (
+          <>
+            <AddressInput
+              id={FIELD_ID.recipient}
+              label={CREATE_PAYMENT.recipient.label}
+              helper={CREATE_PAYMENT.recipient.helper}
+              network={network}
+              accept="p2pkh"
+              value={form.recipient}
+              onChange={(value) => set('recipient', value)}
+              onBlur={() => blur('recipient')}
+              error={errors.recipient}
+            />
+            <Input
+              label={CREATE_PAYMENT.name.label}
+              optional
+              helper={CREATE_PAYMENT.name.helper}
+              placeholder={CREATE_PAYMENT.name.placeholder}
+              value={form.recipientName}
+              onChange={(event) => set('recipientName', event.target.value)}
+            />
+            <div className="flex flex-col gap-1.5">
+              <p className="text-label text-ink">{WHO.payWith}</p>
+              <div>
+                <SegmentedControl
+                  label={WHO.payWith}
+                  value={form.payWith}
+                  onChange={(payWith) => set('payWith', payWith)}
+                  options={[
+                    { value: 'bch', label: WHO.payBch },
+                    { value: 'token', label: WHO.payToken },
+                  ]}
+                />
+              </div>
+            </div>
+            {token ? (
+              <CheckedCodeInput
+                id={FIELD_ID.tokenId}
+                label={WHO.tokenIdLabel}
+                value={form.tokenId}
+                onChange={(value) => set('tokenId', value)}
+                check={tokenIdCheck}
+                validLabel={WHO.tokenIdValid}
+                pasteLabel={WHO.tokenIdPaste}
+                helper={tokenChoice.helper}
+                error={errors.tokenId}
+              />
+            ) : null}
+            <AmountInput
+              id={FIELD_ID.amount}
+              label={CREATE_PAYMENT.amount.label}
+              helper={token ? CREATE_PAYMENT.amount.helperToken : CREATE_PAYMENT.amount.helper}
+              asset={tokenChoice.inputAsset}
+              value={form.amount}
+              onChange={(value) => set('amount', value)}
+              onBlur={() => blur('amount')}
+              error={errors.amount}
+            />
+            {token ? (
+              <Notice tone="info" title={CREATE_PAYMENT.tokenNote.title}>
+                {CREATE_PAYMENT.tokenNote.body}
+              </Notice>
+            ) : null}
+          </>
+        ) : null}
+
+        {form.step === 'when' ? (
+          <>
+            <Select
+              label={CREATE_PAYMENT.interval.label}
+              helper={CREATE_PAYMENT.interval.helper}
+              options={INTERVAL_OPTIONS}
+              value={form.interval}
+              onValueChange={(value) => set('interval', value)}
+            />
+            <DateInput
+              id={FIELD_ID.startDate}
+              label={CREATE_PAYMENT.start.label}
+              helper={CREATE_PAYMENT.start.helper}
+              value={form.startDate}
+              onChange={(value) => set('startDate', value)}
+              onBlur={() => blur('startDate')}
+              error={errors.startDate}
+            />
+            <DateInput
+              id={FIELD_ID.endDate}
+              label={`${CREATE_PAYMENT.end.label} ${LABELS.optional}`}
+              helper={CREATE_PAYMENT.end.helper}
+              value={form.endDate}
+              min={form.startDate || undefined}
+              onChange={(value) => set('endDate', value)}
+              onBlur={() => blur('endDate')}
+              error={errors.endDate}
+            />
+            <Notice tone="warning" title={CREATE_PAYMENT.clockTitle}>
+              {CREATE_PAYMENT.clockNotice}
+            </Notice>
+          </>
+        ) : null}
+
+        {form.step === 'check' ? (
+          <>
+            <div className="lg:hidden">{plan}</div>
+            <InsetBlock>
+              <DetailList
+                items={[
+                  { label: CREATE_PAYMENT.recipient.label, value: recipientShort ?? LABELS.notSet },
+                  { label: CREATE_PAYMENT.amount.label, value: formatAmount(form.amount, asset) ?? LABELS.notSet },
+                  { label: CREATE_PAYMENT.interval.label, value: INTERVAL_WORD[form.interval] },
+                  { label: CREATE_PAYMENT.start.label, value: formatDate(startSeconds) ?? LABELS.notSet },
+                  { label: CREATE_PAYMENT.firstPayment, value: formatDate(firstPayment) ?? LABELS.notSet },
+                  { label: CREATE_PAYMENT.lastPayment, value: formatDate(lastPayment) ?? LABELS.notSet },
+                  { label: LABELS.whoCanMoveTheMoney, value: CREATE_PAYMENT.whoCanMove(recipientLabel) },
+                ]}
+              />
+            </InsetBlock>
+            <p className="text-body text-ink-secondary">{CREATE_PAYMENT.claimsLine(recipientLabel)}</p>
+            <p className="text-small text-ink-secondary">{token ? CREATE_PAYMENT.feesLineToken : CREATE_PAYMENT.feesLine}</p>
+            <p className="text-body text-ink">{totalText ? CREATE_PAYMENT.next(totalText) : CREATE_PAYMENT.nextUnknown}</p>
+          </>
+        ) : null}
+
+        {form.step !== 'check' ? <div className="lg:hidden">{plan}</div> : null}
+        {summary}
+        {footer}
+      </div>
+    </Panel>
+  );
 
   return (
-    <div className="px-4 py-6 md:p-8">
-      <div className="max-w-3xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <button
-            onClick={() => navigate('/payments')}
-            className="inline-flex items-center gap-2 text-primary hover:text-primaryHover font-mono mb-4 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Payments
-          </button>
-          <h1 className="text-3xl font-display font-bold text-textPrimary mb-2 sm:text-4xl lg:text-5xl">
-            Create Recurring Payment
-          </h1>
-          <p className="text-textMuted font-mono">
-            Set up automatic recurring payments for salaries, subscriptions, or allowances
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Token Type */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0">
-                <DollarSign className="w-6 h-6 text-accent" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">Token Type</h3>
-                <p className="text-sm text-textMuted font-mono mb-4">Choose the asset for recurring payments</p>
-
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => handleChange('tokenType', 'BCH')}
-                    className={`min-w-0 p-4 border-2 rounded-xl transition-all ${
-                      formData.tokenType === 'BCH'
-                        ? 'border-accent bg-accent/5 shadow-lg'
-                        : 'border-border hover:border-accent/50'
-                    }`}
-                  >
-                    <div className="font-display font-bold text-lg text-textPrimary mb-1">Bitcoin Cash</div>
-                    <div className="text-sm text-textMuted font-mono">Pay in BCH</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleChange('tokenType', 'FUNGIBLE_TOKEN')}
-                    className={`min-w-0 p-4 border-2 rounded-xl transition-all ${
-                      formData.tokenType === 'FUNGIBLE_TOKEN'
-                        ? 'border-accent bg-accent/5 shadow-lg'
-                        : 'border-border hover:border-accent/50'
-                    }`}
-                  >
-                    <div className="font-display font-bold text-lg text-textPrimary mb-1">CashTokens</div>
-                    <div className="text-sm text-textMuted font-mono">Pay in tokens</div>
-                  </button>
-                </div>
-
-                {formData.tokenType === 'FUNGIBLE_TOKEN' && (
-                  <div className="mt-4">
-                    <Input
-                      label="Token Category ID"
-                      placeholder="e.g., a1b2c3d4e5f6..."
-                      value={formData.tokenCategory || ''}
-                      onChange={(e) => handleChange('tokenCategory', e.target.value)}
-                      error={errors.tokenCategory}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          </Card>
-
-          {/* Recipient */}
-          <Card padding="lg">
-            <div className="space-y-4">
-              <Input
-                label="Recipient Address"
-                placeholder="bitcoincash:qr2x3uy3..."
-                value={formData.recipient}
-                onChange={(e) => handleChange('recipient', e.target.value)}
-                error={errors.recipient}
-                helpText="The BCH address that will receive recurring payments"
-                required
-              />
-              <Input
-                label="Recipient Name (Optional)"
-                placeholder="e.g., John Doe"
-                value={formData.recipientName}
-                onChange={(e) => handleChange('recipientName', e.target.value)}
-                helpText="Display name for easier tracking"
-              />
-            </div>
-          </Card>
-
-          {/* Payment Schedule */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                <Repeat className="w-6 h-6 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">Payment Schedule</h3>
-                <p className="text-sm text-textMuted font-mono mb-4">Define amount and frequency</p>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Input
-                    label={`Amount per Payment (${formData.tokenType === 'BCH' ? 'BCH' : 'Tokens'})`}
-                    type="number"
-                    step="0.00000001"
-                    placeholder="1.5"
-                    value={formData.amountPerPeriod}
-                    onChange={(e) => handleChange('amountPerPeriod', e.target.value)}
-                    error={errors.amountPerPeriod}
-                    required
-                  />
-
-                  <Select
-                    label="Payment Interval"
-                    value={formData.interval}
-                    onChange={(e) => handleChange('interval', e.target.value as PaymentInterval)}
-                    options={[
-                      { value: 'DAILY', label: 'Daily' },
-                      { value: 'WEEKLY', label: 'Weekly' },
-                      { value: 'BIWEEKLY', label: 'Bi-weekly (every 2 weeks)' },
-                      { value: 'MONTHLY', label: 'Monthly' },
-                      { value: 'YEARLY', label: 'Yearly' },
-                    ]}
-                  />
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Duration */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-secondary/10 flex items-center justify-center flex-shrink-0">
-                <Calendar className="w-6 h-6 text-secondary" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">Duration</h3>
-                <p className="text-sm text-textMuted font-mono mb-4">Set start and end dates</p>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Input
-                    label="Start Date"
-                    type="date"
-                    value={formData.startDate}
-                    onChange={(e) => handleChange('startDate', e.target.value)}
-                    required
-                  />
-
-                  <Input
-                    label="End Date (Optional)"
-                    type="date"
-                    value={formData.endDate}
-                    onChange={(e) => handleChange('endDate', e.target.value)}
-                    error={errors.endDate}
-                    helpText="Leave empty for ongoing payments"
-                  />
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Pausable Toggle */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4">
-              <div className="flex-1">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xl font-display font-bold text-textPrimary">Pausable Payments</h3>
-                  <button
-                    type="button"
-                    onClick={() => handleChange('pausable', !formData.pausable)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      formData.pausable ? 'bg-accent' : 'bg-border'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        formData.pausable ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                </div>
-                <p className="text-sm text-textMuted font-mono">
-                  {formData.pausable
-                    ? 'You can pause and resume this payment stream at any time'
-                    : 'Payment stream cannot be paused once started'}
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          {/* Description */}
-          <Card padding="lg">
-            <Textarea
-              label="Description (Optional)"
-              placeholder="e.g., 'Monthly salary for contractor John Doe' or 'Annual subscription for service XYZ'"
-              value={formData.description}
-              onChange={(e) => handleChange('description', e.target.value)}
-              rows={3}
-              helpText="Add context about this recurring payment"
-            />
-          </Card>
-
-          {/* Summary Box */}
-          <Card padding="lg" className="bg-accent/5 border-accent/20">
-            <div className="flex items-start gap-4">
-              <AlertCircle className="w-6 h-6 text-accent flex-shrink-0 mt-1" />
-              <div>
-                <h4 className="font-display font-bold text-textPrimary mb-2">Payment Summary</h4>
-                <div className="space-y-1 text-sm font-mono text-textMuted">
-                  <p>
-                    <span className="text-textPrimary font-bold">{formData.amountPerPeriod || '0'} {formData.tokenType === 'BCH' ? 'BCH' : 'Tokens'}</span> will be paid per{' '}
-                    <span className="text-textPrimary font-bold">{getIntervalLabel(formData.interval)}</span>
-                  </p>
-                  <p>
-                    To <span className="text-textPrimary font-bold">{formData.recipientName || formData.recipient || '[recipient]'}</span>
-                  </p>
-                  <p>
-                    Starting <span className="text-textPrimary font-bold">{formData.startDate || '[date]'}</span>
-                    {formData.endDate && (
-                      <> until <span className="text-textPrimary font-bold">{formData.endDate}</span> ({estimatedPeriods} payment{estimatedPeriods !== 1 ? 's' : ''})</>
-                    )}
-                    {!formData.endDate && <> - no end date (funds {estimatedPeriods} periods upfront)</>}
-                  </p>
-                  <p className="pt-2 border-t border-border/40 text-base">
-                    Wallet deposit required:{' '}
-                    <span className="text-textPrimary font-bold">
-                      {amountNum > 0 ? totalDeposit.toFixed(8) : '0'} {formData.tokenType === 'BCH' ? 'BCH' : 'Tokens'}
-                    </span>
-                    <span className="text-xs ml-1">({estimatedPeriods} × {formData.amountPerPeriod || '0'})</span>
-                  </p>
-                  <p className="pt-1">
-                    {formData.pausable ? (
-                      <span className="text-accent">✓ Can be paused/resumed at any time</span>
-                    ) : (
-                      <span className="text-error">✗ Cannot be paused once started</span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Action Buttons */}
-          <div className="flex flex-col-reverse gap-4 pt-4 sm:flex-row">
-            <Button type="button" variant="secondary" onClick={() => navigate('/payments')} disabled={isCreating} className="w-full flex-1">
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isCreating} className="w-full flex-1">
-              {isCreating ? 'Creating Payment...' : 'Create Recurring Payment'}
-            </Button>
-          </div>
-        </form>
+    <PageContainer>
+      <PageHeader
+        title={CREATE_PAYMENT.title}
+        description={CREATE_PAYMENT.description}
+        back={{ to: '/payments', label: CREATE_PAYMENT.back }}
+      />
+      <div className="mb-6">
+        <Steps steps={STEPS} current={form.step} onBack={(key) => goTo(key as StepKey)} />
       </div>
-    </div>
+      <TwoColumn main={main} side={<div className="hidden lg:block">{plan}</div>} />
+    </PageContainer>
   );
 }

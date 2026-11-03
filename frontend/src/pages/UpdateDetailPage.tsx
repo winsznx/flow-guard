@@ -1,38 +1,23 @@
-import { useParams, Link } from 'react-router-dom';
-import {
-  Calendar,
-  Clock,
-  ArrowLeft,
-  MessageCircle,
-  Send,
-  MessageSquare,
-} from 'lucide-react';
-import { Footer } from '../components/layout/Footer';
+import React from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { MarketingFooter } from '../components/layout/Footer';
+import { MarketingNav } from '../components/layout/MarketingNav';
+import { PageContainer } from '../components/layout/PageContainer';
+import { Prose } from '../components/layout/Prose';
 import { PageMeta } from '../components/seo/PageMeta';
-import { XIcon } from '../components/ui/XIcon';
+import { BackLink } from '../components/ui/BackLink';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Display } from '../components/ui/Display';
+import { Heading } from '../components/ui/Heading';
+import { LinkCard } from '../components/ui/LinkCard';
+import { Notice } from '../components/ui/Notice';
+import { Panel } from '../components/ui/Panel';
+import { formatDate } from '../copy/format';
+import { ARTICLE, ARTICLE_LINKS, archivedNotice, findPost, readingTime, type PostCover } from '../copy/updates';
+import { APP_SITE_URL, DOCS_SITE_URL } from '../utils/publicUrls';
 
-interface BlogPost {
-  slug: string;
-  title: string;
-  date: string;
-  summary: string;
-  tags: string[];
-  readingTime: number;
-  author?: string;
-  content: string;
-  cover?: string;
-}
-
-const BLOG_POSTS: Record<string, BlogPost> = {
+const ARTICLE_BODIES: Record<string, { content: string }> = {
   'a-technical-breakdown-of-how-flowguard-works': {
-    slug: 'a-technical-breakdown-of-how-flowguard-works',
-    title: 'A Technical Breakdown of How FlowGuard Works on Bitcoin Cash',
-    date: '2026-02-26',
-    summary:
-      'This post explains the mechanics behind FlowGuard. Not the features. The enforcement model. FlowGuard operates entirely within the UTXO framework of Bitcoin Cash.',
-    tags: ['Technical', 'Architecture', 'CashTokens', 'Covenants'],
-    readingTime: 7,
-    author: 'FlowGuard Team',
     content: `
 # A Technical Breakdown of How FlowGuard Works on Bitcoin Cash
 
@@ -61,7 +46,7 @@ FlowGuard leverages this model for:
 - Vault enforcement
 - Vesting schedules
 - Budget releases
-- Governance execution
+- Vault payment approvals
 
 ## Constructor Parameter Encoding
 
@@ -81,7 +66,7 @@ This ensures immutability of treasury rules.
 
 ## NFT Commitment State Model
 
-Streams and certain governance flows rely on NFT commitments.
+Streams, budget plans and distribution campaigns rely on NFT commitments.
 
 The 40-byte structure tracks:
 
@@ -195,7 +180,7 @@ Vault rules are immutable once deployed.
 
 Streams track state inside NFT commitments.
 
-Governance conditions gate treasury execution.
+Signer approvals gate every vault payment.
 
 Everything is validated by consensus.
 
@@ -203,14 +188,6 @@ In the final post, we'll outline the post-sprint roadmap and long-term direction
 `,
   },
   'how-a-5-person-bch-team-could-use-flowguard': {
-    slug: 'how-a-5-person-bch-team-could-use-flowguard',
-    title: 'How a 5-Person BCH Team Could Use FlowGuard in Practice',
-    date: '2026-02-26',
-    summary:
-      "Let's walk through a practical example using Bitcoin Cash. This isn't theory. This is how a BCH-native team could manage real capital using enforceable treasury rules.",
-    tags: ['Use Case', 'BCH', 'Treasury', 'Education'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
 # How a 5-Person BCH Team Could Use FlowGuard in Practice
 
@@ -305,23 +282,15 @@ No admin decides release timing.
 
 Time and rules enforce it.
 
-## Step 4: Governance for Large Changes
+## Step 4: Approvals for Large Payments
 
-Suppose the team wants to:
+Suppose the team wants to make a large strategic payout. It goes through the vault as a spending request:
 
-- Increase spending cap
-- Add a new signer
-- Approve a large strategic payout
+- One signer asks for the payment
+- Enough signers approve it in their own wallets
+- Two signers approve sending it, and it leaves the vault
 
-This requires:
-
-- Token locking
-- Vote threshold
-- Tally validation
-
-If quorum and majority are not met, the proposal cannot execute.
-
-Treasury movement becomes conditional on governance outcome.
+If too few signers approve, the payment can't leave the vault. The signers are fixed when the vault is created, so nobody can add one later to push a payment through.
 
 ## What This Prevents
 
@@ -331,7 +300,7 @@ This structure prevents:
 - Overspending in a single month
 - Manual salary errors
 - Grant over-release
-- Governance bypass
+- Payments without enough approvals
 
 It removes ambiguity from treasury management.
 
@@ -373,7 +342,7 @@ This model scales to:
 
 The same primitives apply:
 
-Vault → Streams → Budgets → Governance.
+Vault → Streams → Budgets → Approvals.
 
 ## Closing
 
@@ -389,14 +358,6 @@ Next, we'll close the series with the post-sprint roadmap and long-term directio
 `,
   },
   'whats-left-before-flowguard-goes-to-mainnet': {
-    slug: 'whats-left-before-flowguard-goes-to-mainnet',
-    title: "What's Left Before FlowGuard Goes to Mainnet",
-    date: '2026-02-25',
-    summary:
-      'FlowGuard has been tested end-to-end on Chipnet. This post outlines what remains before production deployment on Bitcoin Cash with a clear checklist.',
-    tags: ['Roadmap', 'Mainnet', 'BCH', 'Product'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
 # What's Left Before FlowGuard Goes to Mainnet
 
@@ -582,14 +543,6 @@ That's the roadmap.
 `,
   },
   'why-flowguard-makes-bch-more-useful': {
-    slug: 'why-flowguard-makes-bch-more-useful',
-    title: 'Why FlowGuard Makes Bitcoin Cash More Useful',
-    date: '2026-02-25',
-    summary:
-      'Payments move value. Treasury rules protect value. Governance directs value. FlowGuard connects those pieces inside Bitcoin Cash.',
-    tags: ['BCH', 'Ecosystem', 'Product', 'Education'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
 # Why FlowGuard Makes Bitcoin Cash More Useful
 
@@ -644,7 +597,6 @@ FlowGuard introduces enforceable treasury mechanics:
 - Time-based unlock cycles
 - On-chain vesting streams
 - Merkle-based airdrops
-- Token-locked governance
 - Milestone budget enforcement
 
 All validated by covenant logic on Bitcoin Cash.
@@ -784,14 +736,6 @@ Next, we'll walk through a real-world scenario: how a 5-person BCH team could st
 `,
   },
   'flowguard-end-to-end-testing-on-chipnet': {
-    slug: 'flowguard-end-to-end-testing-on-chipnet',
-    title: 'FlowGuard End-to-End Testing on Bitcoin Cash Chipnet',
-    date: '2026-02-25',
-    summary:
-      'FlowGuard has been tested end-to-end on the Bitcoin Cash Chipnet test network. This post explains what that means and what was actually executed.',
-    tags: ['Testing', 'Chipnet', 'BCH', 'Technical'],
-    readingTime: 7,
-    author: 'FlowGuard Team',
     content: `
 # FlowGuard End-to-End Testing on Bitcoin Cash Chipnet
 
@@ -978,14 +922,6 @@ That is the standard treasury infrastructure requires.
 `,
   },
   'how-flowguard-implements-on-chain-governance': {
-    slug: 'how-flowguard-implements-on-chain-governance',
-    title: 'How FlowGuard Implements On-Chain Governance on Bitcoin Cash',
-    date: '2026-02-24',
-    summary:
-      'FlowGuard governance turns voting from community sentiment into enforceable treasury action. Tokens are locked, votes are validated, and contracts enforce the outcome.',
-    tags: ['Education', 'Governance', 'Voting', 'BCH'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
 # How FlowGuard Implements On-Chain Governance on Bitcoin Cash
 
@@ -1182,14 +1118,6 @@ In the next post, we'll move from mechanics to proof ,  how FlowGuard is tested 
 `,
   },
   'how-flowguard-enforces-milestone-based-funding-on-chain': {
-    slug: 'how-flowguard-enforces-milestone-based-funding-on-chain',
-    title: 'How FlowGuard Enforces Milestone-Based Funding On-Chain',
-    date: '2026-02-24',
-    summary:
-      'FlowGuard budget plans move grant structure directly onto Bitcoin Cash. Time unlocks funds, the contract verifies conditions, and the blockchain enforces release.',
-    tags: ['Education', 'Grants', 'Milestones', 'BCH'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
 # How FlowGuard Enforces Milestone-Based Funding On-Chain
 
@@ -1368,19 +1296,9 @@ Time unlocks funds.
 The contract verifies conditions.
 
 The blockchain enforces release.
-
-Next, we'll break down how governance works ,  and how token-weighted voting integrates with treasury logic.
 `,
   },
   'how-flowguard-airdrops-use-merkle-proofs-on-chain': {
-    slug: 'how-flowguard-airdrops-use-merkle-proofs-on-chain',
-    title: 'How FlowGuard Airdrops Use Merkle Proofs On-Chain',
-    date: '2026-02-22',
-    summary:
-      'On Bitcoin Cash, airdrops can be enforced by covenant contracts using Merkle proofs. That means eligibility is verified on-chain and double-claims are prevented.',
-    tags: ['Education', 'Airdrops', 'Merkle Trees', 'BCH'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
 # How FlowGuard Airdrops Use Merkle Proofs On-Chain
 
@@ -1583,14 +1501,6 @@ Next, we'll break down how FlowGuard handles milestone-based budget plans for st
 `,
   },
   'how-flowguard-uses-cashtokens-nfts-to-track-vesting-state': {
-    slug: 'how-flowguard-uses-cashtokens-nfts-to-track-vesting-state',
-    title: 'How FlowGuard Uses CashTokens NFTs to Track Vesting State',
-    date: '2026-02-21',
-    summary:
-      'FlowGuard streams are not database-driven vesting promises. They are covenant-enforced schedules backed by NFT commitments on Bitcoin Cash.',
-    tags: ['Education', 'Vesting', 'CashTokens', 'BCH'],
-    readingTime: 7,
-    author: 'FlowGuard Team',
     content: `
 # How FlowGuard Uses CashTokens NFTs to Track Vesting State
 
@@ -1799,15 +1709,6 @@ Next, we'll break down how FlowGuard handles airdrops using Merkle roots and on-
 `,
   },
   'how-flowguard-vaults-enforce-spending-rules': {
-    slug: 'how-flowguard-vaults-enforce-spending-rules',
-    title: 'How FlowGuard Vaults Enforce Spending Rules On-Chain',
-    date: '2026-02-20',
-    summary:
-      'FlowGuard vaults extend multisig with policy enforcement ,  directly on Bitcoin Cash. Learn how approval thresholds, cycle-based unlocking, and spending caps work on-chain.',
-    tags: ['Education', 'Vaults', 'Architecture', 'BCH'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
-    cover: '/updates/FlowGuard X post.png',
     content: `
 # How FlowGuard Vaults Enforce Spending Rules On-Chain
 
@@ -2004,15 +1905,6 @@ If you manage capital on BCH, understanding this difference is essential.
 `,
   },
   'why-flowguard-is-non-custodial': {
-    slug: 'why-flowguard-is-non-custodial',
-    title: 'Why FlowGuard Is Non-Custodial (And Why That Matters)',
-    date: '2026-02-19',
-    summary:
-      'FlowGuard does not hold your keys, sign on your behalf, or control funds. Treasury rules are enforced directly by covenant contracts on Bitcoin Cash.',
-    tags: ['Security', 'Architecture', 'Deep Dive'],
-    readingTime: 7,
-    author: 'FlowGuard Team',
-    cover: '/updates/FlowGuard Blog Banner.png',
     content: `
 # Why FlowGuard Is Non-Custodial (And Why That Matters)
 
@@ -2197,218 +2089,63 @@ If you're managing treasury on BCH, understanding this separation is essential.
 `,
   },
   'what-flowguard-is': {
-    slug: 'what-flowguard-is',
-    title: 'What FlowGuard Actually Is (And What It Isn’t)',
-    date: '2026-02-18',
-    summary:
-      "FlowGuard isn't a wallet or a database. It's a set of six core covenant modules that enforce treasury rules directly on the Bitcoin Cash blockchain.",
-    tags: ['Product', 'Deep Dive', 'Technology'],
-    readingTime: 6,
-    author: 'FlowGuard Team',
     content: `
-# What FlowGuard Actually Is (And What It Isn’t)
+# What FlowGuard is
 
-## Introduction
+FlowGuard lets you pay people and keep shared money on Bitcoin Cash, with rules stored in contracts that anyone can check. You approve every payment in your own wallet. FlowGuard never holds your keys.
 
-In the previous post, we discussed the problem:
+This post goes through each part and says who can move the money. If you're new, the How it works page is the shortest way in.
 
-**Most BCH teams manage treasury with shared wallets and informal rules.**
+[How it works](/how-it-works)
 
-Today, we answer a simpler question:
+## Pay people
 
-**What exactly is FlowGuard?**
+### Streams
 
-FlowGuard is an on-chain treasury management system built on Bitcoin Cash.
+A stream pays one person bit by bit, or in steps, over a schedule you set, in BCH or a CashToken. The person you pay claims each part from their own wallet, and can move the stream to a new wallet unless you turned that off. If you allowed it when you set it up, you can pause or cancel. When you cancel, they keep what's already released and the rest comes back to your wallet.
 
-- It is **not** a wallet.
-- It is **not** a custodial service.
-- It is **not** a database pretending to be on-chain.
+### Recurring payments
 
-It is a set of **covenant contracts** that enforce treasury rules directly on the blockchain.
+A recurring payment sends the same amount on a fixed schedule, counted in days, like every 7 or every 30 days. Every 30 days drifts from the same date each month. The person you pay claims each payment. If you turn on top-ups when you create it, it keeps going for as long as you add funds.
 
-## The Core Modules
+### Pay many people
 
-FlowGuard is composed of six primary modules.
+Set up a stream for each person on your team in one go. Each person claims their own pay.
 
-Each one addresses a real treasury use case inside the BCH ecosystem.
+## Shared money
 
-### 1. Multisignature Vaults
+### Vaults
 
-Vaults are programmable treasuries.
+A vault holds shared money behind several approvals. It has 3 signers, and you choose whether 1 or 2 of them must approve each spending request. The signers are set when you create the vault and can't be changed later.
 
-They enforce:
+A signer asks for a payment, and the others approve it in their own wallets. Once enough have approved, two signers approve sending it and the payment leaves the vault.
 
-- M-of-N approval thresholds
-- Per-cycle spending caps
-- Time-based unlock windows
-- Optional recipient restrictions
+### Budget plans
 
-Signers must approve transactions ,  but approval alone is not enough.
+A budget plan releases money from your wallet on a schedule you set, and lists it under a vault. It doesn't use the vault's money.
 
-The contract still verifies:
+## Pay out from a pool
 
-- Is this within the allowed cap?
-- Has the current cycle unlocked?
-- Does this payout violate treasury policy?
+### Airdrops
 
-The rules are encoded in the contract itself.
+Put BCH or tokens in once. Anyone can claim one share, once per wallet. FlowGuard's server also approves each claim.
 
-### 2. Vesting Streams
+### Grants
 
-Streams handle structured payments over time.
+Lock the full grant up front and release each milestone when the work is done. FlowGuard's server also approves each release.
 
-Examples:
+### Bounties and rewards
 
-- Contributor salaries
-- Team token vesting
-- Grant distributions
+A bounty pays its prize to each winner you pick. A reward program pays rewards from one pool, and you send each reward. FlowGuard's server also approves each bounty payment and each reward.
 
-State is tracked using CashTokens NFT commitments.
+## What FlowGuard doesn't do
 
-Each stream stores:
+FlowGuard doesn't hold your keys or your money. The contracts on Bitcoin Cash decide when money can move. For airdrops, grants, bounties and rewards, FlowGuard's server also has to approve each payout, so those wait if the server is down. The money stays in the contract.
 
-- Current status
-- Total released
-- Time cursor
-- Recipient identity
-
-When a claim occurs, the NFT commitment updates.
-
-The contract calculates what is vested.
-The chain enforces the release.
-
-### 3. Recurring Payments
-
-Recurring payments allow fixed-interval releases:
-
-- Daily
-- Weekly
-- Monthly
-
-Instead of manually sending payroll each period, the contract enforces:
-
-- Interval timing
-- Release amounts
-- Remaining balance
-
-No one needs to “remember” to execute payments.
-
-### 4. Merkle Airdrops
-
-FlowGuard supports structured distribution using:
-
-- A Merkle root embedded in the contract
-- Proof-based claiming
-- On-chain double-claim prevention
-
-Recipients submit cryptographic proof.
-
-The contract verifies eligibility.
-
-No manual distribution required.
-
-### 5. Governance Voting
-
-Governance is handled with:
-
-- Token locking
-- Vote recording
-- Tally commitments
-
-Votes are tied to locked tokens.
-
-The contract enforces:
-
-- Voting period
-- Eligibility
-- Execution rules
-
-There is no hidden counting process off-chain.
-
-### 6. Budget Plans
-
-Budget plans support milestone-based funding.
-
-Instead of releasing full funding upfront:
-
-- Funds unlock in steps
-- Milestones are enforced
-- Releases follow schedule rules
-
-This reduces risk in grant programs and development funding.
-
-## What FlowGuard Is Not
-
-It’s important to be precise.
-
-FlowGuard is **not**:
-
-- A custodial treasury manager
-- A centralized execution engine
-- A backend-controlled wallet
-
-The backend improves UX and indexing.
-
-It does not control funds.
-
-All treasury policies are enforced by covenant logic on Bitcoin Cash.
-
-**If a rule fails, the transaction fails on-chain.**
-
-## Why This Matters for the BCH Ecosystem
-
-Bitcoin Cash already enables:
-
-- Peer-to-peer payments
-- Fast settlement
-- Low fees
-
-FlowGuard extends BCH into:
-
-- DAO infrastructure
-- Grant distribution systems
-- Structured treasury control
-- On-chain organizational coordination
-
-It allows BCH to support not just transactions ,  but governance and capital management.
-
-That is a meaningful expansion of capability.
-
-## The Design Philosophy
-
-FlowGuard follows three principles:
-
-### Non-custodial
-Users sign transactions in their own wallets.
-
-### On-chain enforcement
-Treasury rules live inside covenant contracts.
-
-### Minimal trust
-No hidden admin keys.
-No override switches.
-
-If it isn’t enforced by script, it isn’t considered a rule.
-
-## Closing
-
-FlowGuard is not trying to replace wallets.
-
-It’s trying to move treasury logic from conversations to code.
-
-In the next post, we’ll break down how FlowGuard remains non-custodial ,  and why that matters for real BCH teams managing real capital.
-
-If you’re building on Bitcoin Cash and managing treasury, this is infrastructure worth understanding.
+The contracts were reviewed by our team. There's no outside review yet, so start with a small amount.
 `,
   },
   'bch-treasury-problem': {
-    slug: 'bch-treasury-problem',
-    title: 'The Problem With How BCH Teams Manage Treasury Today',
-    date: '2026-02-17',
-    summary: 'Most BCH teams manage treasury with shared wallets and verbal rules.',
-    tags: ['Education', 'Treasury', 'BCH', 'Governance'],
-    readingTime: 8,
-    author: 'FlowGuard Team',
     content: `
 # The Problem With How BCH Teams Manage Treasury Today
 
@@ -2569,7 +2306,6 @@ In the next posts, we'll break down:
 - How vault contracts enforce spending caps
 - How streams use NFT commitments to track vesting
 - How airdrops prevent double-claiming on-chain
-- How governance votes are recorded in covenant state
 
 All running on Bitcoin Cash.
 
@@ -2589,14 +2325,6 @@ If the answer is "in chat," it might be time to move them on-chain.
     `,
   },
   'alpha-launch-chipnet': {
-    slug: 'alpha-launch-chipnet',
-    title: 'FlowGuard Alpha Launches on BCH Chipnet',
-    date: '2026-02-15',
-    summary:
-      'Introducing FlowGuard: BCH-native treasuries, streams, payments, distributions, and governance with contract-backed execution.',
-    tags: ['Launch', 'Alpha', 'Chipnet'],
-    readingTime: 5,
-    author: 'FlowGuard Team',
     content: `
 # FlowGuard Alpha Launches on BCH Chipnet
 
@@ -2642,14 +2370,6 @@ Connect your BCH wallet and create your first treasury on Chipnet. We recommend 
     `,
   },
   'treasury-automation-explained': {
-    slug: 'treasury-automation-explained',
-    title: 'Why Treasury Automation Matters',
-    date: '2026-02-10',
-    summary:
-      'Manual treasury and payout operations are error-prone, hard to audit, and difficult to scale.',
-    tags: ['Education', 'Treasury', 'Automation'],
-    readingTime: 8,
-    author: 'FlowGuard Team',
     content: `
 # Why Treasury Automation Matters
 
@@ -2696,260 +2416,203 @@ Ready to automate your treasury? [Launch the app](/vaults) and create your first
   },
 };
 
-// Helper function to render inline formatting (bold, etc.)
-function renderInlineFormatting(text: string) {
-  const parts = [];
-  let currentIndex = 0;
-  const boldRegex = /\*\*(.+?)\*\*/g;
-  let match;
+const BOLD = /\*\*(.+?)\*\*/g;
+const LINK_LINE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 
-  while ((match = boldRegex.exec(text)) !== null) {
-    // Add text before the match
-    if (match.index > currentIndex) {
-      parts.push(text.substring(currentIndex, match.index));
-    }
-    // Add the bold text
-    parts.push(
-      <strong key={match.index} className="font-semibold text-textPrimary">
-        {match[1]}
-      </strong>
+function inline(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(BOLD)) {
+    const index = match.index ?? 0;
+    if (index > cursor) parts.push(text.slice(cursor, index));
+    parts.push(<strong key={index} className="font-semibold">{match[1]}</strong>);
+    cursor = index + match[0].length;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
+function BodyLink({ label, target }: { label: string; target: string }) {
+  if (/^https?:\/\//.test(target)) {
+    return (
+      <a href={target} target="_blank" rel="noopener noreferrer">
+        {label}
+      </a>
     );
-    currentIndex = match.index + match[0].length;
   }
+  return <Link to={target}>{label}</Link>;
+}
 
-  // Add remaining text
-  if (currentIndex < text.length) {
-    parts.push(text.substring(currentIndex));
-  }
+function renderBody(content: string): React.ReactNode[] {
+  const blocks: React.ReactNode[] = [];
+  let list: string[] = [];
+  let titleSkipped = false;
 
-  return parts.length > 0 ? parts : text;
+  const flushList = (key: number) => {
+    if (list.length === 0) return;
+    blocks.push(
+      <ul key={`list-${key}`}>
+        {list.map((item, index) => (
+          <li key={index}>{inline(item)}</li>
+        ))}
+      </ul>,
+    );
+    list = [];
+  };
+
+  content.split('\n').forEach((raw, index) => {
+    const line = raw.trim();
+    if (line.startsWith('- ')) {
+      list.push(line.slice(2));
+      return;
+    }
+    flushList(index);
+    if (line === '') return;
+    if (line.startsWith('# ') && !titleSkipped) {
+      titleSkipped = true;
+      return;
+    }
+    if (line.startsWith('### ')) {
+      blocks.push(<h3 key={index}>{line.slice(4)}</h3>);
+      return;
+    }
+    if (line.startsWith('## ') || line.startsWith('# ')) {
+      blocks.push(<h2 key={index}>{line.replace(/^#+ /, '')}</h2>);
+      return;
+    }
+    if (line.startsWith('> ')) {
+      blocks.push(<blockquote key={index}>{inline(line.slice(2))}</blockquote>);
+      return;
+    }
+    const link = LINK_LINE.exec(line);
+    if (link) {
+      blocks.push(
+        <p key={index}>
+          <BodyLink label={link[1]} target={link[2]} />
+        </p>,
+      );
+      return;
+    }
+    blocks.push(<p key={index}>{inline(line)}</p>);
+  });
+  flushList(-1);
+
+  return blocks;
+}
+
+function coverSrc(cover: PostCover): string {
+  return encodeURI(cover.src);
+}
+
+function ArticleFrame({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen flex-col bg-canvas">
+      <MarketingNav />
+      <main className="min-w-0 flex-1">
+        <PageContainer width="reading" className="flex flex-col gap-8 pt-8 lg:pt-12">
+          <div>
+            <BackLink to="/updates" label={ARTICLE.back} />
+          </div>
+          {children}
+        </PageContainer>
+      </main>
+      <MarketingFooter />
+    </div>
+  );
 }
 
 export default function UpdateDetailPage() {
   const { slug } = useParams<{ slug: string }>();
-  const post = slug ? BLOG_POSTS[slug] : null;
+  const post = findPost(slug);
+  const body = slug ? ARTICLE_BODIES[slug] : undefined;
 
-  if (!post) {
+  if (!post || !body) {
     return (
-      <main className="bg-background min-h-screen">
-        <div className="max-w-4xl mx-auto px-6 py-32 text-center">
-          <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-textPrimary mb-4">Post Not Found</h1>
-          <Link to="/updates" className="text-primary hover:text-primaryHover">
-            ← Back to Updates
-          </Link>
+      <ArticleFrame>
+        <PageMeta title={ARTICLE.notFoundTitle} description={ARTICLE.notFoundLine} path={`/updates/${slug ?? ''}`} />
+        <div className="flex flex-col items-start gap-4">
+          <Heading level="page" as="h1">
+            {ARTICLE.notFoundTitle}
+          </Heading>
+          <p className="text-body text-ink-secondary">{ARTICLE.notFoundLine}</p>
+          <ButtonLink variant="secondary" to="/updates">
+            {ARTICLE.seeAllPosts}
+          </ButtonLink>
         </div>
-      </main>
+      </ArticleFrame>
     );
   }
 
+  const date = formatDate(post.date);
+
   return (
-    <main className="bg-background min-h-screen">
+    <ArticleFrame>
       <PageMeta
         title={post.title}
         description={post.summary}
         path={`/updates/${post.slug}`}
-        image={post.cover}
+        image={post.cover?.src}
         imageAlt={post.title}
         type="article"
       />
-      {/* Header */}
-      <div className="bg-surface border-b border-border">
-        {post.cover && (
-          <div className="w-full overflow-hidden">
-            <img src={post.cover} alt={post.title} className="w-full h-auto" />
-          </div>
-        )}
-        <div className="max-w-4xl mx-auto px-6 py-8">
-          <Link
-            to="/updates"
-            className="inline-flex items-center gap-2 text-textSecondary hover:text-textPrimary transition-colors mb-8"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Updates
-          </Link>
-
-          <div className="flex flex-wrap gap-2 mb-4">
-            {post.tags.map((tag) => (
-              <span
-                key={tag}
-                className="px-3 py-1 bg-surfaceAlt text-textMuted text-sm font-medium rounded-full"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-
-          <h1 className="font-display text-4xl md:text-5xl font-bold text-textPrimary mb-6">
+      <article className="flex flex-col gap-8">
+        <header className="flex flex-col gap-3">
+          <p className="text-small text-ink-muted">{post.tags.join(', ')}</p>
+          <Display size="headline" as="h1">
             {post.title}
-          </h1>
+          </Display>
+          <p className="text-body-lg text-ink-secondary">{post.summary}</p>
+          <p className="text-small text-ink-muted">
+            <time dateTime={post.date}>{date}</time>
+            {` · ${readingTime(post.readingMinutes)} · ${ARTICLE.byline}`}
+          </p>
+        </header>
 
-          <div className="flex flex-wrap items-center gap-6 text-sm text-textMuted">
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4" />
-              {new Date(post.date).toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </div>
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4" />
-              {post.readingTime} min read
-            </div>
-            {post.author && <div className="text-textSecondary">By {post.author}</div>}
-          </div>
-        </div>
-      </div>
+        {post.archived && date ? (
+          <Notice tone="info" title={ARTICLE.archivedTitle}>
+            {`${archivedNotice(date)} `}
+            <ButtonLink variant="link" to="/changelog">
+              {ARTICLE.seeChangelog}
+            </ButtonLink>
+          </Notice>
+        ) : null}
 
-      {/* Content */}
-      <article className="max-w-4xl mx-auto px-6 py-12">
-        <div className="prose prose-lg max-w-none">
-          {post.content.split('\n').map((line, i) => {
-            // Skip the first H1 (duplicate title)
-            if (line.startsWith('# ') && i < 5) {
-              return null;
-            }
-            if (line.startsWith('# ')) {
-              return (
-                <h1 key={i} className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-textPrimary mt-12 mb-6">
-                  {line.slice(2)}
-                </h1>
-              );
-            }
-            if (line.startsWith('## ')) {
-              return (
-                <h2 key={i} className="font-display text-2xl font-bold text-textPrimary mt-8 mb-3">
-                  {line.slice(3)}
-                </h2>
-              );
-            }
-            if (line.startsWith('### ')) {
-              return (
-                <h3
-                  key={i}
-                  className="font-display text-xl font-semibold text-textPrimary mt-6 mb-2"
-                >
-                  {line.slice(4)}
-                </h3>
-              );
-            }
-            if (line.startsWith('> ')) {
-              return (
-                <blockquote
-                  key={i}
-                  className="border-l-4 border-primary/30 pl-4 italic text-textSecondary my-3"
-                >
-                  {line.slice(2)}
-                </blockquote>
-              );
-            }
-            if (line.startsWith('- ')) {
-              return (
-                <li key={i} className="text-textSecondary ml-6 mb-1.5">
-                  {renderInlineFormatting(line.slice(2))}
-                </li>
-              );
-            }
-            if (line.startsWith('[') && line.includes('](')) {
-              const match = line.match(/\[([^\]]+)\]\(([^)]+)\)/);
-              if (match) {
-                return (
-                  <p key={i} className="my-4">
-                    <Link
-                      to={match[2]}
-                      className="text-primary hover:text-primaryHover font-semibold"
-                    >
-                      {match[1]} →
-                    </Link>
-                  </p>
-                );
-              }
-            }
-            if (line.trim() === '') {
-              return <div key={i} className="h-3" />;
-            }
-            return (
-              <p key={i} className="text-textSecondary leading-relaxed mb-3">
-                {renderInlineFormatting(line)}
-              </p>
-            );
-          })}
-        </div>
+        {post.cover ? (
+          <img
+            src={coverSrc(post.cover)}
+            width={post.cover.width}
+            height={post.cover.height}
+            alt={post.cover.alt}
+            className="h-auto w-full rounded-card border border-line"
+          />
+        ) : null}
 
-        {/* Social Engagement Section */}
-        <div className="mt-16 pt-12 border-t border-border">
-          <h3 className="font-display text-2xl font-bold text-textPrimary mb-6">
-            Join the Conversation
-          </h3>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <a
-              href="https://x.com/flowguard_"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 p-4 bg-surface border border-border rounded-xl hover:border-primary/50 transition-all group"
-            >
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                <XIcon className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <div className="font-semibold text-textPrimary">Discuss on X</div>
-                <div className="text-sm text-textSecondary">Share your thoughts</div>
-              </div>
-            </a>
-
-            <a
-              href="https://farcaster.xyz/flowguard"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 p-4 bg-surface border border-border rounded-xl hover:border-primary/50 transition-all group"
-            >
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                <svg className="w-5 h-5 text-primary" viewBox="0 0 1000 1000" fill="currentColor">
-                  <path d="M257.778 155.556H742.222V844.445H671.111V528.889H670.414C662.554 441.677 589.258 373.333 500 373.333C410.742 373.333 337.446 441.677 329.586 528.889H328.889V844.445H257.778V155.556Z" />
-                  <path d="M128.889 253.333L157.778 351.111H182.222V746.667C169.949 746.667 160 756.616 160 768.889V795.556H155.556C143.283 795.556 133.333 805.505 133.333 817.778V844.445H382.222V817.778C382.222 805.505 372.273 795.556 360 795.556H355.556V768.889C355.556 756.616 345.606 746.667 333.333 746.667H306.667V253.333H128.889Z" />
-                  <path d="M675.556 746.667C663.283 746.667 653.333 756.616 653.333 768.889V795.556H648.889C636.616 795.556 626.667 805.505 626.667 817.778V844.445H875.556V817.778C875.556 805.505 865.606 795.556 853.333 795.556H848.889V768.889C848.889 756.616 838.94 746.667 826.667 746.667V351.111H851.111L880 253.333H702.222V746.667H675.556Z" />
-                </svg>
-              </div>
-              <div>
-                <div className="font-semibold text-textPrimary">Discuss on Farcaster</div>
-                <div className="text-sm text-textSecondary">Join the conversation</div>
-              </div>
-            </a>
-
-            <a
-              href="https://t.me/flowguard_cash"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 p-4 bg-surface border border-border rounded-xl hover:border-primary/50 transition-all group"
-            >
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                <Send className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <div className="font-semibold text-textPrimary">Join the Community</div>
-                <div className="text-sm text-textSecondary">Connect on Telegram</div>
-              </div>
-            </a>
-
-            <a
-              href="https://github.com/winsznx/flow-guard/issues/new"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 p-4 bg-surface border border-border rounded-xl hover:border-primary/50 transition-all group"
-            >
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                <MessageSquare className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <div className="font-semibold text-textPrimary">Submit Feedback</div>
-                <div className="text-sm text-textSecondary">Help us improve</div>
-              </div>
-            </a>
-          </div>
-        </div>
+        <Prose>{renderBody(body.content)}</Prose>
       </article>
 
-      <Footer />
-    </main>
+      <Panel title={ARTICLE.tryTitle} description={ARTICLE.tryLine}>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <ButtonLink variant="primary" href={APP_SITE_URL} external>
+            {ARTICLE.openApp}
+          </ButtonLink>
+          <ButtonLink variant="secondary" href={DOCS_SITE_URL} external>
+            {ARTICLE.readDocs}
+          </ButtonLink>
+        </div>
+      </Panel>
+
+      <section aria-labelledby="article-feedback" className="flex flex-col gap-4 pb-8">
+        <Heading level="section" as="h2" id="article-feedback">
+          {ARTICLE.feedbackTitle}
+        </Heading>
+        <ul className="flex flex-col gap-3">
+          {ARTICLE_LINKS.map((link) => (
+            <li key={link.href} className="flex">
+              <LinkCard href={link.href} external title={link.title} description={link.description} className="flex-1" />
+            </li>
+          ))}
+        </ul>
+      </section>
+    </ArticleFrame>
   );
 }

@@ -1,458 +1,464 @@
-export interface DaoNavSection {
-  path: string;
-  label: string;
-  description: string;
-}
+import type {
+  ActivityEvent,
+  MemberSignsAs,
+  OrganizationAssetKind,
+  RecipientStatus,
+  RecipientUse,
+  RoleAccess,
+} from '../copy/organization';
+import type { StatusKey } from '../copy/status';
 
 export interface DaoAssetRow {
+  id: string;
   symbol: string;
   name: string;
-  category: 'BCH' | 'STABLECOIN' | 'GOVERNANCE' | 'NFT';
+  category: OrganizationAssetKind;
   balance: string;
-  valueUsd: string;
   valueUsdNumber: number;
-  allocation: number;
+  isEstimate: boolean;
   vaults: number;
-  executionLane: string;
+  ruleId: string | null;
 }
 
 export interface DaoVaultRow {
+  id: string;
   name: string;
-  mandate: string;
+  purpose: string;
   assets: string;
-  assetsCount: number;
-  signers: string;
-  monthlyOutflow: string;
-  policyStatus: 'Healthy' | 'Watch' | 'Needs Review';
-  runway: string;
+  signersRequired: number;
+  signersTotal: number;
+  moneyOutPerMonthUsd: number;
 }
 
+export type DaoRequestStatus = Extract<StatusKey, 'draft' | 'waitingForApproval' | 'approved'>;
+
 export interface DaoProposalRow {
+  id: string;
   title: string;
-  lane: string;
-  amount: string;
-  amountNumber: number;
+  ruleId: string | null;
+  valueUsd: number;
   asset: string;
-  stage: 'Draft' | 'Review' | 'Queued' | 'Ready';
-  eta: string;
+  status: DaoRequestStatus;
+  note: string;
 }
 
 export interface DaoMemberRow {
+  id: string;
   name: string;
-  role: string;
-  wallets: string;
-  vaultCoverage: string;
-  signingWindow: string;
-  responseSla: string;
-  status: 'Primary' | 'Backup' | 'Observer';
+  roleId: string | null;
+  address: string;
+  vaults: string;
+  available: string;
+  repliesWithin: string;
+  signsAs: MemberSignsAs;
 }
 
 export interface DaoRoleRow {
-  role: string;
-  members: string;
-  scope: string;
-  approvalLane: string;
-  permissions: string;
-  riskTier: 'Critical' | 'Controlled' | 'Observed';
+  id: string;
+  name: string;
+  access: RoleAccess;
+  ruleId: string | null;
+  canDo: string;
+  looksAfter: string;
 }
 
-export interface DaoPolicyLaneRow {
-  lane: string;
-  txCap: string;
-  dailyCap: string;
-  approvers: string;
-  executionWindow: string;
+export interface DaoSpendingRuleRow {
+  id: string;
+  name: string;
+  limitPerPaymentUsd: number;
+  dailyLimitUsd: number;
+  approvalsNeeded: number;
+  signerCount: number;
+  waitHours: number;
   assets: string;
 }
 
-export interface DaoGuardrailRow {
-  assetClass: string;
-  defaultLane: string;
-  dailyNetCap: string;
-  routingRule: string;
+export interface DaoAssetRuleRow {
+  id: string;
+  asset: string;
+  ruleId: string | null;
+  dailyLimitUsd: number | null;
+  goesTo: string;
   notes: string;
 }
 
-export interface DaoAlert {
-  title: string;
-  detail: string;
-  severity: 'info' | 'watch' | 'critical';
+export interface DaoRecipientRow {
+  id: string;
+  name: string;
+  address: string;
+  usedFor: RecipientUse;
+  assets: string;
+  ruleId: string | null;
+  status: RecipientStatus;
 }
 
-export interface DaoTimelineItem {
-  title: string;
-  detail: string;
-  time: string;
+export interface DaoTimelineSeed {
+  event: ActivityEvent;
+  hoursAgo: number;
 }
 
-export const daoNavSections: DaoNavSection[] = [
+export interface DaoCashflowSeed {
+  monthsAgo: number;
+  inflowUsd: number;
+  outflowUsd: number;
+}
+
+export const RULE_IDS = {
+  quick: 'rule-quick',
+  standard: 'rule-standard',
+  delayed: 'rule-delayed',
+  emergency: 'rule-emergency',
+} as const;
+
+const ROLE_IDS = {
+  financeLead: 'role-finance-lead',
+  financeReviewer: 'role-finance-reviewer',
+  communityLead: 'role-community-lead',
+  securityCouncil: 'role-security-council',
+  observer: 'role-observer',
+} as const;
+
+export const daoSpendingRules: DaoSpendingRuleRow[] = [
   {
-    path: '/app/dao/overview',
-    label: 'Overview',
-    description: 'Cross-vault health, exposure, and proposal flow.',
+    id: RULE_IDS.quick,
+    name: 'Quick',
+    limitPerPaymentUsd: 2500,
+    dailyLimitUsd: 7500,
+    approvalsNeeded: 1,
+    signerCount: 3,
+    waitHours: 0,
+    assets: 'BCH, FGOV',
   },
   {
-    path: '/app/dao/streams',
-    label: 'Streams',
-    description: 'Treasury-backed vesting inventory and execution history.',
+    id: RULE_IDS.standard,
+    name: 'Standard',
+    limitPerPaymentUsd: 10000,
+    dailyLimitUsd: 20000,
+    approvalsNeeded: 2,
+    signerCount: 3,
+    waitHours: 4,
+    assets: 'USDh, BCH',
   },
   {
-    path: '/app/dao/team',
-    label: 'Team',
-    description: 'Wallet owners, signers, and operating coverage.',
+    id: RULE_IDS.delayed,
+    name: 'Delayed',
+    limitPerPaymentUsd: 50000,
+    dailyLimitUsd: 50000,
+    approvalsNeeded: 2,
+    signerCount: 3,
+    waitHours: 24,
+    assets: 'FGOV, grant receipts',
   },
   {
-    path: '/app/dao/roles',
-    label: 'Roles',
-    description: 'Permission model, escalation paths, and risk tiers.',
-  },
-  {
-    path: '/app/dao/treasury-policy',
-    label: 'Policy',
-    description: 'Execution lanes, asset guardrails, and recipient controls.',
+    id: RULE_IDS.emergency,
+    name: 'Emergency',
+    limitPerPaymentUsd: 15000,
+    dailyLimitUsd: 15000,
+    approvalsNeeded: 2,
+    signerCount: 3,
+    waitHours: 12,
+    assets: 'BCH, USDh from the security vault only',
   },
 ];
 
-export const daoSummary = {
-  treasuryValue: '$182.9K',
-  treasuryValueNumber: 182900,
-  activeVaults: 6,
-  coveredAssets: 4,
-  runway: '14.2 mo',
-  runwayMonths: 14.2,
-  monthlyOutflow: '$12.8K',
-  monthlyOutflowNumber: 12800,
-  proposalsInFlight: 7,
-  policyCoverage: '93%',
-  teamMembers: 18,
-  signerCoverage: '24h follow-the-sun',
-  whitelistedRecipients: 22,
-  emergencyDelay: '12 hrs',
-};
-
 export const daoAssets: DaoAssetRow[] = [
   {
+    id: 'asset-bch',
     symbol: 'BCH',
-    name: 'Core operational reserve',
+    name: 'Day-to-day spending',
     category: 'BCH',
     balance: '141.8 BCH',
-    valueUsd: '$69.5K',
     valueUsdNumber: 69500,
-    allocation: 38,
-    vaults: 5,
-    executionLane: 'Instant lane',
+    isEstimate: false,
+    vaults: 4,
+    ruleId: RULE_IDS.quick,
   },
   {
+    id: 'asset-usdh',
     symbol: 'USDh',
-    name: 'Stablecoin payroll reserve',
+    name: 'Stablecoin for team pay',
     category: 'STABLECOIN',
     balance: '58,400 USDh',
-    valueUsd: '$58.4K',
     valueUsdNumber: 58400,
-    allocation: 32,
-    vaults: 3,
-    executionLane: 'Finance lane',
-  },
-  {
-    symbol: 'FGOV',
-    name: 'Governance and incentive pool',
-    category: 'GOVERNANCE',
-    balance: '1.82M FGOV',
-    valueUsd: '$41.2K',
-    valueUsdNumber: 41200,
-    allocation: 23,
+    isEstimate: false,
     vaults: 2,
-    executionLane: 'Timelocked lane',
+    ruleId: RULE_IDS.standard,
   },
   {
-    symbol: 'Grant NFTs',
-    name: 'Milestone receipts and grant proofs',
+    id: 'asset-fgov',
+    symbol: 'FGOV',
+    name: 'Community reward tokens',
+    category: 'GOVERNANCE',
+    balance: '1,820,000 FGOV',
+    valueUsdNumber: 41200,
+    isEstimate: false,
+    vaults: 1,
+    ruleId: RULE_IDS.delayed,
+  },
+  {
+    id: 'asset-receipts',
+    symbol: 'Grant receipts',
+    name: 'Records of grant milestones',
     category: 'NFT',
-    balance: '12 active NFTs',
-    valueUsd: 'Non-fungible',
+    balance: '12 receipts',
     valueUsdNumber: 13800,
-    allocation: 7,
-    vaults: 4,
-    executionLane: 'Approval-only lane',
+    isEstimate: true,
+    vaults: 1,
+    ruleId: RULE_IDS.delayed,
   },
 ];
 
 export const daoVaults: DaoVaultRow[] = [
   {
-    name: 'Core Operations Vault',
-    mandate: 'Payroll, contractors, infrastructure',
+    id: 'vault-core',
+    name: 'Core operations',
+    purpose: 'Team pay, contractors and servers',
     assets: 'BCH, USDh',
-    assetsCount: 2,
-    signers: '3 / 5 active',
-    monthlyOutflow: '$7.3K',
-    policyStatus: 'Healthy',
-    runway: '18.1 mo',
+    signersRequired: 2,
+    signersTotal: 3,
+    moneyOutPerMonthUsd: 7300,
   },
   {
-    name: 'Protocol Incentives Vault',
-    mandate: 'Liquidity mining and contributor rewards',
+    id: 'vault-incentives',
+    name: 'Incentives',
+    purpose: 'Contributor and community rewards',
     assets: 'FGOV, BCH',
-    assetsCount: 2,
-    signers: '2 / 4 active',
-    monthlyOutflow: '$2.6K',
-    policyStatus: 'Watch',
-    runway: '9.4 mo',
+    signersRequired: 2,
+    signersTotal: 3,
+    moneyOutPerMonthUsd: 2600,
   },
   {
-    name: 'Grants Program Vault',
-    mandate: 'Milestone-based public goods funding',
-    assets: 'BCH, Grant NFTs',
-    assetsCount: 2,
-    signers: '4 / 6 active',
-    monthlyOutflow: '$1.9K',
-    policyStatus: 'Healthy',
-    runway: '11.8 mo',
+    id: 'vault-grants',
+    name: 'Grants',
+    purpose: 'Grants paid by milestone',
+    assets: 'BCH, grant receipts',
+    signersRequired: 2,
+    signersTotal: 3,
+    moneyOutPerMonthUsd: 1900,
   },
   {
-    name: 'Security Response Vault',
-    mandate: 'Incidents, bug bounties, emergency response',
+    id: 'vault-security',
+    name: 'Security',
+    purpose: 'Incidents, bug bounties and emergencies',
     assets: 'BCH, USDh',
-    assetsCount: 2,
-    signers: '2 / 3 active',
-    monthlyOutflow: '$1.0K',
-    policyStatus: 'Needs Review',
-    runway: '22.5 mo',
+    signersRequired: 1,
+    signersTotal: 3,
+    moneyOutPerMonthUsd: 1000,
   },
 ];
 
 export const daoProposals: DaoProposalRow[] = [
   {
-    title: 'June grants tranche for indexer tooling',
-    lane: 'Timelocked lane',
-    amount: '$8.0K',
-    amountNumber: 8000,
+    id: 'request-tools-grant',
+    title: 'June grant payment for developer tools',
+    ruleId: RULE_IDS.delayed,
+    valueUsd: 8000,
     asset: 'BCH',
-    stage: 'Review',
-    eta: 'Needs 1 signer',
+    status: 'waitingForApproval',
+    note: 'Needs 1 more approval',
   },
   {
-    title: 'Stablecoin payroll refill for contributor ops',
-    lane: 'Finance lane',
-    amount: '$5.6K',
-    amountNumber: 5600,
+    id: 'request-payroll',
+    title: 'Add funds to stablecoin team pay for contributors',
+    ruleId: RULE_IDS.standard,
+    valueUsd: 5600,
     asset: 'USDh',
-    stage: 'Queued',
-    eta: 'Executes in 4 hrs',
+    status: 'approved',
+    note: 'Approved. Ready to send',
   },
   {
-    title: 'Delegate incentive batch for Q2',
-    lane: 'Instant lane',
-    amount: '$3.1K',
-    amountNumber: 3100,
+    id: 'request-community',
+    title: 'Community rewards for the second quarter',
+    ruleId: RULE_IDS.quick,
+    valueUsd: 3100,
     asset: 'FGOV',
-    stage: 'Ready',
-    eta: 'Ready to broadcast',
+    status: 'approved',
+    note: 'Approved. Ready to send',
   },
   {
-    title: 'Bug bounty reserve rotation',
-    lane: 'Finance lane',
-    amount: '$2.4K',
-    amountNumber: 2400,
+    id: 'request-events',
+    title: 'Move money into the events fund',
+    ruleId: RULE_IDS.standard,
+    valueUsd: 2400,
     asset: 'BCH',
-    stage: 'Draft',
-    eta: 'Awaiting author',
-  },
-];
-
-export const daoMembers: DaoMemberRow[] = [
-  {
-    name: 'Ada Nwosu',
-    role: 'Treasury Steward',
-    wallets: '2 wallets',
-    vaultCoverage: 'Ops, Security',
-    signingWindow: 'UTC+1 / 08:00-18:00',
-    responseSla: '< 2 hrs',
-    status: 'Primary',
-  },
-  {
-    name: 'Marcus Lee',
-    role: 'Finance Reviewer',
-    wallets: '1 wallet',
-    vaultCoverage: 'Ops, Grants',
-    signingWindow: 'UTC-8 / 09:00-17:00',
-    responseSla: '< 4 hrs',
-    status: 'Primary',
-  },
-  {
-    name: 'Chioma Bell',
-    role: 'Protocol Delegate',
-    wallets: '3 wallets',
-    vaultCoverage: 'Incentives',
-    signingWindow: 'UTC+0 / 10:00-20:00',
-    responseSla: '< 6 hrs',
-    status: 'Backup',
-  },
-  {
-    name: 'Jonas Wu',
-    role: 'Security Council',
-    wallets: '2 wallets',
-    vaultCoverage: 'Security',
-    signingWindow: 'UTC+8 / 09:00-17:00',
-    responseSla: '< 1 hr',
-    status: 'Primary',
-  },
-  {
-    name: 'Mina Torres',
-    role: 'Ops Observer',
-    wallets: '1 wallet',
-    vaultCoverage: 'All vaults',
-    signingWindow: 'UTC-5 / 08:00-16:00',
-    responseSla: 'Digest only',
-    status: 'Observer',
+    status: 'draft',
+    note: 'Being written',
   },
 ];
 
 export const daoRoles: DaoRoleRow[] = [
   {
-    role: 'Treasury Steward',
-    members: '4 members',
-    scope: 'Daily ops, refills, recurring payouts',
-    approvalLane: 'Instant / Finance',
-    permissions: 'Create, approve, broadcast within cap',
-    riskTier: 'Critical',
+    id: ROLE_IDS.financeLead,
+    name: 'Finance lead',
+    access: 'send',
+    ruleId: RULE_IDS.quick,
+    canDo: 'Create, approve and send spending requests up to the limit',
+    looksAfter: 'Day-to-day payments, adding funds and team pay',
   },
   {
-    role: 'Finance Reviewer',
-    members: '3 members',
-    scope: 'Stablecoin movements, accounting checks',
-    approvalLane: 'Finance lane',
-    permissions: 'Review routing, recipient policy, reports',
-    riskTier: 'Controlled',
+    id: ROLE_IDS.financeReviewer,
+    name: 'Finance reviewer',
+    access: 'review',
+    ruleId: RULE_IDS.standard,
+    canDo: 'Review recipients, rules and reports',
+    looksAfter: 'Stablecoin payments and accounting checks',
   },
   {
-    role: 'Protocol Delegate',
-    members: '6 members',
-    scope: 'Incentives, grants, token programs',
-    approvalLane: 'Timelocked lane',
-    permissions: 'Queue, co-sign, monitor lockups',
-    riskTier: 'Controlled',
+    id: ROLE_IDS.communityLead,
+    name: 'Community lead',
+    access: 'review',
+    ruleId: RULE_IDS.delayed,
+    canDo: "Schedule payments, approve them and watch what's locked in contracts",
+    looksAfter: 'Rewards, grants and token programs',
   },
   {
-    role: 'Security Council',
-    members: '2 members',
-    scope: 'Emergency pause, incident spend',
-    approvalLane: 'Emergency lane',
-    permissions: 'Pause, rotate lanes, freeze recipients',
-    riskTier: 'Critical',
+    id: ROLE_IDS.securityCouncil,
+    name: 'Security council',
+    access: 'send',
+    ruleId: RULE_IDS.emergency,
+    canDo: 'Pause payments, change rules and stop payments to a recipient',
+    looksAfter: 'Pausing payments and paying for incidents',
   },
   {
-    role: 'Observer',
-    members: '3 members',
-    scope: 'Audit trail and reporting',
-    approvalLane: 'No execution rights',
-    permissions: 'Read-only dashboards and exports',
-    riskTier: 'Observed',
+    id: ROLE_IDS.observer,
+    name: 'Observer',
+    access: 'view',
+    ruleId: null,
+    canDo: 'View activity',
+    looksAfter: 'Activity and monthly numbers',
   },
 ];
 
-export const daoPolicyLanes: DaoPolicyLaneRow[] = [
+export const daoMembers: DaoMemberRow[] = [
   {
-    lane: 'Instant lane',
-    txCap: '$2.5K',
-    dailyCap: '$7.5K',
-    approvers: '2 of 4 stewards',
-    executionWindow: 'Immediate',
-    assets: 'BCH, FGOV',
+    id: 'member-ade',
+    name: 'Ade Nwosu',
+    roleId: ROLE_IDS.financeLead,
+    address: '',
+    vaults: 'Core operations, Security',
+    available: 'Weekdays, 8 AM to 6 PM (UTC+1)',
+    repliesWithin: '2 hours',
+    signsAs: 'main',
   },
   {
-    lane: 'Finance lane',
-    txCap: '$10K',
-    dailyCap: '$20K',
-    approvers: '3 of 5 reviewers',
-    executionWindow: '4-hour cooling-off',
-    assets: 'USDh, BCH',
+    id: 'member-maya',
+    name: 'Maya Lee',
+    roleId: ROLE_IDS.financeReviewer,
+    address: '',
+    vaults: 'Core operations, Grants',
+    available: 'Weekdays, 9 AM to 5 PM (UTC-8)',
+    repliesWithin: '4 hours',
+    signsAs: 'main',
   },
   {
-    lane: 'Timelocked lane',
-    txCap: '$50K',
-    dailyCap: '$50K',
-    approvers: '4 of 7 delegates',
-    executionWindow: '24-hour delay',
-    assets: 'FGOV, grant allocations',
+    id: 'member-sam',
+    name: 'Sam Bell',
+    roleId: ROLE_IDS.communityLead,
+    address: '',
+    vaults: 'Incentives',
+    available: 'Every day, 10 AM to 8 PM (UTC)',
+    repliesWithin: '6 hours',
+    signsAs: 'backup',
   },
   {
-    lane: 'Emergency lane',
-    txCap: '$15K',
-    dailyCap: '$15K',
-    approvers: '2 of 2 security council',
-    executionWindow: '12-hour delay',
-    assets: 'Security reserve only',
-  },
-];
-
-export const daoGuardrails: DaoGuardrailRow[] = [
-  {
-    assetClass: 'BCH reserves',
-    defaultLane: 'Instant lane',
-    dailyNetCap: '$7.5K',
-    routingRule: 'Can flow directly to whitelisted ops and grants recipients',
-    notes: 'Auto-flags if runway drops below 12 months',
+    id: 'member-tomas',
+    name: 'Tomas Wu',
+    roleId: ROLE_IDS.securityCouncil,
+    address: '',
+    vaults: 'Security',
+    available: 'Weekdays, 9 AM to 5 PM (UTC+8)',
+    repliesWithin: '1 hour',
+    signsAs: 'main',
   },
   {
-    assetClass: 'CashToken stablecoins',
-    defaultLane: 'Finance lane',
-    dailyNetCap: '$20K',
-    routingRule: 'Recipient must be on payroll, vendor, or OTC list',
-    notes: 'Requires memo and settlement tag on every outbound',
-  },
-  {
-    assetClass: 'Governance tokens',
-    defaultLane: 'Timelocked lane',
-    dailyNetCap: '$50K',
-    routingRule: 'Only incentive contracts, delegates, or vesting vaults',
-    notes: 'No direct market-maker transfers without proposal review',
-  },
-  {
-    assetClass: 'NFT receipts and grants',
-    defaultLane: 'Approval-only lane',
-    dailyNetCap: 'N/A',
-    routingRule: 'Movement tied to milestone or archive action only',
-    notes: 'Preserved for audit history and completion proofs',
+    id: 'member-lena',
+    name: 'Lena Torres',
+    roleId: ROLE_IDS.observer,
+    address: '',
+    vaults: 'All vaults',
+    available: 'Weekdays, 8 AM to 4 PM (UTC-5)',
+    repliesWithin: 'Daily summary only',
+    signsAs: 'viewOnly',
   },
 ];
 
-export const daoAlerts: DaoAlert[] = [
+export const daoAssetRules: DaoAssetRuleRow[] = [
   {
-    title: 'Security vault policy drift',
-    detail: 'Emergency lane still references an outdated recipient whitelist from last quarter.',
-    severity: 'critical',
+    id: 'asset-rule-bch',
+    asset: 'BCH',
+    ruleId: RULE_IDS.quick,
+    dailyLimitUsd: 7500,
+    goesTo: 'Approved operations and grant recipients',
+    notes: 'Flag this if funds cover less than 12 months',
   },
   {
-    title: 'Incentive vault runway compressed',
-    detail: 'Governance token emissions will fall below the target runway in 46 days.',
-    severity: 'watch',
+    id: 'asset-rule-usdh',
+    asset: 'Stablecoins (USDh)',
+    ruleId: RULE_IDS.standard,
+    dailyLimitUsd: 20000,
+    goesTo: 'Only people on the team pay, vendor or trading partner list',
+    notes: "Every payment needs a note saying what it's for",
   },
   {
-    title: 'Stablecoin payroll reserve healthy',
-    detail: 'Current USDh balance covers the next 4 payroll cycles without rotation.',
-    severity: 'info',
+    id: 'asset-rule-fgov',
+    asset: 'Community reward tokens (FGOV)',
+    ruleId: RULE_IDS.delayed,
+    dailyLimitUsd: 50000,
+    goesTo: 'Only reward contracts, community leads or streams',
+    notes: 'No payments to trading firms without a spending request',
+  },
+  {
+    id: 'asset-rule-receipts',
+    asset: 'Grant receipts',
+    ruleId: RULE_IDS.delayed,
+    dailyLimitUsd: null,
+    goesTo: 'Moves only when a milestone is done or the grant is archived',
+    notes: 'Kept as a record of finished milestones',
   },
 ];
 
-export const daoTimeline: DaoTimelineItem[] = [
+export const daoRecipients: DaoRecipientRow[] = [
   {
-    title: 'Finance lane refill queued',
-    detail: 'USDh moved from Treasury Hub into Ops vault with 4-hour cooling-off.',
-    time: 'Today, 09:20 UTC',
+    id: 'recipient-payroll',
+    name: 'Team pay',
+    address: '',
+    usedFor: 'payroll',
+    assets: 'USDh',
+    ruleId: RULE_IDS.standard,
+    status: 'approved',
   },
   {
-    title: 'Grant milestone released',
-    detail: 'Second tranche for BCH indexer modernization passed review and executed.',
-    time: 'Yesterday, 17:40 UTC',
+    id: 'recipient-grants',
+    name: 'Open source grants',
+    address: '',
+    usedFor: 'grant',
+    assets: 'BCH',
+    ruleId: RULE_IDS.delayed,
+    status: 'approved',
   },
   {
-    title: 'Security council rotated signer',
-    detail: 'Backup signer promoted after incident-response drill.',
-    time: '2 days ago',
+    id: 'recipient-security',
+    name: 'Security incident fund',
+    address: '',
+    usedFor: 'emergency',
+    assets: 'BCH, USDh',
+    ruleId: RULE_IDS.emergency,
+    status: 'underReview',
   },
-  {
-    title: 'Treasury export generated',
-    detail: 'Monthly cash flow package shared with contributors and delegates.',
-    time: '3 days ago',
-  },
+];
+
+export const daoTimelineSeed: DaoTimelineSeed[] = [
+  { event: { kind: 'payrollScheduled' }, hoursAgo: 3 },
+  { event: { kind: 'milestonePaid' }, hoursAgo: 26 },
+  { event: { kind: 'roleUpdated', role: 'Security council' }, hoursAgo: 50 },
+  { event: { kind: 'reportShared' }, hoursAgo: 74 },
+];
+
+export const daoCashflowSeed: DaoCashflowSeed[] = [
+  { monthsAgo: 5, inflowUsd: 13500, outflowUsd: 12100 },
+  { monthsAgo: 4, inflowUsd: 12000, outflowUsd: 12900 },
+  { monthsAgo: 3, inflowUsd: 14200, outflowUsd: 12800 },
+  { monthsAgo: 2, inflowUsd: 13100, outflowUsd: 12400 },
+  { monthsAgo: 1, inflowUsd: 12400, outflowUsd: 13300 },
+  { monthsAgo: 0, inflowUsd: 13900, outflowUsd: 12800 },
 ];

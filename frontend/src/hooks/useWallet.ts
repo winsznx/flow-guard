@@ -1,7 +1,6 @@
 /**
- * Unified Wallet Hook
- * Provides a React hook interface for Paytaca, WalletConnect v2, and mainnet.cash wallets
- * Uses Zustand for global state management
+ * Wallet state for the whole app (Zustand store plus a hook). Paytaca, Cashonize,
+ * WalletConnect, OPTN and WizardConnect all go through the connectors in ../connectors.
  */
 
 import { useEffect, useRef } from 'react';
@@ -12,11 +11,15 @@ import {
   Transaction,
   SignedTransaction,
   IWalletConnector,
+  WalletInfo,
   CashScriptSignOptions,
   CashScriptSignResponse,
 } from '../types/wallet';
-import { createWalletConnector } from '../connectors';
+import { createWalletConnector, restoreWalletConnector } from '../connectors';
 import { assertBackendNetworkMatches } from '../utils/networkGuard';
+import { clearCachedBearer } from '../utils/auth';
+import { TX_NOTICE_EVENT } from '../utils/txNotice';
+import { CodedError, asFlowError, flowFailure } from '../copy/errors';
 
 /**
  * Network this build targets. Baked in at build time — there is no runtime switch on
@@ -35,6 +38,65 @@ let activeDisconnectHandler: ((data?: any) => void) | null = null;
 // Survives all React re-renders because it lives outside the component tree.
 let initFiredOnce = false;
 
+/** Wait after a transaction notice before reading the balance, so FlowGuard's servers have seen it. */
+const BALANCE_REFRESH_DELAY_MS = 4000;
+let balanceRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let balanceListenerAttached = false;
+
+function asNetwork(network: WalletInfo['network']): 'mainnet' | 'chipnet' {
+  return network === 'mainnet' ? 'mainnet' : 'chipnet';
+}
+
+function toCodedError(error: unknown): CodedError {
+  return error instanceof CodedError ? error : flowFailure(asFlowError(error).code, { cause: error });
+}
+
+/** Ends a session whose wallet is on the other network than this build, and says so. */
+async function rejectWrongNetwork(connector: IWalletConnector, walletInfo: WalletInfo): Promise<void> {
+  if (asNetwork(walletInfo.network) === CONFIGURED_NETWORK) return;
+  await connector.disconnect().catch((disconnectError: unknown) => {
+    console.warn('[useWallet] Disconnect after a network mismatch failed:', disconnectError);
+  });
+  throw flowFailure('WRONG_NETWORK', {
+    details: `Wallet is on ${walletInfo.network}. This build uses ${CONFIGURED_NETWORK}.`,
+  });
+}
+
+function persistConnectedWallet(walletType: WalletType, walletInfo: WalletInfo): void {
+  localStorage.setItem('wallet_type', walletType);
+  localStorage.setItem('wallet_address', walletInfo.address);
+  localStorage.setItem('wallet_connected_at', String(Date.now()));
+  if (walletInfo.publicKey) {
+    localStorage.setItem('wallet_publickey', walletInfo.publicKey);
+  }
+}
+
+function connectedWalletState(
+  walletType: WalletType,
+  walletInfo: WalletInfo,
+  connector: IWalletConnector,
+): Partial<WalletStore> {
+  return {
+    walletType,
+    address: walletInfo.address,
+    publicKey: walletInfo.publicKey || null,
+    balance: walletInfo.balance || null,
+    isConnected: true,
+    isConnecting: false,
+    network: walletInfo.network,
+    error: null,
+    connector,
+  };
+}
+
+function clearSavedWalletSession(): void {
+  localStorage.removeItem('wallet_type');
+  localStorage.removeItem('wallet_address');
+  localStorage.removeItem('wallet_publickey');
+  localStorage.removeItem('wallet_connected_at');
+  clearCachedBearer();
+}
+
 // Global state store using Zustand
 interface WalletStore extends WalletState {
   connector: IWalletConnector | null;
@@ -47,10 +109,12 @@ interface WalletStore extends WalletState {
   setConnectingRef: (value: boolean) => void;
   setInitAttempted: (value: boolean) => void;
   connect: (walletType: WalletType) => Promise<void>;
+  /** Resume a saved wallet without prompting. Resolves false when nothing was resumed. */
+  restore: (walletType: WalletType) => Promise<boolean>;
   disconnect: () => Promise<void>;
   signTransaction: (tx: Transaction) => Promise<SignedTransaction>;
   signCashScriptTransaction: (options: CashScriptSignOptions) => Promise<CashScriptSignResponse>;
-  signMessage: (message: string) => Promise<string>;
+  signMessage: (message: string, userPrompt?: string) => Promise<string>;
   getAddress: () => Promise<string | null>;
   getPublicKey: () => Promise<string | null>;
   refreshBalance: () => Promise<void>;
@@ -95,27 +159,18 @@ const useWalletStore = create<WalletStore>((set, get) => ({
       // (API unreachable, unexpected shape) pass through silently.
       await assertBackendNetworkMatches(CONFIGURED_NETWORK);
 
-      let newConnector: IWalletConnector;
+      const newConnector: IWalletConnector = createWalletConnector(walletType);
 
-      // Create appropriate connector using factory
-      newConnector = createWalletConnector(walletType);
-
-      // Check availability
       const isAvailable = await newConnector.isAvailable();
       if (!isAvailable) {
-        const messages: Record<WalletType, string> = {
-          [WalletType.PAYTACA]: 'Paytaca wallet not found. Please install the Paytaca browser extension from the Chrome Web Store.',
-          [WalletType.CASHONIZE]: 'Cashonize wallet not available. Please install Cashonize mobile app from https://cashonize.com',
-          [WalletType.WALLETCONNECT]: 'WalletConnect not available',
-          [WalletType.WIZARDCONNECT]: 'WizardConnect unavailable - browser environment required.',
-          [WalletType.OPTN]: 'OPTN Wallet unavailable - browser environment required for WalletConnect pairing.',
-        };
-        throw new Error(messages[walletType] || 'Wallet not available');
+        throw flowFailure(walletType === WalletType.PAYTACA ? 'WALLET_NOT_INSTALLED' : 'WALLET_UNSUPPORTED');
       }
 
       console.log(`Connecting to ${walletType} wallet...`);
 
       const walletInfo = await newConnector.connect();
+
+      await rejectWrongNetwork(newConnector, walletInfo);
 
       console.log('Wallet connected successfully:', {
         type: walletType,
@@ -124,47 +179,58 @@ const useWalletStore = create<WalletStore>((set, get) => ({
       });
 
       // Update state - THIS IS THE CRITICAL FIX
-      set({
-        walletType,
-        address: walletInfo.address,
-        publicKey: walletInfo.publicKey || null,
-        balance: walletInfo.balance || null,
-        isConnected: true,
-        isConnecting: false,
-        network: walletInfo.network,
-        error: null,
-        connector: newConnector,
-      });
+      set(connectedWalletState(walletType, walletInfo, newConnector));
 
       // Save to localStorage
-      localStorage.setItem('wallet_type', walletType);
-      localStorage.setItem('wallet_address', walletInfo.address);
-      localStorage.setItem('wallet_connected_at', String(Date.now()));
-      if (walletInfo.publicKey) {
-        localStorage.setItem('wallet_publickey', walletInfo.publicKey);
-      }
+      persistConnectedWallet(walletType, walletInfo);
 
       console.log('[useWallet] State updated to connected:', {
         isConnected: true,
         address: walletInfo.address,
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to connect wallet';
+      const failure = toCodedError(error);
 
-      console.error('Wallet connection failed:', {
-        type: walletType,
-        error: error,
-        message: errorMessage,
-      });
+      console.error('Wallet connection failed:', { type: walletType, code: failure.code, error });
 
       set({
         isConnecting: false,
-        error: errorMessage,
+        error: failure.code === 'PAIRING_CANCELLED' ? null : failure.message,
       });
 
-      throw error;
+      throw failure;
     } finally {
       // Always release the lock
+      set({ isConnectingRef: false });
+    }
+  },
+
+  restore: async (walletType: WalletType) => {
+    if (get().isConnectingRef) {
+      return false;
+    }
+
+    set({ isConnectingRef: true, isConnecting: true, error: null });
+
+    try {
+      await assertBackendNetworkMatches(CONFIGURED_NETWORK);
+
+      const restored = await restoreWalletConnector(walletType);
+      if (!restored) {
+        set({ isConnecting: false });
+        return false;
+      }
+
+      await rejectWrongNetwork(restored.connector, restored.info);
+      set(connectedWalletState(walletType, restored.info, restored.connector));
+      persistConnectedWallet(walletType, restored.info);
+      return true;
+    } catch (error) {
+      // A silent restore never writes the store error: nobody asked for it, and
+      // the picker would show it the next time it opens.
+      set({ isConnecting: false });
+      throw toCodedError(error);
+    } finally {
       set({ isConnectingRef: false });
     }
   },
@@ -199,9 +265,7 @@ const useWalletStore = create<WalletStore>((set, get) => ({
       isConnectingRef: false,
     });
 
-    localStorage.removeItem('wallet_type');
-    localStorage.removeItem('wallet_address');
-    localStorage.removeItem('wallet_publickey');
+    clearSavedWalletSession();
 
     if (!connector) {
       return;
@@ -211,7 +275,7 @@ const useWalletStore = create<WalletStore>((set, get) => ({
       await Promise.race([
         connector.disconnect(),
         new Promise<never>((_, reject) => {
-          window.setTimeout(() => reject(new Error('Wallet disconnect timed out')), 5000);
+          window.setTimeout(() => reject(flowFailure('WALLET_TIMEOUT', { details: 'Wallet disconnect took over 5 seconds.' })), 5000);
         }),
       ]);
     } catch (disconnectError) {
@@ -223,7 +287,7 @@ const useWalletStore = create<WalletStore>((set, get) => ({
     const state = get();
 
     if (!state.connector) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     return state.connector.signTransaction(tx);
@@ -233,24 +297,24 @@ const useWalletStore = create<WalletStore>((set, get) => ({
     const state = get();
 
     if (!state.connector) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     if (!state.connector.signCashScriptTransaction) {
-      throw new Error('Connected wallet does not support CashScript transactions');
+      throw flowFailure('WALLET_UNSUPPORTED');
     }
 
     return state.connector.signCashScriptTransaction(options);
   },
 
-  signMessage: async (message: string) => {
+  signMessage: async (message: string, userPrompt?: string) => {
     const state = get();
 
     if (!state.connector) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
-    return state.connector.signMessage(message);
+    return state.connector.signMessage(message, userPrompt);
   },
 
   getAddress: async () => {
@@ -304,6 +368,22 @@ const useWalletStore = create<WalletStore>((set, get) => ({
   },
 }));
 
+/**
+ * Every transaction FlowGuard sends publishes a notice, so one listener keeps the
+ * wallet balance current after each of them.
+ */
+function attachBalanceRefresh(): void {
+  if (balanceListenerAttached || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  balanceListenerAttached = true;
+  window.addEventListener(TX_NOTICE_EVENT, () => {
+    if (balanceRefreshTimer) clearTimeout(balanceRefreshTimer);
+    balanceRefreshTimer = setTimeout(() => {
+      balanceRefreshTimer = null;
+      void useWalletStore.getState().refreshBalance();
+    }, BALANCE_REFRESH_DELAY_MS);
+  });
+}
+
 // Hook to use wallet store
 export function useWallet() {
   // Get all state and actions from Zustand store
@@ -317,9 +397,9 @@ export function useWallet() {
     network,
     error,
     connector,
-    isConnectingRef,
     initAttempted,
     connect,
+    restore,
     disconnect,
     signTransaction,
     signCashScriptTransaction,
@@ -334,9 +414,9 @@ export function useWallet() {
   // Stable refs to Zustand actions so the init effect's deps stay empty.
   // (Zustand actions are referentially stable, but we ref them anyway to make
   // the contract explicit and prevent future regressions.)
-  const connectRef = useRef(connect);
+  const restoreRef = useRef(restore);
   const setInitAttemptedRef = useRef(setInitAttempted);
-  connectRef.current = connect;
+  restoreRef.current = restore;
   setInitAttemptedRef.current = setInitAttempted;
 
   /**
@@ -345,13 +425,17 @@ export function useWallet() {
    * Guarded by a module-level boolean so React re-mounts / state cascades
    * cannot retrigger the reconnect flow. Without this guard, every state
    * change (isConnected → true, etc.) would re-run the effect and call
-   * connect() again, causing the WalletConnect Core re-init loop.
+   * restore() again, causing the WalletConnect Core re-init loop.
+   *
+   * Restoring never prompts: a saved wallet with no resumable session is
+   * forgotten, and the user reconnects from the wallet picker.
    */
   useEffect(() => {
     if (initFiredOnce) {
       return;
     }
     initFiredOnce = true;
+    attachBalanceRefresh();
 
     const savedWalletType = localStorage.getItem('wallet_type') as WalletType | null;
     const savedAddress = localStorage.getItem('wallet_address');
@@ -371,41 +455,25 @@ export function useWallet() {
       return;
     }
 
-    let cancelled = false;
-
+    // No unmount guard: the store is global, so the outcome must land even if
+    // the first mounting component is gone (StrictMode mounts effects twice).
     const initWallet = async () => {
-      console.log('[useWallet] Reconnecting saved wallet...', savedWalletType);
+      console.log('[useWallet] Restoring saved wallet...', savedWalletType);
       try {
-        await connectRef.current(savedWalletType);
-      } catch (error) {
-        if (cancelled) return;
-        console.error('[useWallet] Failed to reconnect wallet:', error);
-        const message = error instanceof Error ? error.message : String(error || '');
-        const isTransientWalletConnectError =
-          (savedWalletType === WalletType.WALLETCONNECT || savedWalletType === WalletType.OPTN)
-          && /(timeout|relay|websocket|network|temporar|stale session)/i.test(message);
-
-        const isTransientWizardConnectError =
-          savedWalletType === WalletType.WIZARDCONNECT
-          && /(timeout|relay|websocket|nostr|network|temporar|did not scan)/i.test(message);
-
-        if (isTransientWalletConnectError || isTransientWizardConnectError) {
-          console.warn('[useWallet] Wallet reconnect failed transiently; preserving saved session metadata');
-          // Reset the lock so a manual reconnect attempt can fire
-          initFiredOnce = false;
-          return;
+        const restored = await restoreRef.current(savedWalletType);
+        if (!restored) {
+          console.log('[useWallet] Saved wallet has no resumable session');
+          clearSavedWalletSession();
         }
-
-        localStorage.removeItem('wallet_type');
-        localStorage.removeItem('wallet_address');
+      } catch (error) {
+        console.error('[useWallet] Failed to restore wallet:', error);
+        clearSavedWalletSession();
       } finally {
-        if (!cancelled) setInitAttemptedRef.current(true);
+        setInitAttemptedRef.current(true);
       }
     };
 
-    initWallet();
-
-    return () => { cancelled = true; };
+    void initWallet();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -474,9 +542,9 @@ export function useWallet() {
     /**
      * Surfaced from the active connector so `authFetch` can pick the login path
      * without string-matching wallet types. Wallets that cannot sign FlowGuard's
-     * ~380-byte CAIP-122 message (currently OPTN) log in with a proof transaction.
+     * ~380-byte CAIP-122 message (OPTN, WizardConnect) log in with a proof transaction.
      */
-    supportsMessageSigning: connector?.supportsMessageSigning ?? true,
+    supportsMessageSigning: connector?.supportsMessageSigning,
     connect,
     disconnect,
     getPublicKey,

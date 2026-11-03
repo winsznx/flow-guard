@@ -19,10 +19,12 @@
  *   POST   /api/bounties/:id/confirm-cancel
  */
 
+import { apiFailure, type ErrorCode } from '../copy/errors';
+
 const API_BASE_URL = '/api';
 
 export type BountyStatus = 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
-export type BountyTokenType = 'BCH' | 'CASHTOKENS';
+export type BountyTokenType = 'BCH' | 'FUNGIBLE_TOKEN' | 'CASHTOKENS';
 
 export interface BountyActivityEvent {
   id: string;
@@ -45,7 +47,7 @@ export interface BountyLatestEvent {
 export interface BountyClaim {
   id: string;
   bounty_id: string;
-  winner_address: string;
+  winner: string;
   amount: number;
   proof_hash: string | null;
   tx_hash: string;
@@ -62,6 +64,7 @@ export interface BountyRow {
   description?: string | null;
   token_type: BountyTokenType;
   token_category?: string | null;
+  token_decimals?: number | null;
   reward_per_winner: number;
   max_winners: number;
   winners_count: number;
@@ -96,6 +99,7 @@ export interface CreateBountyInput {
   description?: string;
   tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
   tokenCategory?: string;
+  tokenDecimals?: number;
   rewardPerWinner: number;
   maxWinners: number;
   startDate?: number;
@@ -123,7 +127,7 @@ export interface CreateBountyResponse {
   };
 }
 
-async function parseJsonOrThrow(response: Response, fallback: string): Promise<unknown> {
+async function parseJsonOrThrow(response: Response, fallback: ErrorCode): Promise<unknown> {
   let payload: unknown = null;
   try {
     payload = await response.json();
@@ -132,20 +136,7 @@ async function parseJsonOrThrow(response: Response, fallback: string): Promise<u
   }
 
   if (response.ok) return payload;
-
-  const errorMessage = extractErrorMessage(payload, fallback);
-  throw new Error(errorMessage);
-}
-
-function extractErrorMessage(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== 'object') return fallback;
-  const record = payload as Record<string, unknown>;
-  const message =
-    (typeof record.message === 'string' && record.message) ||
-    (typeof record.error === 'string' && record.error) ||
-    (typeof record.userMessage === 'string' && record.userMessage) ||
-    fallback;
-  return String(message);
+  throw apiFailure(payload, response.status, response.status === 404 ? 'NOT_FOUND' : fallback);
 }
 
 /**
@@ -160,7 +151,7 @@ export async function fetchBounties(
   if (options?.showDeprecated) qs.set('showDeprecated', 'true');
 
   const response = await fetch(`${API_BASE_URL}/bounties?${qs.toString()}`);
-  const payload = (await parseJsonOrThrow(response, 'Failed to fetch bounties')) as BountyListResponse;
+  const payload = (await parseJsonOrThrow(response, 'LOAD_FAILED')) as BountyListResponse;
   return {
     success: true,
     campaigns: Array.isArray(payload?.campaigns) ? payload.campaigns : [],
@@ -173,7 +164,7 @@ export async function fetchBounties(
  */
 export async function fetchBounty(id: string): Promise<BountyDetailResponse> {
   const response = await fetch(`${API_BASE_URL}/bounties/${id}`);
-  const payload = (await parseJsonOrThrow(response, 'Failed to fetch bounty')) as BountyDetailResponse;
+  const payload = (await parseJsonOrThrow(response, 'LOAD_FAILED')) as BountyDetailResponse;
   return {
     success: true,
     campaign: payload.campaign,
@@ -198,7 +189,7 @@ export async function createBounty(
     },
     body: JSON.stringify(data),
   });
-  const payload = (await parseJsonOrThrow(response, 'Failed to create bounty')) as CreateBountyResponse;
+  const payload = (await parseJsonOrThrow(response, 'UNKNOWN')) as CreateBountyResponse;
   return payload;
 }
 
@@ -228,7 +219,7 @@ export async function submitBountyClaim(
     },
     body: JSON.stringify(input),
   });
-  const payload = (await parseJsonOrThrow(response, 'Failed to build claim transaction')) as {
+  const payload = (await parseJsonOrThrow(response, 'SERVER_PREPARE_FAILED')) as {
     success: true;
     claimAmount: number;
     wcTransaction: unknown;

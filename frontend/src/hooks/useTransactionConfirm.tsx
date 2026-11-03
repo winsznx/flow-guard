@@ -1,59 +1,66 @@
-import { useState, useCallback } from 'react';
-import { TransactionConfirmModal } from '../components/ui/TransactionConfirmModal';
+import { useCallback, useState } from 'react';
+import {
+  TransactionConfirmHost,
+  type TransactionConfirmSource,
+  type TransactionDetails,
+} from '../components/ui/TransactionConfirmModal';
 
-interface TransactionDetails {
-  amount: number; // in BCH
-  recipient: string;
-  network: 'mainnet' | 'testnet' | 'chipnet';
-  description?: string;
+type ConfirmSnapshot = { open: boolean; transaction: TransactionDetails | null };
+
+type ConfirmStore = TransactionConfirmSource & {
+  request: (details: TransactionDetails) => Promise<boolean>;
+};
+
+/**
+ * The open state lives outside React state so the returned modal component keeps one identity
+ * for the hook's lifetime. A new component type per render would remount the dialog and drop focus.
+ */
+function createConfirmStore(): ConfirmStore {
+  let snapshot: ConfirmSnapshot = { open: false, transaction: null };
+  let resolve: ((confirmed: boolean) => void) | null = null;
+  const listeners = new Set<() => void>();
+
+  const publish = (next: ConfirmSnapshot) => {
+    snapshot = next;
+    listeners.forEach((listener) => listener());
+  };
+
+  const settle = (confirmed: boolean) => {
+    const pending = resolve;
+    resolve = null;
+    if (pending) pending(confirmed);
+    if (snapshot.open) publish({ ...snapshot, open: false });
+  };
+
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getSnapshot: () => snapshot,
+    request: (details) => {
+      settle(false);
+      return new Promise<boolean>((done) => {
+        resolve = done;
+        publish({ open: true, transaction: details });
+      });
+    },
+    settle,
+  };
 }
 
 export function useTransactionConfirm() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [transaction, setTransaction] = useState<TransactionDetails | null>(null);
-  const [resolvePromise, setResolvePromise] = useState<((value: boolean) => void) | null>(null);
+  const [store] = useState(createConfirmStore);
 
   const confirmTransaction = useCallback(
-    (details: TransactionDetails): Promise<boolean> => {
-      return new Promise((resolve) => {
-        setTransaction(details);
-        setResolvePromise(() => resolve);
-        setIsOpen(true);
-      });
-    },
-    []
+    (details: TransactionDetails): Promise<boolean> => store.request(details),
+    [store],
   );
 
-  const handleConfirm = useCallback(() => {
-    if (resolvePromise) {
-      resolvePromise(true);
-      setResolvePromise(null);
-      setIsOpen(false);
-      setTransaction(null);
-    }
-  }, [resolvePromise]);
-
-  const handleCancel = useCallback(() => {
-    if (resolvePromise) {
-      resolvePromise(false);
-      setResolvePromise(null);
-      setIsOpen(false);
-      setTransaction(null);
-    }
-  }, [resolvePromise]);
-
-  const Modal = () => (
-    <TransactionConfirmModal
-      isOpen={isOpen}
-      transaction={transaction}
-      onConfirm={handleConfirm}
-      onCancel={handleCancel}
-    />
-  );
+  const Modal = useCallback(() => <TransactionConfirmHost source={store} />, [store]);
 
   return {
     confirmTransaction,
     TransactionConfirmModal: Modal,
   };
 }
-

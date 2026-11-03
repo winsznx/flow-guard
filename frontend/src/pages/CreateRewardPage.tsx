@@ -1,84 +1,108 @@
-/**
- * CreateRewardPage
- *
- * A → Z create wizard for a new Reward campaign. Mirrors the CreateStreamPage
- * shape (the gold-standard create flow) and pulls back the BCH ↔ CashTokens
- * toggle with a three-layer + on-chain validateTokenCategory check.
- *
- * Flow:
- *   1. Local-form validation (required fields, numeric bounds, FT format).
- *   2. Wallet connection + signer guards.
- *   3. (FT mode) await validateTokenCategory(category, network) - on-chain
- *      genesis tx check.
- *   4. POST /api/rewards/create with x-user-address header.
- *   5. Navigate to /rewards/:id with { freshCreate: true } so the detail page
- *      auto-prompts for funding.
- */
-
-import { ChangeEvent, FormEvent, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  AlertCircle,
-  Award,
-  Calendar,
-  ChevronLeft,
-  Coins,
-  DollarSign,
-  Sparkles,
-  Trophy,
-  Users,
-} from 'lucide-react';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { TwoColumn } from '../components/layout/TwoColumn';
+import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
-import { Card } from '../components/ui/Card';
-import { Input } from '../components/ui/Input';
+import { ChoiceCardGroup } from '../components/ui/ChoiceCard';
 import { Select } from '../components/ui/Select';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { DateInput } from '../components/ui/DateInput';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorSummary } from '../components/ui/ErrorSummary';
+import { Input } from '../components/ui/Input';
+import { InsetBlock } from '../components/ui/InsetBlock';
+import { Panel } from '../components/ui/Panel';
 import { Textarea } from '../components/ui/Textarea';
-import { useWallet } from '../hooks/useWallet';
+import type { Asset } from '../components/ui/types';
 import { useNetwork } from '../hooks/useNetwork';
-import { validateTokenCategory } from '../utils/tokenValidation';
-import { createReward } from '../services/rewardApi';
-import type { CreateRewardInput, RewardCategory } from '../services/rewardApi';
+import { useWallet } from '../hooks/useWallet';
+import { datesLine } from '../copy/bounties';
+import {
+  REWARD_CREATE,
+  REWARD_TYPE,
+  REWARD_TYPE_ORDER,
+  enoughFor,
+  rewardPlan,
+  tooManyDecimals,
+} from '../copy/rewards';
+import { ACTIONS } from '../copy/common';
+import { asFlowError, errorMessage } from '../copy/errors';
+import { formatAmount, formatDate } from '../copy/format';
+import { createReward, type CreateRewardInput, type RewardCategory } from '../services/rewardApi';
+import { parseAmount, parsedUnits } from '../utils/campaignAmounts';
+import { resolveTokenMeta, type TokenMeta } from '../utils/tokenMeta';
+import { checkTokenCategory } from '../utils/tokenValidation';
 
-type RewardTokenType = 'BCH' | 'FUNGIBLE_TOKEN';
+type TokenType = 'BCH' | 'FUNGIBLE_TOKEN';
 
-interface FormData {
+type FormData = {
   title: string;
   description: string;
   rewardCategory: RewardCategory;
-  tokenType: RewardTokenType;
+  tokenType: TokenType;
   tokenCategory: string;
   totalPool: string;
   maxRewardAmount: string;
   startDate: string;
   endDate: string;
-  vaultId: string;
-}
+};
 
 type FormField = keyof FormData;
 type FormErrors = Partial<Record<FormField, string>>;
+type Summary = { title: string; message: string } | null;
 
-const HEX_64 = /^[0-9a-fA-F]{64}$/;
+const DRAFT_KEY = 'flowguard:draft:create-reward';
+const TITLE_MAX = 80;
+const TOKEN_ID = /^[0-9a-fA-F]{64}$/;
+const HEX = /^[0-9a-fA-F]*$/;
+const BCH: Asset = { kind: 'bch' };
 
-const REWARD_CATEGORY_OPTIONS: ReadonlyArray<{ value: RewardCategory; label: string }> = [
-  { value: 'CUSTOM', label: 'Custom - Flexible distribution program' },
-  { value: 'ACHIEVEMENT', label: 'Achievement - Milestone or accomplishment rewards' },
-  { value: 'REFERRAL', label: 'Referral - Invite/conversion rewards' },
-  { value: 'LOYALTY', label: 'Loyalty - Tenure or recurring engagement' },
-];
+const FIELD_ID: Record<FormField, string> = {
+  title: 'reward-title',
+  description: 'reward-description',
+  rewardCategory: 'reward-type',
+  tokenType: 'reward-token-type',
+  tokenCategory: 'reward-token-id',
+  totalPool: 'reward-budget',
+  maxRewardAmount: 'reward-limit',
+  startDate: 'reward-start',
+  endDate: 'reward-end',
+};
+
+const FIELD_LABEL: Record<FormField, string> = {
+  title: REWARD_CREATE.about.titleLabel,
+  description: REWARD_CREATE.about.descriptionLabel,
+  rewardCategory: REWARD_CREATE.about.typeLabel,
+  tokenType: REWARD_CREATE.asset.legend,
+  tokenCategory: REWARD_CREATE.asset.tokenIdLabel,
+  totalPool: REWARD_CREATE.budget.totalLabel,
+  maxRewardAmount: REWARD_CREATE.budget.limitLabel,
+  startDate: REWARD_CREATE.dates.startLabel,
+  endDate: REWARD_CREATE.dates.endLabel,
+};
+
+const TYPES: ReadonlySet<string> = new Set(REWARD_TYPE_ORDER);
 
 function todayIso(): string {
-  return new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-/**
- * Create page for Reward campaigns. Lazy-loaded by App.tsx in Phase 3.
- */
-export default function CreateRewardPage() {
-  const navigate = useNavigate();
-  const wallet = useWallet();
-  const network = useNetwork();
+/** `YYYY-MM-DD` at a local time of day, in unix seconds (the bare date would parse as UTC). */
+function isoDateToUnixSeconds(value: string, time = '00:00:00'): number | undefined {
+  if (!value) return undefined;
+  const ts = Date.parse(`${value}T${time}`);
+  if (Number.isNaN(ts)) return undefined;
+  return Math.floor(ts / 1000);
+}
 
-  const [formData, setFormData] = useState<FormData>({
+function emptyForm(): FormData {
+  return {
     title: '',
     description: '',
     rewardCategory: 'CUSTOM',
@@ -88,475 +112,434 @@ export default function CreateRewardPage() {
     maxRewardAmount: '',
     startDate: todayIso(),
     endDate: '',
-    vaultId: '',
-  });
+  };
+}
 
+function readDraft(): FormData {
+  try {
+    const raw = window.sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return emptyForm();
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return emptyForm();
+    const base = emptyForm();
+    const record = parsed as Record<string, unknown>;
+    const text = (key: FormField) =>
+      typeof record[key] === 'string' ? (record[key] as string) : base[key];
+    return {
+      title: text('title'),
+      description: text('description'),
+      rewardCategory: TYPES.has(String(record.rewardCategory))
+        ? (record.rewardCategory as RewardCategory)
+        : base.rewardCategory,
+      tokenType: record.tokenType === 'FUNGIBLE_TOKEN' ? 'FUNGIBLE_TOKEN' : 'BCH',
+      tokenCategory: text('tokenCategory'),
+      totalPool: text('totalPool'),
+      maxRewardAmount: text('maxRewardAmount'),
+      startDate: text('startDate'),
+      endDate: text('endDate'),
+    };
+  } catch {
+    return emptyForm();
+  }
+}
+
+function writeDraft(form: FormData | null): void {
+  try {
+    if (form) window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify(form));
+    else window.sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    return;
+  }
+}
+
+function isDirty(form: FormData): boolean {
+  const base = emptyForm();
+  return (Object.keys(base) as FormField[]).some(
+    (key) => key !== 'startDate' && form[key] !== base[key]
+  );
+}
+
+export default function CreateRewardPage() {
+  const navigate = useNavigate();
+  const wallet = useWallet();
+  const network = useNetwork();
+
+  const [form, setForm] = useState<FormData>(readDraft);
   const [errors, setErrors] = useState<FormErrors>({});
-  const [isCreating, setIsCreating] = useState(false);
+  const [summary, setSummary] = useState<Summary>(null);
+  const [busy, setBusy] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [tokenMeta, setTokenMeta] = useState<TokenMeta | null>(null);
 
-  const handleChange = <K extends FormField>(field: K, value: FormData[K]) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: undefined }));
+  useEffect(() => {
+    writeDraft(form);
+  }, [form]);
+
+  const tokenId = form.tokenCategory.trim();
+  const usesToken = form.tokenType === 'FUNGIBLE_TOKEN';
+
+  useEffect(() => {
+    if (!usesToken || !TOKEN_ID.test(tokenId)) {
+      setTokenMeta(null);
+      return undefined;
     }
-  };
+    let current = true;
+    resolveTokenMeta(tokenId, network)
+      .then((meta) => {
+        if (current) setTokenMeta(meta);
+      })
+      .catch(() => {
+        if (current) setTokenMeta(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [usesToken, tokenId, network]);
 
-  const onTextChange = (field: FormField) =>
-    (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
-      handleChange(field, e.target.value as FormData[typeof field]);
-
-  const totalPoolNumber = useMemo(() => Number.parseFloat(formData.totalPool) || 0, [formData.totalPool]);
-  const maxRewardNumber = useMemo(() => Number.parseFloat(formData.maxRewardAmount) || 0, [formData.maxRewardAmount]);
-
-  const minRecipients = useMemo(() => {
-    if (totalPoolNumber <= 0 || maxRewardNumber <= 0) return 0;
-    return Math.max(1, Math.floor(totalPoolNumber / maxRewardNumber));
-  }, [maxRewardNumber, totalPoolNumber]);
-
-  const assetLabel = formData.tokenType === 'BCH' ? 'BCH' : 'tokens';
-
-  const validate = (): boolean => {
-    const next: FormErrors = {};
-
-    if (!formData.title.trim()) {
-      next.title = 'Campaign title is required.';
-    }
-
-    if (formData.tokenType === 'FUNGIBLE_TOKEN') {
-      const category = formData.tokenCategory.trim();
-      if (!category) {
-        next.tokenCategory = 'Token category ID is required for CashToken rewards.';
-      } else if (category.length !== 64) {
-        next.tokenCategory = 'Token category must be exactly 64 hex characters.';
-      } else if (!HEX_64.test(category)) {
-        next.tokenCategory = 'Token category must be a valid 64-character hex string.';
+  const asset: Asset = usesToken
+    ? {
+        kind: 'token',
+        tokenId: tokenId || '0'.repeat(64),
+        symbol: tokenMeta?.symbol,
+        decimals: tokenMeta?.decimals ?? 0,
       }
-    }
+    : BCH;
+  const decimals = asset.kind === 'bch' ? 8 : asset.decimals;
 
-    if (!formData.totalPool || totalPoolNumber <= 0) {
-      next.totalPool = 'Total pool must be greater than 0.';
-    }
+  const budget = useMemo(() => parseAmount(form.totalPool, decimals), [form.totalPool, decimals]);
+  const limit = useMemo(() => parseAmount(form.maxRewardAmount, decimals), [form.maxRewardAmount, decimals]);
+  const budgetUnits = parsedUnits(budget);
+  const limitUnits = parsedUnits(limit);
+  const budgetText =
+    budgetUnits !== null && budgetUnits > 0n ? formatAmount(budgetUnits, asset) : null;
+  const limitText = limitUnits !== null && limitUnits > 0n ? formatAmount(limitUnits, asset) : null;
+  const rewardsAtLimit =
+    budgetUnits !== null && limitUnits !== null && limitUnits > 0n && budgetUnits >= limitUnits
+      ? Number(budgetUnits / limitUnits)
+      : 0;
 
-    if (!formData.maxRewardAmount || maxRewardNumber <= 0) {
-      next.maxRewardAmount = 'Max reward amount must be greater than 0.';
-    } else if (totalPoolNumber > 0 && maxRewardNumber > totalPoolNumber) {
-      next.maxRewardAmount = 'Max reward cannot exceed total pool.';
-    }
-
-    if (formData.endDate && formData.startDate && new Date(formData.endDate) <= new Date(formData.startDate)) {
-      next.endDate = 'End date must be after start date.';
-    }
-
-    setErrors(next);
-    return Object.keys(next).length === 0;
+  const set = <K extends FormField>(field: K, value: FormData[K]): void => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const validate = (): FormErrors => {
+    const next: FormErrors = {};
+    const copy = REWARD_CREATE.errors;
+    if (!form.title.trim()) next.title = copy.title;
+    if (usesToken) {
+      if (!tokenId) next.tokenCategory = copy.tokenId;
+      else if (!HEX.test(tokenId)) next.tokenCategory = copy.tokenIdChars;
+      else if (tokenId.length !== 64) next.tokenCategory = copy.tokenIdLength;
+    }
+    if (budget && 'tooPrecise' in budget) next.totalPool = tooManyDecimals(decimals);
+    else if (budgetUnits === null || budgetUnits <= 0n) next.totalPool = copy.budget;
+    if (limit && 'tooPrecise' in limit) next.maxRewardAmount = tooManyDecimals(decimals);
+    else if (limitUnits === null || limitUnits <= 0n) next.maxRewardAmount = copy.limit;
+    else if (budgetUnits !== null && limitUnits > budgetUnits)
+      next.maxRewardAmount = copy.limitOverBudget;
+    if (form.endDate && form.startDate && form.endDate <= form.startDate)
+      next.endDate = copy.endBeforeStart;
+    return next;
+  };
 
-    if (!validate()) return;
+  const showFieldErrors = (next: FormErrors) => {
+    setErrors(next);
+    setSummary({ title: REWARD_CREATE.errorTitle, message: REWARD_CREATE.fixFields });
+  };
 
+  const handleSubmit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    const next = validate();
+    if (Object.keys(next).length > 0) {
+      showFieldErrors(next);
+      return;
+    }
     if (!wallet.isConnected || !wallet.address) {
-      setErrors({ title: 'Please connect a wallet before deploying a reward contract.' });
+      setSummary({ title: REWARD_CREATE.errorTitle, message: errorMessage('NOT_CONNECTED') });
       return;
     }
     if (!wallet.signCashScriptTransaction) {
-      setErrors({ title: 'Connected wallet does not support CashScript transactions.' });
+      setSummary({ title: REWARD_CREATE.errorTitle, message: errorMessage('WALLET_UNSUPPORTED') });
       return;
     }
 
-    setIsCreating(true);
+    setBusy(true);
+    setSummary(null);
+
+    let tokenDecimals = 0;
+    if (usesToken) {
+      const check = await checkTokenCategory(tokenId, network);
+      if (!check.ok) {
+        setBusy(false);
+        if (check.reason === 'unavailable') {
+          setSummary({
+            title: REWARD_CREATE.errorTitle,
+            message: REWARD_CREATE.errors.tokenUnavailable,
+          });
+        } else {
+          showFieldErrors({
+            tokenCategory:
+              check.reason === 'format'
+                ? REWARD_CREATE.errors.tokenIdLength
+                : REWARD_CREATE.errors.tokenNotFound,
+          });
+        }
+        return;
+      }
+      const meta = await resolveTokenMeta(tokenId, network).catch(() => null);
+      tokenDecimals = meta?.decimals ?? 0;
+    }
+
+    const submitDecimals = usesToken ? tokenDecimals : decimals;
+    const submitBudget = parsedUnits(parseAmount(form.totalPool, submitDecimals));
+    const submitLimit = parsedUnits(parseAmount(form.maxRewardAmount, submitDecimals));
+    if (submitBudget === null || submitLimit === null) {
+      setBusy(false);
+      showFieldErrors({
+        ...(submitBudget === null ? { totalPool: tooManyDecimals(submitDecimals) } : {}),
+        ...(submitLimit === null ? { maxRewardAmount: tooManyDecimals(submitDecimals) } : {}),
+      });
+      return;
+    }
 
     try {
-      if (formData.tokenType === 'FUNGIBLE_TOKEN') {
-        try {
-          const isValid = await validateTokenCategory(formData.tokenCategory.trim(), network);
-          if (!isValid) {
-            setErrors({
-              tokenCategory: 'Token category not found on blockchain. Please verify the token exists.',
-            });
-            setIsCreating(false);
-            return;
-          }
-        } catch (validationError) {
-          // eslint-disable-next-line no-console
-          console.error('[CreateRewardPage] Token validation failed:', validationError);
-          setErrors({
-            tokenCategory: 'Failed to validate token category. Please try again.',
-          });
-          setIsCreating(false);
-          return;
-        }
-      }
-
-      const startSeconds = formData.startDate
-        ? Math.floor(new Date(formData.startDate).getTime() / 1000)
-        : undefined;
-      const endSeconds = formData.endDate
-        ? Math.floor(new Date(formData.endDate).getTime() / 1000)
-        : undefined;
-
       const payload: CreateRewardInput = {
-        title: formData.title.trim(),
-        description: formData.description.trim() || undefined,
-        rewardCategory: formData.rewardCategory,
-        tokenType: formData.tokenType,
-        tokenCategory:
-          formData.tokenType === 'FUNGIBLE_TOKEN' ? formData.tokenCategory.trim() : undefined,
-        totalPool: totalPoolNumber,
-        maxRewardAmount: maxRewardNumber,
-        startDate: startSeconds,
-        endDate: endSeconds,
-        vaultId: formData.vaultId.trim() || undefined,
+        title: form.title.trim(),
+        description: form.description.trim() || undefined,
+        rewardCategory: form.rewardCategory,
+        tokenType: form.tokenType,
+        tokenCategory: usesToken ? tokenId : undefined,
+        tokenDecimals,
+        totalPool: Number(submitBudget) / 10 ** submitDecimals,
+        maxRewardAmount: Number(submitLimit) / 10 ** submitDecimals,
+        startDate: isoDateToUnixSeconds(form.startDate),
+        endDate: form.endDate ? isoDateToUnixSeconds(form.endDate, '23:59:59') : undefined,
       };
 
       const result = await createReward(payload, wallet.address);
-      const rewardId = result.campaign?.id;
+      const rewardId = result?.campaign?.id;
       if (!rewardId) {
-        throw new Error('Reward created but the campaign id is missing from the response.');
+        setSummary({ title: REWARD_CREATE.errorTitle, message: REWARD_CREATE.maybeCreated });
+        return;
       }
-
-      navigate(`/rewards/${rewardId}`, { state: { freshCreate: true } });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to create reward campaign.';
-      // eslint-disable-next-line no-console
-      console.error('[CreateRewardPage] Create failed:', error);
-      setErrors({ title: message });
+      writeDraft(null);
+      navigate(`/rewards/${rewardId}`, { replace: true });
+    } catch (error) {
+      setSummary({ title: REWARD_CREATE.errorTitle, message: asFlowError(error).message });
     } finally {
-      setIsCreating(false);
+      setBusy(false);
     }
   };
 
+  const leave = async (): Promise<void> => {
+    writeDraft(null);
+    navigate('/rewards');
+  };
+
+  const askToLeave = () => {
+    if (isDirty(form)) setLeaving(true);
+    else void leave();
+  };
+
+  const invalidFields = (Object.keys(errors) as FormField[])
+    .filter((key) => errors[key])
+    .map((key) => ({ label: FIELD_LABEL[key], id: FIELD_ID[key] }));
+
+  const startText = formatDate(form.startDate);
+  const endText = form.endDate ? formatDate(form.endDate) : null;
+
+  const planText =
+    budgetText && limitText ? rewardPlan(budgetText, limitText, startText, endText) : REWARD_CREATE.planIncomplete;
+
+  const plan = (sticky: boolean) => (
+    <InsetBlock className={sticky ? 'lg:sticky lg:top-20' : undefined}>
+      <p className="text-body text-ink">{planText}</p>
+    </InsetBlock>
+  );
+
+  const reviewItems = [
+    { label: REWARD_CREATE.review.budget, value: budgetText },
+    { label: REWARD_CREATE.review.limit, value: limitText },
+    { label: REWARD_CREATE.review.dates, value: datesLine(startText, endText) },
+    { label: REWARD_CREATE.review.type, value: REWARD_TYPE[form.rewardCategory] },
+    { label: REWARD_CREATE.review.cancel, value: REWARD_CREATE.review.cancelLine },
+  ];
+
   return (
-    <div className="px-4 py-6 md:px-8 md:py-8">
-      <div className="max-w-3xl mx-auto">
-        <div className="mb-8">
-          <button
-            type="button"
-            onClick={() => navigate('/rewards')}
-            className="inline-flex items-center gap-2 text-primary hover:text-primaryHover font-mono mb-4 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Rewards
-          </button>
-          <h1 className="text-3xl font-display font-bold text-textPrimary mb-2 sm:text-4xl lg:text-5xl">
-            Create Reward Campaign
-          </h1>
-          <p className="text-textMuted font-mono">
-            Deploy a variable-amount reward covenant for achievements, referrals, loyalty, or
-            custom incentive programs.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Campaign basics */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                <Trophy className="w-6 h-6 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">
-                  Campaign Details
-                </h3>
-                <p className="text-sm text-textMuted font-mono mb-4">
-                  Give your reward program a clear name and category.
-                </p>
-
-                <div className="space-y-4">
-                  <Input
-                    label="Campaign Title"
-                    placeholder="e.g., Q1 Contributor Rewards"
-                    value={formData.title}
-                    onChange={onTextChange('title')}
-                    error={errors.title}
-                    required
-                  />
-
-                  <Textarea
-                    label="Description (Optional)"
-                    placeholder="Describe the reward program, eligibility, and how rewards will be granted..."
-                    value={formData.description}
-                    onChange={onTextChange('description')}
-                    rows={3}
-                  />
-
-                  <Select
-                    label="Reward Category"
-                    value={formData.rewardCategory}
-                    onChange={(e) => handleChange('rewardCategory', e.target.value as RewardCategory)}
-                    options={REWARD_CATEGORY_OPTIONS.map((option) => ({
-                      value: option.value,
-                      label: option.label,
-                    }))}
-                  />
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Token type */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0">
-                <Coins className="w-6 h-6 text-accent" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">Reward Asset</h3>
-                <p className="text-sm text-textMuted font-mono mb-4">
-                  Choose whether rewards are paid out in BCH or a CashToken.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <button
-                    type="button"
-                    onClick={() => handleChange('tokenType', 'BCH')}
-                    className={`min-w-0 p-4 border-2 rounded-xl text-left transition-all ${
-                      formData.tokenType === 'BCH'
-                        ? 'border-accent bg-accent/5 shadow-sm'
-                        : 'border-border hover:border-accent/40'
-                    }`}
-                  >
-                    <div className="font-display font-bold text-lg text-textPrimary mb-1">
-                      Bitcoin Cash
-                    </div>
-                    <div className="text-sm text-textMuted font-mono">
-                      Pay rewards directly in BCH satoshis.
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleChange('tokenType', 'FUNGIBLE_TOKEN')}
-                    className={`min-w-0 p-4 border-2 rounded-xl text-left transition-all ${
-                      formData.tokenType === 'FUNGIBLE_TOKEN'
-                        ? 'border-accent bg-accent/5 shadow-sm'
-                        : 'border-border hover:border-accent/40'
-                    }`}
-                  >
-                    <div className="font-display font-bold text-lg text-textPrimary mb-1">
-                      CashTokens
-                    </div>
-                    <div className="text-sm text-textMuted font-mono">
-                      Pay rewards in a fungible token category.
-                    </div>
-                  </button>
-                </div>
-
-                {formData.tokenType === 'FUNGIBLE_TOKEN' && (
-                  <div className="mt-4">
-                    <Input
-                      label="Token Category ID"
-                      placeholder="64-character hex genesis txid"
-                      value={formData.tokenCategory}
-                      onChange={onTextChange('tokenCategory')}
-                      error={errors.tokenCategory}
-                      helpText="The funding wallet must already control a minting NFT for this category."
-                      required
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          </Card>
-
-          {/* Pool & per-reward cap */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-secondary/10 flex items-center justify-center flex-shrink-0">
-                <DollarSign className="w-6 h-6 text-secondary" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">
-                  Pool & Caps
-                </h3>
-                <p className="text-sm text-textMuted font-mono mb-4">
-                  Total budget plus the maximum any single reward can pay out.
-                </p>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Input
-                    label={`Total Pool (${assetLabel})`}
-                    type="number"
-                    step={formData.tokenType === 'BCH' ? '0.00000001' : '1'}
-                    min="0"
-                    placeholder={formData.tokenType === 'BCH' ? '10.0' : '10000'}
-                    value={formData.totalPool}
-                    onChange={onTextChange('totalPool')}
-                    error={errors.totalPool}
-                    helpText="Locked into the covenant at funding."
-                    required
-                  />
-
-                  <Input
-                    label={`Max Reward / Distribution (${assetLabel})`}
-                    type="number"
-                    step={formData.tokenType === 'BCH' ? '0.00000001' : '1'}
-                    min="0"
-                    placeholder={formData.tokenType === 'BCH' ? '0.5' : '500'}
-                    value={formData.maxRewardAmount}
-                    onChange={onTextChange('maxRewardAmount')}
-                    error={errors.maxRewardAmount}
-                    helpText={
-                      minRecipients > 0
-                        ? `Supports at least ${minRecipients} max-sized reward${minRecipients === 1 ? '' : 's'}.`
-                        : 'Upper bound enforced by the covenant.'
-                    }
-                    required
-                  />
-                </div>
-
-                {minRecipients > 0 && (
-                  <div className="mt-4 p-4 bg-primary/5 rounded-lg border border-primary/20">
-                    <div className="flex items-center gap-2 text-sm font-mono text-primary">
-                      <Users className="w-4 h-4" />
-                      <span className="font-bold">{minRecipients}</span>
-                      <span className="text-textMuted">
-                        max-sized rewards possible ({formData.totalPool} ÷ {formData.maxRewardAmount})
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </Card>
-
-          {/* Schedule */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                <Calendar className="w-6 h-6 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">Schedule</h3>
-                <p className="text-sm text-textMuted font-mono mb-4">
-                  Optional open/close window. Leave end date empty for an open-ended program.
-                </p>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Input
-                    label="Start Date"
-                    type="date"
-                    value={formData.startDate}
-                    onChange={onTextChange('startDate')}
-                    helpText="Leave today for immediate availability."
-                  />
-
-                  <Input
-                    label="End Date (Optional)"
-                    type="date"
-                    value={formData.endDate}
-                    onChange={onTextChange('endDate')}
-                    error={errors.endDate}
-                    helpText="Leave empty for no expiration."
-                  />
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Vault link */}
-          <Card padding="lg">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0">
-                <Award className="w-6 h-6 text-accent" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-display font-bold text-textPrimary mb-1">
-                  Vault Link (Optional)
-                </h3>
-                <p className="text-sm text-textMuted font-mono mb-4">
-                  Anchor this reward to a treasury vault. Leave empty for a standalone program.
-                </p>
-
+    <PageContainer>
+      <PageHeader
+        title={REWARD_CREATE.title}
+        description={REWARD_CREATE.description}
+        back={{ to: '/rewards', label: REWARD_CREATE.back }}
+      />
+      <form noValidate onSubmit={(event) => void handleSubmit(event)}>
+        <TwoColumn
+          main={
+          <Stack>
+            <Panel title={REWARD_CREATE.about.title}>
+              <Stack gap={4}>
                 <Input
-                  label="Vault ID"
-                  placeholder="uuid of a vault you signed in to"
-                  value={formData.vaultId}
-                  onChange={onTextChange('vaultId')}
-                  helpText="Optional. Backend will derive a standalone vault id if omitted."
+                  id={FIELD_ID.title}
+                  label={REWARD_CREATE.about.titleLabel}
+                  placeholder={REWARD_CREATE.about.titlePlaceholder}
+                  helper={REWARD_CREATE.about.titleHelper}
+                  value={form.title}
+                  maxLength={TITLE_MAX}
+                  onChange={(event) => set('title', event.target.value)}
+                  error={errors.title}
+                />
+                <Textarea
+                  id={FIELD_ID.description}
+                  label={REWARD_CREATE.about.descriptionLabel}
+                  optional
+                  placeholder={REWARD_CREATE.about.descriptionPlaceholder}
+                  helper={REWARD_CREATE.about.descriptionHelper}
+                  value={form.description}
+                  maxLength={1000}
+                  onChange={(event) => set('description', event.target.value)}
+                />
+                <Select<RewardCategory>
+                  id={FIELD_ID.rewardCategory}
+                  label={REWARD_CREATE.about.typeLabel}
+                  helper={REWARD_CREATE.about.typeHelper}
+                  value={form.rewardCategory}
+                  onValueChange={(value) => set('rewardCategory', value)}
+                  options={REWARD_TYPE_ORDER.map((key) => ({
+                    value: key,
+                    label: REWARD_TYPE[key],
+                  }))}
+                />
+              </Stack>
+            </Panel>
+
+            <Panel title={REWARD_CREATE.budget.title}>
+              <Stack gap={4}>
+                <ChoiceCardGroup<TokenType>
+                  name="reward-asset"
+                  legend={REWARD_CREATE.asset.legend}
+                  value={form.tokenType}
+                  onChange={(value) => set('tokenType', value)}
+                  options={[
+                    {
+                      value: 'BCH',
+                      title: REWARD_CREATE.asset.bchTitle,
+                      description: REWARD_CREATE.asset.bchLine,
+                    },
+                    {
+                      value: 'FUNGIBLE_TOKEN',
+                      title: REWARD_CREATE.asset.tokenTitle,
+                      description: REWARD_CREATE.asset.tokenLine,
+                    },
+                  ]}
+                />
+                {usesToken ? (
+                  <Input
+                    id={FIELD_ID.tokenCategory}
+                    label={REWARD_CREATE.asset.tokenIdLabel}
+                    placeholder={REWARD_CREATE.asset.tokenIdPlaceholder}
+                    helper={REWARD_CREATE.asset.tokenIdHelper}
+                    value={form.tokenCategory}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => set('tokenCategory', event.target.value.trim())}
+                    error={errors.tokenCategory}
+                  />
+                ) : null}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <AmountInput
+                    id={FIELD_ID.totalPool}
+                    label={REWARD_CREATE.budget.totalLabel}
+                    asset={asset}
+                    value={form.totalPool}
+                    onChange={(value) => set('totalPool', value)}
+                    helper={REWARD_CREATE.budget.totalHelper}
+                    error={errors.totalPool}
+                  />
+                  <AmountInput
+                    id={FIELD_ID.maxRewardAmount}
+                    label={REWARD_CREATE.budget.limitLabel}
+                    asset={asset}
+                    value={form.maxRewardAmount}
+                    onChange={(value) => set('maxRewardAmount', value)}
+                    helper={
+                      rewardsAtLimit > 0
+                        ? enoughFor(rewardsAtLimit)
+                        : REWARD_CREATE.budget.limitHelper
+                    }
+                    error={errors.maxRewardAmount}
+                  />
+                </div>
+              </Stack>
+            </Panel>
+
+            <Panel title={REWARD_CREATE.dates.title}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <DateInput
+                  id={FIELD_ID.startDate}
+                  label={REWARD_CREATE.dates.startLabel}
+                  value={form.startDate}
+                  onChange={(value) => set('startDate', value)}
+                  helper={REWARD_CREATE.dates.startHelper}
+                  error={errors.startDate}
+                />
+                <DateInput
+                  id={FIELD_ID.endDate}
+                  label={REWARD_CREATE.dates.endLabel}
+                  value={form.endDate}
+                  min={form.startDate || undefined}
+                  onChange={(value) => set('endDate', value)}
+                  helper={REWARD_CREATE.dates.endHelper}
+                  error={errors.endDate}
                 />
               </div>
-            </div>
-          </Card>
+            </Panel>
 
-          {/* Summary review */}
-          <Card padding="lg" className="border-accent/30 bg-accent/5">
-            <div className="flex items-start gap-4">
-              <Sparkles className="w-6 h-6 text-accent flex-shrink-0 mt-1" />
-              <div className="flex-1">
-                <h4 className="font-display font-bold text-textPrimary mb-2">
-                  Review Before Deploying
-                </h4>
-                <div className="space-y-1 text-sm font-mono text-textMuted">
-                  <p>
-                    <span className="text-textPrimary font-bold">
-                      {formData.title || '[Campaign Title]'}
-                    </span>{' '}
-                    - {formData.rewardCategory}
-                  </p>
-                  <p>
-                    Pool:{' '}
-                    <span className="text-textPrimary font-bold">
-                      {formData.totalPool || '0'} {assetLabel}
-                    </span>{' '}
-                    • Max reward:{' '}
-                    <span className="text-textPrimary font-bold">
-                      {formData.maxRewardAmount || '0'} {assetLabel}
-                    </span>
-                  </p>
-                  <p>
-                    Window:{' '}
-                    <span className="text-textPrimary font-bold">
-                      {formData.startDate || 'today'}
-                    </span>{' '}
-                    →{' '}
-                    <span className="text-textPrimary font-bold">
-                      {formData.endDate || 'open-ended'}
-                    </span>
-                  </p>
-                  {formData.tokenType === 'FUNGIBLE_TOKEN' && formData.tokenCategory && (
-                    <p className="break-all">
-                      Token category:{' '}
-                      <span className="text-textPrimary">
-                        {formData.tokenCategory.slice(0, 16)}…{formData.tokenCategory.slice(-12)}
-                      </span>
-                    </p>
-                  )}
+            <Panel title={REWARD_CREATE.review.title}>
+              <Stack gap={4}>
+                <div className="lg:hidden">{plan(false)}</div>
+                <InsetBlock>
+                  <DetailList items={reviewItems} />
+                </InsetBlock>
+                <p className="text-small text-ink-secondary">{REWARD_CREATE.review.nextStep}</p>
+                {summary ? (
+                  <ErrorSummary
+                    title={summary.title}
+                    message={summary.message}
+                    fields={invalidFields}
+                  />
+                ) : null}
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <Button variant="ghost" onClick={askToLeave}>
+                    {REWARD_CREATE.leave}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    busy={busy}
+                    busyLabel={REWARD_CREATE.submitBusy}
+                  >
+                    {REWARD_CREATE.submit}
+                  </Button>
                 </div>
-                <div className="mt-3 flex items-center gap-2 text-xs font-mono text-textMuted">
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  <span>
-                    After creation you will sign the funding transaction from the campaign page to
-                    activate distributions.
-                  </span>
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Footer */}
-          <div className="flex flex-col-reverse gap-4 pt-4 sm:flex-row">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => navigate('/rewards')}
-              disabled={isCreating}
-              className="w-full flex-1"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={isCreating}
-              loading={isCreating}
-              className="w-full flex-1"
-            >
-              {isCreating ? 'Deploying Reward Contract…' : 'Create Reward Campaign'}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+              </Stack>
+            </Panel>
+          </Stack>
+          }
+          side={<div className="hidden lg:block lg:h-full">{plan(true)}</div>}
+        />
+      </form>
+      <ConfirmDialog
+        open={leaving}
+        title={REWARD_CREATE.leaveTitle}
+        body={REWARD_CREATE.leaveBody}
+        keepLabel={ACTIONS.keepEditing}
+        confirmLabel={ACTIONS.leave}
+        tone="danger"
+        busyLabel={REWARD_CREATE.leaving}
+        onConfirm={leave}
+        onClose={() => setLeaving(false)}
+      />
+    </PageContainer>
   );
 }

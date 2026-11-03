@@ -1,86 +1,44 @@
-import { useState, useEffect, ReactNode, useRef } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Menu } from 'lucide-react';
-import { Sidebar } from './Sidebar';
-import { WalletDropdown } from '../ui/WalletDropdown';
+import { SiteBanner } from '../ui/SiteBanner';
+import { IS_TEST_BUILD } from '../../copy/network';
+import { useAppMode } from '../../hooks/useAppMode';
+import { AppSidebar } from './AppSidebar';
+import { AppTopBar } from './AppTopBar';
+import { MobileDrawer } from './MobileDrawer';
+import { showsSampleData } from './chromeRoutes';
+import { useSidebar } from './useSidebar';
+import { CHROME } from '../../copy/nav';
 
 interface DashboardLayoutProps {
   children: ReactNode;
 }
 
-/**
- * Professional Dashboard Layout
- *
- * DESIGN:
- * - White background (#FFFFFF) throughout
- * - Clean, minimal SaaS aesthetic
- * - NO footer in dashboard (footer is for landing only)
- * - Professional sidebar with proper spacing
- * - Top bar with wallet dropdown
- * - Sidebar state persisted in localStorage
- */
+const CONTENT_ID = 'main-content';
+
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
-  const location = useLocation();
-  const scrollContainerRef = useRef<HTMLElement | null>(null);
-  // Initialize sidebar state from localStorage, default to true
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    const saved = localStorage.getItem('flowguard-sidebar-open');
-    return saved !== null ? JSON.parse(saved) : true;
-  });
-
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
-
-  // Persist sidebar state to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('flowguard-sidebar-open', JSON.stringify(sidebarOpen));
-  }, [sidebarOpen]);
-
-  useEffect(() => {
-    scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-  }, [location.pathname, location.search]);
+  const { pathname } = useLocation();
+  const mode = useAppMode((state) => state.mode);
+  const sidebarOpen = useSidebar((state) => state.open);
+  const toggleSidebar = useSidebar((state) => state.toggle);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Mobile Backdrop */}
-      {isMobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
-          onClick={() => setIsMobileOpen(false)}
-        />
-      )}
-
-      <Sidebar
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
-        isMobileOpen={isMobileOpen}
-        onMobileClose={() => setIsMobileOpen(false)}
-      />
-
-      {/* Main content area with topbar and internal scroll */}
-      <div
-        className={`flex-1 h-full flex flex-col transition-all duration-300 ${sidebarOpen ? 'lg:ml-64' : 'lg:ml-20'
-          }`}
+    <div className="flex min-h-dvh bg-canvas text-ink">
+      <a
+        href={`#${CONTENT_ID}`}
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-(--z-toast) focus:rounded-pill focus:bg-surface focus:px-4 focus:py-2 focus:text-label focus:text-ink focus:shadow-overlay"
       >
-        {/* Top Bar */}
-        <header className="sticky top-0 z-40 border-b border-border/60 bg-surface/90 px-3 py-3 backdrop-blur-md md:px-6 md:py-4">
-          <div className="flex min-w-0 items-center justify-between gap-3 lg:justify-end">
-            <button
-              onClick={() => setIsMobileOpen(true)}
-              className="lg:hidden p-2 -ml-2 rounded-lg hover:bg-surfaceAlt text-textSecondary transition-colors"
-            >
-              <Menu className="w-6 h-6" />
-            </button>
-            <div className="min-w-0 shrink-0">
-              <WalletDropdown />
-            </div>
-          </div>
-        </header>
-
-        {/* Scrollable Content */}
-        <main ref={scrollContainerRef} className="flex-1 overflow-y-auto">
-          <div className="min-h-full bg-background pb-8 md:pb-10">
-            {children}
-          </div>
+        {CHROME.skipToContent}
+      </a>
+      <AppSidebar collapsed={!sidebarOpen} onToggle={toggleSidebar} />
+      <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {IS_TEST_BUILD ? <SiteBanner kind="test-network" /> : null}
+        {showsSampleData(pathname, mode) ? <SiteBanner kind="sample-data" /> : null}
+        <AppTopBar menuOpen={drawerOpen} onOpenMenu={() => setDrawerOpen(true)} />
+        <main id={CONTENT_ID} tabIndex={-1} className="min-w-0 flex-1 focus:outline-none">
+          {children}
         </main>
       </div>
     </div>

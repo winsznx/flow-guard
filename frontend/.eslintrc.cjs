@@ -14,6 +14,14 @@ module.exports = {
       'warn',
       { allowConstantExport: true },
     ],
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
   },
+  overrides: [
+    {
+      files: ['scripts/**/*.mjs'],
+      env: { browser: false, node: true, es2022: true },
+      parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
+    },
+  ],
 }
 

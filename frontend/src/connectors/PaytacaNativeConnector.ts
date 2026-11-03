@@ -18,6 +18,8 @@ import type {
   CashScriptSignResponse,
 } from '../types/wallet';
 import { normalizeSignatureResponse } from '../utils/signature';
+import { flowFailure, walletRequestFailure } from '../copy/errors';
+import { WALLET_PROMPTS } from '../copy/wallets';
 
 export class PaytacaNativeConnector implements IWalletConnector {
   type: WalletType = 'paytaca' as WalletType;
@@ -74,11 +76,7 @@ export class PaytacaNativeConnector implements IWalletConnector {
   async connect(): Promise<WalletInfo> {
     const available = await this.isAvailable();
     if (!available) {
-      throw new Error(
-        'Paytaca wallet not found.\n\n' +
-        'Please install the Paytaca browser extension:\n' +
-        'https://chrome.google.com/webstore/detail/paytaca/pakphhpnneopheifihmjcjnbdbhaaiaa'
-      );
+      throw flowFailure('WALLET_NOT_INSTALLED');
     }
 
     try {
@@ -92,7 +90,7 @@ export class PaytacaNativeConnector implements IWalletConnector {
         // Connection completes when addressChanged event fires
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => {
-            reject(new Error('Connection timeout - user did not approve within 60s'));
+            reject(flowFailure('WALLET_TIMEOUT', { details: 'Paytaca did not approve the connection within 60 seconds.' }));
           }, 60000);
 
           // Listen for addressChanged event (signals successful connection)
@@ -117,7 +115,7 @@ export class PaytacaNativeConnector implements IWalletConnector {
       // Get address
       const address = await window.paytaca!.address();
       if (!address) {
-        throw new Error('Failed to get address from Paytaca');
+        throw flowFailure('WALLET_SESSION_ENDED', { details: 'Paytaca returned no address.' });
       }
 
       this.currentAddress = address;
@@ -128,7 +126,6 @@ export class PaytacaNativeConnector implements IWalletConnector {
 
       console.log('[PaytacaNative] Connected:', { address, network });
 
-      // Get balance (Paytaca doesn't expose this via dApp API, return placeholder)
       const balance = await this.getBalance();
 
       return {
@@ -136,18 +133,20 @@ export class PaytacaNativeConnector implements IWalletConnector {
         network: network as 'mainnet' | 'chipnet',
         balance,
       };
-    } catch (error: any) {
+    } catch (error) {
       console.error('[PaytacaNative] Connection failed:', error);
-
-      if (error.message?.includes('timeout')) {
-        throw new Error(
-          'Connection timeout.\n\n' +
-          'Please approve the connection request in your Paytaca wallet.'
-        );
-      }
-
-      throw error;
+      throw walletRequestFailure(error, 'transaction');
     }
+  }
+
+  /**
+   * Resume an existing extension connection without prompting. Returns null
+   * unless the extension already reports this site as connected.
+   */
+  async restore(): Promise<WalletInfo | null> {
+    if (!(await this.isAvailable())) return null;
+    if (!(await this.isConnected())) return null;
+    return this.connect();
   }
 
   /**
@@ -174,12 +173,12 @@ export class PaytacaNativeConnector implements IWalletConnector {
     if (this.currentAddress) return this.currentAddress;
 
     if (!window.paytaca) {
-      throw new Error('Paytaca not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     const address = await window.paytaca.address();
     if (!address) {
-      throw new Error('No address available - wallet may not be connected');
+      throw flowFailure('WALLET_SESSION_ENDED', { details: 'Paytaca returned no address.' });
     }
 
     this.currentAddress = address;
@@ -195,26 +194,26 @@ export class PaytacaNativeConnector implements IWalletConnector {
    * - Paytaca replaces it with actual pubkey during signing
    */
   async getPublicKey(): Promise<string> {
-    throw new Error(
-      'Paytaca uses automatic pubkey substitution during signing.\n\n' +
-      'For contract interactions, use 33-byte zero placeholder:\n' +
-      'new Uint8Array(33) // Paytaca will replace with actual pubkey\n\n' +
-      'See: https://github.com/mainnet-pat/wc2-bch-bcr'
-    );
+    throw flowFailure('WALLET_UNSUPPORTED', {
+      details: 'Paytaca fills in the public key while signing. Use a 33-byte zero placeholder.',
+    });
   }
 
   /**
-   * Get wallet balance
-   *
-   * NOTE: Paytaca dApp API doesn't expose balance.
-   * Balance should be fetched from blockchain indexer (Chaingraph/Electrum).
+   * Paytaca's dApp API has no balance call, so this reads FlowGuard's balance route
+   * like the other connectors. null means unknown, never 0.
    */
-  async getBalance(): Promise<WalletBalance> {
-    console.warn(
-      '[PaytacaNative] Balance fetching not supported via dApp API. ' +
-      'Use Chaingraph or Electrum indexer instead.'
-    );
-    return { bch: 0, sat: 0 };
+  async getBalance(): Promise<WalletBalance | null> {
+    if (!this.currentAddress) return null;
+    try {
+      const response = await fetch(`/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`);
+      if (!response.ok) return null;
+      const data = (await response.json()) as { bch?: number; sat?: number };
+      return { bch: data.bch ?? 0, sat: data.sat ?? 0 };
+    } catch (error) {
+      console.error('[PaytacaNative] Balance fetch failed:', error);
+      return null;
+    }
   }
 
   /**
@@ -224,11 +223,7 @@ export class PaytacaNativeConnector implements IWalletConnector {
    * with proper transaction construction via libauth.
    */
   async signTransaction(_tx: Transaction): Promise<SignedTransaction> {
-    throw new Error(
-      'Use signCashScriptTransaction() for all Paytaca transactions.\n\n' +
-      'Paytaca requires full transaction construction with sourceOutputs.\n' +
-      'See: https://cashscript.org/docs/ for transaction building.'
-    );
+    throw flowFailure('WALLET_UNSUPPORTED', { details: 'Paytaca only signs fully built transactions.' });
   }
 
   /**
@@ -241,7 +236,7 @@ export class PaytacaNativeConnector implements IWalletConnector {
     options: CashScriptSignOptions
   ): Promise<CashScriptSignResponse> {
     if (!window.paytaca) {
-      throw new Error('Paytaca not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     try {
@@ -254,11 +249,11 @@ export class PaytacaNativeConnector implements IWalletConnector {
         transaction: options.transaction,
         sourceOutputs: options.sourceOutputs,
         broadcast: options.broadcast ?? true,
-        userPrompt: options.userPrompt,
+        userPrompt: options.userPrompt || WALLET_PROMPTS.transaction,
       });
 
       if (!result) {
-        throw new Error('Transaction signing rejected by user');
+        throw flowFailure('WALLET_REJECTED');
       }
 
       console.log('[PaytacaNative] Transaction signed:', result.signedTransactionHash);
@@ -267,14 +262,9 @@ export class PaytacaNativeConnector implements IWalletConnector {
         signedTransaction: result.signedTransaction,
         signedTransactionHash: result.signedTransactionHash,
       };
-    } catch (error: any) {
+    } catch (error) {
       console.error('[PaytacaNative] Signing failed:', error);
-
-      if (error.message?.includes('rejected') || error.message?.includes('cancelled')) {
-        throw new Error('Transaction rejected by user');
-      }
-
-      throw new Error(`Transaction signing failed: ${error.message}`);
+      throw walletRequestFailure(error, 'transaction');
     }
   }
 
@@ -283,7 +273,7 @@ export class PaytacaNativeConnector implements IWalletConnector {
    */
   async signMessage(message: string, userPrompt?: string): Promise<string> {
     if (!window.paytaca) {
-      throw new Error('Paytaca not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     try {
@@ -291,23 +281,18 @@ export class PaytacaNativeConnector implements IWalletConnector {
 
       const result = await window.paytaca.signMessage({
         message,
-        userPrompt,
+        userPrompt: userPrompt || WALLET_PROMPTS.signInMessage,
       });
 
       if (!result) {
-        throw new Error('Message signing rejected by user');
+        throw flowFailure('SIGN_IN_REJECTED');
       }
 
       console.log('[PaytacaNative] Message signed');
       return normalizeSignatureResponse(result);
-    } catch (error: any) {
+    } catch (error) {
       console.error('[PaytacaNative] Message signing failed:', error);
-
-      if (error.message?.includes('rejected') || error.message?.includes('cancelled')) {
-        throw new Error('Message signing rejected by user');
-      }
-
-      throw new Error(`Message signing failed: ${error.message}`);
+      throw walletRequestFailure(error, 'signIn');
     }
   }
 

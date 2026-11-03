@@ -93,7 +93,8 @@ export interface CashScriptSignResponse {
 export interface WalletInfo {
   address: string;
   publicKey?: string;
-  balance?: WalletBalance;
+  /** null when the balance couldn't be read. Show "Balance unavailable", never 0. */
+  balance?: WalletBalance | null;
   network: 'mainnet' | 'testnet' | 'chipnet';
 }
 
@@ -133,7 +134,7 @@ export interface IWalletConnector {
   getPublicKey(): Promise<string>;
 
   /** Get wallet balance */
-  getBalance(): Promise<WalletBalance>;
+  getBalance(): Promise<WalletBalance | null>;
 
   /** 
    * Sign a simple send transaction
@@ -175,7 +176,7 @@ export interface WalletActions {
   getPublicKey: () => Promise<string | null>;
   signTransaction: (tx: Transaction) => Promise<SignedTransaction>;
   signCashScriptTransaction?: (options: CashScriptSignOptions) => Promise<CashScriptSignResponse>;
-  signMessage: (message: string) => Promise<string>;
+  signMessage: (message: string, userPrompt?: string) => Promise<string>;
   refreshBalance: () => Promise<void>;
 }
 

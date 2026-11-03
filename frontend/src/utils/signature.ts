@@ -1,3 +1,5 @@
+import { flowFailure } from '../copy/errors';
+
 /**
  * Normalize a `bch_signMessage` response into the base64 signature string the
  * SIWX verifier expects. The wc2-bch-bcr spec returns a bare base64 string, but
@@ -18,5 +20,5 @@ export function normalizeSignatureResponse(result: unknown): string {
     }
   }
 
-  throw new Error('Wallet returned an unrecognized signature format');
+  throw flowFailure('SIGN_IN_FAILED', { details: 'The wallet returned a sign-in signature in a shape we could not read.' });
 }

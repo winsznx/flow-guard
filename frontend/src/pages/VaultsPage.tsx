@@ -1,314 +1,250 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Card } from '../components/ui/Card';
-import { Button } from '../components/ui/Button';
-import { fetchVaults, VaultsResponse } from '../utils/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { ListToolbar } from '../components/layout/ListToolbar';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { Amount } from '../components/ui/Amount';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Plus, Vault } from '../components/ui/Icon';
+import { List, type Column, type ListState } from '../components/ui/List';
+import { RoleTag } from '../components/ui/RoleTag';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { StatRow } from '../components/ui/StatRow';
+import { StatTile } from '../components/ui/StatTile';
+import type { Asset } from '../components/ui/types';
+import { BUDGETS_TAB } from '../copy/budgets';
+import { errorMessage, asFlowError } from '../copy/errors';
+import { glossaryHelp } from '../copy/glossary';
+import { VAULTS_PAGE, signersRequiredShort, vaultTitle } from '../copy/vaults';
 import { useWallet } from '../hooks/useWallet';
-import { Plus, Shield, Users, Wallet } from 'lucide-react';
+import { fetchVaults } from '../utils/api';
+import BudgetPlansTab from './BudgetPlansPage';
 
-type ViewMode = 'created' | 'signer' | 'all';
+const BCH: Asset = { kind: 'bch' };
 
-export default function VaultsPage() {
+type Segment = 'yours' | 'public';
+type Tab = 'vaults' | 'budgets';
+
+type VaultRow = {
+  id: string;
+  name: string;
+  description: string;
+  balanceSats: bigint | null;
+  approvalThreshold: number;
+  signerCount: number;
+  isPublic: boolean;
+  isViewer: boolean;
+};
+
+function toVaultRow(raw: Record<string, unknown>): VaultRow {
+  const id = String(raw.id ?? '');
+  const balance =
+    typeof raw.balance === 'number' && Number.isFinite(raw.balance) ? raw.balance : null;
+  const signers = Array.isArray(raw.signers) ? raw.signers : [];
+  return {
+    id,
+    name: vaultTitle({ id, name: typeof raw.name === 'string' ? raw.name : null }),
+    description: typeof raw.description === 'string' ? raw.description : '',
+    balanceSats: raw.contractAddress && balance !== null ? BigInt(Math.trunc(balance)) : null,
+    approvalThreshold: Number(raw.approvalThreshold) || 0,
+    signerCount: signers.length,
+    isPublic: raw.isPublic === true,
+    isViewer: raw.role !== 'creator' && raw.role !== 'signer',
+  };
+}
+
+const SEGMENT_OPTIONS: { value: Segment; label: string }[] = [
+  { value: 'yours', label: VAULTS_PAGE.segments.yours },
+  { value: 'public', label: VAULTS_PAGE.segments.public },
+];
+
+const COLUMNS: Column<VaultRow>[] = [
+  {
+    key: 'name',
+    header: VAULTS_PAGE.columns.name,
+    primary: true,
+    cell: (row) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="truncate">{row.name}</span>
+        {row.description ? (
+          <span className="truncate text-small text-ink-muted">{row.description}</span>
+        ) : null}
+      </span>
+    ),
+  },
+  {
+    key: 'held',
+    header: VAULTS_PAGE.columns.held,
+    align: 'end',
+    mobile: 'bottom-end',
+    cell: (row) =>
+      row.balanceSats === null ? (
+        <span className="text-ink-muted">{VAULTS_PAGE.noContract}</span>
+      ) : (
+        <Amount value={row.balanceSats} asset={BCH} precision="list" />
+      ),
+  },
+  {
+    key: 'approvals',
+    header: VAULTS_PAGE.columns.approvals,
+    mobile: 'bottom-start',
+    cell: (row) => signersRequiredShort(row.approvalThreshold, row.signerCount),
+  },
+  {
+    key: 'visibility',
+    header: VAULTS_PAGE.columns.visibility,
+    mobile: 'top',
+    cell: (row) => (
+      <span className="flex flex-wrap items-center gap-2">
+        <span>{row.isPublic ? VAULTS_PAGE.public : VAULTS_PAGE.private}</span>
+        {row.isViewer ? <RoleTag role="viewer" /> : null}
+      </span>
+    ),
+  },
+];
+
+function VaultsTab() {
   const wallet = useWallet();
-  const [viewMode, setViewMode] = useState<ViewMode>('all');
-  const [vaultsData, setVaultsData] = useState<VaultsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [activeProposalsCount, setActiveProposalsCount] = useState(0);
+  const [segment, setSegment] = useState<Segment>('yours');
+  const [data, setData] = useState<{ yours: VaultRow[]; public: VaultRow[] } | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loadVaults = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        // Fetch vaults from API (pass user address if connected)
-        const data = await fetchVaults(wallet.address || undefined);
-        setVaultsData(data);
-      } catch (err) {
-        console.error('Failed to load vaults:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load vaults');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadVaults();
+  const load = useCallback(async () => {
+    setFailure(null);
+    setData(null);
+    try {
+      const response = await fetchVaults(wallet.address || undefined);
+      setData({
+        yours: [...response.created, ...response.signerIn].map(toVaultRow),
+        public: response.public.map(toVaultRow),
+      });
+    } catch (error) {
+      setFailure(asFlowError(error).message);
+    }
   }, [wallet.address]);
 
-  // Fetch active proposals count
   useEffect(() => {
-    const loadActiveProposals = async () => {
-      try {
-        const response = await fetch('/api/proposals?status=PENDING');
-        const data = await response.json();
-        setActiveProposalsCount(data.total || 0);
-      } catch (err) {
-        console.error('Failed to load active proposals:', err);
-      }
-    };
+    void load();
+  }, [load]);
 
-    loadActiveProposals();
-  }, []);
+  const rows = useMemo(() => (data ? data[segment] : []), [data, segment]);
+  const state: ListState = failure
+    ? 'error'
+    : !data
+      ? 'loading'
+      : rows.length === 0
+        ? 'empty'
+        : 'ready';
+  const heldSats = rows.reduce((sum, row) => sum + (row.balanceSats ?? 0n), 0n);
+  const help = glossaryHelp('vault');
 
-  // Get vaults based on view mode
-  const getDisplayedVaults = () => {
-    if (!vaultsData) return [];
-
-    switch (viewMode) {
-      case 'created':
-        return vaultsData.created;
-      case 'signer':
-        return vaultsData.signerIn;
-      case 'all':
-        return vaultsData.all;
-      default:
-        return vaultsData.all;
-    }
-  };
-
-  const displayedVaults = getDisplayedVaults();
-  const totalVaults = vaultsData ? vaultsData.all.length : 0;
-
-  // Calculate total assets
-  const totalAssets = displayedVaults.reduce((sum, v) => {
-    if (v.contractAddress && v.balance !== undefined) {
-      return sum + (v.balance / 100000000); // Convert satoshis to BCH
-    }
-    return sum + (v.totalDeposit || 0);
-  }, 0);
+  const empty =
+    segment === 'yours' ? (
+      <EmptyState
+        icon={Vault}
+        title={VAULTS_PAGE.empty.yoursTitle}
+        description={VAULTS_PAGE.empty.yoursLine}
+        example={VAULTS_PAGE.empty.yoursExample}
+        action={
+          <ButtonLink to="/vaults/create" variant="primary" leadingIcon={Plus}>
+            {VAULTS_PAGE.create}
+          </ButtonLink>
+        }
+        learnMore={help ? { label: VAULTS_PAGE.empty.learnMore, to: help.path } : undefined}
+      />
+    ) : (
+      <EmptyState
+        icon={Vault}
+        title={VAULTS_PAGE.empty.publicTitle}
+        description={VAULTS_PAGE.empty.publicLine}
+      />
+    );
 
   return (
-    <div className="min-h-screen pb-20">
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-        {/* Header Section */}
-        <div className="mb-8 md:mb-12">
-          <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-6 mb-12">
-            <div>
-              <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-4">
-                Your Vaults
-              </h1>
-              <p className="font-mono text-textMuted max-w-2xl text-sm leading-relaxed">
-                Manage your on-chain treasury with automated budget releases, role-based approvals, and spending guardrails.
-              </p>
-            </div>
-            <Link to="/vaults/create">
-              <Button size="lg" className="shadow-xl shadow-accent/10">
-                <Plus className="w-4 h-4 mr-2" />
-                Create Vault
-              </Button>
-            </Link>
-          </div>
-
-          {/* Stats Bar */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-            <Card padding="md" className="flex items-center gap-4 border-border/40 shadow-sm">
-              <div className="p-3 bg-surfaceAlt rounded-full">
-                <Shield className="w-6 h-6 text-textPrimary" />
-              </div>
-              <div>
-                <div className="font-mono text-xs text-textMuted uppercase tracking-wider mb-1">Total Vaults</div>
-                <div className="font-display text-3xl text-textPrimary">{totalVaults}</div>
-              </div>
-            </Card>
-            <Card padding="md" className="flex items-center gap-4 border-border/40 shadow-sm">
-              <div className="p-3 bg-accent/10 rounded-full">
-                <Wallet className="w-6 h-6 text-textPrimary" />
-              </div>
-              <div>
-                <div className="font-mono text-xs text-textMuted uppercase tracking-wider mb-1">Total Assets</div>
-                <div className="font-display text-3xl text-textPrimary">{totalAssets.toFixed(2)} BCH</div>
-              </div>
-            </Card>
-            <Card padding="md" className="flex items-center gap-4 border-border/40 shadow-sm">
-              <div className="p-3 bg-surfaceAlt rounded-full">
-                <Users className="w-6 h-6 text-textMuted" />
-              </div>
-              <div>
-                <div className="font-mono text-xs text-textMuted uppercase tracking-wider mb-1">Active Proposals</div>
-                <div className="font-display text-3xl text-textPrimary">{activeProposalsCount}</div>
-              </div>
-            </Card>
-            <Card padding="md" className="flex items-center gap-4 border-border/40 shadow-sm bg-accent/5">
-              <div className="p-3 bg-accent/20 rounded-full">
-                <Wallet className="w-6 h-6 text-accent" />
-              </div>
-              <div>
-                <div className="font-mono text-xs text-textMuted uppercase tracking-wider mb-1">
-                  Wallet Balance
-                  {wallet.isConnected && wallet.balance?.bch === 0 && (
-                    <span className="ml-2 text-[10px] normal-case" title="Chipnet balance APIs are currently experiencing issues">
-                      (may be unavailable)
-                    </span>
-                  )}
-                </div>
-                <div className="font-display text-3xl text-accent">
-                  {wallet.isConnected && wallet.balance
-                    ? wallet.balance.bch.toFixed(4)
-                    : '0.0000'} BCH
-                </div>
-              </div>
-            </Card>
-          </div>
-
-          {/* View Mode Toggle */}
-          <div className="mb-8 border-b border-border pb-1">
-            <div className="flex gap-4">
-              <button
-                onClick={() => setViewMode('all')}
-                className={`pb-3 px-1 text-sm font-mono transition-all border-b-2 ${viewMode === 'all'
-                  ? 'border-accent text-textPrimary font-bold'
-                  : 'border-transparent text-textMuted hover:text-textPrimary'
-                  }`}
-              >
-                All Vaults ({vaultsData?.all.length || 0})
-              </button>
-              <button
-                onClick={() => setViewMode('created')}
-                className={`pb-3 px-1 text-sm font-mono transition-all border-b-2 ${viewMode === 'created'
-                  ? 'border-accent text-textPrimary font-bold'
-                  : 'border-transparent text-textMuted hover:text-textPrimary'
-                  }`}
-              >
-                Created ({vaultsData?.created.length || 0})
-              </button>
-              <button
-                onClick={() => setViewMode('signer')}
-                className={`pb-3 px-1 text-sm font-mono transition-all border-b-2 ${viewMode === 'signer'
-                  ? 'border-accent text-textPrimary font-bold'
-                  : 'border-transparent text-textMuted hover:text-textPrimary'
-                  }`}
-              >
-                Signer ({vaultsData?.signerIn.length || 0})
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Vaults Grid */}
-        {loading ? (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-64 bg-whiteAlt rounded-xl animate-pulse border border-border/40" />
-            ))}
-          </div>
-        ) : error ? (
-          <Card padding="lg" className="text-center py-16 border-error/20">
-            <h2 className="font-display text-2xl mb-4 text-error">Unable to load vaults</h2>
-            <p className="font-mono text-textMuted mb-4 text-sm">{error}</p>
-            <Button variant="outline" onClick={() => window.location.reload()}>Retry Connection</Button>
-          </Card>
-        ) : displayedVaults.length === 0 ? (
-          <Card padding="lg" className="text-center py-20 border-dashed border-border/40">
-            <div className="w-16 h-16 bg-surfaceAlt rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-border/40">
-              <Shield className="w-8 h-8 text-textMuted" />
-            </div>
-            <h2 className="font-display text-2xl mb-3 text-textPrimary">No vaults found</h2>
-            <p className="font-mono text-textMuted mb-8 max-w-md mx-auto text-sm">
-              {viewMode === 'created'
-                ? "You haven't created any vaults yet."
-                : viewMode === 'signer'
-                  ? "You're not a signer in any vaults yet."
-                  : "Create a vault to start managing your on-chain treasury."}
-            </p>
-            {viewMode === 'created' || viewMode === 'all' ? (
-              <Link to="/vaults/create">
-                <Button>Create Your First Vault</Button>
-              </Link>
+    <Stack>
+      <ListToolbar
+        segments={
+          <div className="flex flex-col items-start gap-2">
+            <SegmentedControl
+              label={VAULTS_PAGE.segmentLabel}
+              options={SEGMENT_OPTIONS}
+              value={segment}
+              onChange={setSegment}
+            />
+            {segment === 'public' ? (
+              <p className="text-small text-ink-secondary">{VAULTS_PAGE.publicLine}</p>
             ) : null}
-          </Card>
-        ) : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {displayedVaults.map((vault) => {
-              const unlocked = vault.unlockAmount || 0;
-              const role = vault.role || 'viewer';
-
-              return (
-                <Link key={vault.id} to={`/vaults/${vault.id}`} className="group">
-                  <Card
-                    padding="lg"
-                    hover
-                    className="h-full relative overflow-hidden transition-all duration-300 border-border/40 group-hover:border-accent/50 group-hover:shadow-xl group-hover:shadow-accent/5"
-                  >
-                    {/* Status Dot */}
-                    <div className="absolute top-6 right-6 flex items-center gap-2">
-                      <span className="flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-2.5 w-2.5 rounded-full bg-accent opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent"></span>
-                      </span>
-                    </div>
-
-                    <div className="mb-6">
-                      <h3 className="font-display text-2xl text-textPrimary mb-2 group-hover:text-accent transition-colors truncate pr-8">
-                        {vault.name || vault.vaultId || `Vault ${vault.id.slice(0, 8)}`}
-                      </h3>
-                      {vault.description && (
-                        <p className="font-mono text-xs text-textMuted line-clamp-2 min-h-[2.5em]">
-                          {vault.description}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Key Metric */}
-                    <div className="mb-6 p-4 bg-surfaceAlt rounded-lg border border-border/40 group-hover:bg-accent/5 transition-colors">
-                      <div className="flex justify-between items-end">
-                        <div>
-                          <div className="font-mono text-[10px] uppercase tracking-wider text-textMuted mb-1">Balance</div>
-                          <div className="font-display text-2xl text-textPrimary">
-                            {vault.contractAddress && vault.balance !== undefined
-                              ? (vault.balance / 100000000).toFixed(4)
-                              : vault.totalDeposit || 0} <span className="text-sm text-textMuted">BCH</span>
-                          </div>
-                        </div>
-                        {vault.contractAddress && (
-                          <Wallet className="w-5 h-5 text-accent opacity-50" />
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Progress Bar */}
-                    {vault.totalDeposit > 0 && (
-                      <div className="mb-6 space-y-2">
-                        <div className="flex justify-between text-xs font-mono">
-                          <span className="text-textMuted">Unlocked</span>
-                          <span className="text-textPrimary">{unlocked.toFixed(2)} BCH</span>
-                        </div>
-                        <div className="h-1.5 bg-surfaceAlt rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-accent rounded-full"
-                            style={{ width: `${(unlocked / vault.totalDeposit) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Footer Badges */}
-                    <div className="flex items-center gap-2 mt-auto pt-4 border-t border-border/40">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${role === 'creator' ? 'bg-primary text-white border-primary' :
-                        role === 'signer' ? 'bg-surfaceAlt text-textPrimary border-border' :
-                          'bg-whiteAlt text-textMuted border-border'
-                        }`}>
-                        {role}
-                      </span>
-
-                      {vault.isPublic && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-whiteAlt text-textMuted border border-border">
-                          Public
-                        </span>
-                      )}
-
-                      <div className="ml-auto text-xs font-mono text-textMuted flex items-center gap-1">
-                        <Users className="w-3 h-3" />
-                        {vault.signers?.length || 0}
-                      </div>
-                    </div>
-                  </Card>
-                </Link>
-              );
-            })}
           </div>
-        )}
-      </div>
-    </div>
+        }
+        stats={
+          state === 'ready' ? (
+            <StatRow>
+              <StatTile label={VAULTS_PAGE.stats.count} value={String(rows.length)} />
+              <StatTile
+                label={VAULTS_PAGE.stats.held}
+                value={<Amount value={heldSats} asset={BCH} size="lg" precision="list" />}
+                sub={VAULTS_PAGE.stats.heldSub}
+              />
+            </StatRow>
+          ) : null
+        }
+      />
+      <List
+        label={VAULTS_PAGE.listLabel}
+        columns={COLUMNS}
+        rows={rows}
+        rowKey={(row) => row.id}
+        rowHref={(row) => `/vaults/${row.id}`}
+        state={state}
+        empty={empty}
+        noResults={null}
+        error={
+          <ErrorState
+            title={VAULTS_PAGE.loadFailedTitle}
+            reason={failure ?? errorMessage('LOAD_FAILED', { things: 'Your vaults' })}
+            onRetry={load}
+          />
+        }
+      />
+    </Stack>
+  );
+}
+
+export default function VaultsPage() {
+  const { pathname } = useLocation();
+  const tab: Tab = pathname.startsWith('/budgets') ? 'budgets' : 'vaults';
+
+  const primaryAction =
+    tab === 'vaults' ? (
+      <ButtonLink to="/vaults/create" variant="primary" leadingIcon={Plus}>
+        {VAULTS_PAGE.create}
+      </ButtonLink>
+    ) : (
+      <ButtonLink to="/budgets/create" variant="primary" leadingIcon={Plus}>
+        {BUDGETS_TAB.create}
+      </ButtonLink>
+    );
+
+  return (
+    <PageContainer>
+      <PageHeader
+        title={VAULTS_PAGE.title}
+        documentTitle={tab === 'budgets' ? VAULTS_PAGE.budgetsDocumentTitle : VAULTS_PAGE.title}
+        description={tab === 'budgets' ? VAULTS_PAGE.budgetsDescription : VAULTS_PAGE.description}
+        primaryAction={primaryAction}
+        tabs={{
+          label: VAULTS_PAGE.tabsLabel,
+          activeKey: tab,
+          items: [
+            { key: 'vaults', label: VAULTS_PAGE.tabs.vaults, to: '/vaults' },
+            { key: 'budgets', label: VAULTS_PAGE.tabs.budgets, to: '/budgets' },
+          ],
+        }}
+      />
+      {tab === 'vaults' ? <VaultsTab /> : <BudgetPlansTab />}
+    </PageContainer>
   );
 }

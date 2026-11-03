@@ -1,1849 +1,1603 @@
-/**
- * FlowGuard Explorer - single canonical surface for on-chain activity.
- *
- * One page, three personas:
- *   - Global    (default)            : public discovery, anonymous
- *   - Personal  (?scope=personal)    : wallet-scoped feed (replaces /streams/activity)
- *   - Treasury  (?scope=treasury)    : vault-scoped feed
- *
- * URL is the source of truth for scope / type / status / page / q, so every
- * filter combination is shareable and deep-linkable.
- */
-
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { CrossLink } from '../components/CrossLink';
-import {
-  Activity,
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
-  ArrowUpRight,
-  BarChart3,
-  Box,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Columns3,
-  Copy,
-  ExternalLink,
-  FileText,
-  Gift,
-  Globe2,
-  Hash,
-  Inbox,
-  Layers,
-  RefreshCw,
-  Search,
-  Shield,
-  Sparkles,
-  Target,
-  TriangleAlert,
-  Trophy,
-  Users,
-  Wallet,
-  Waves,
-  X,
-  Zap,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-
-import { Footer } from '../components/layout/Footer';
-import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
-import { PageMeta } from '../components/seo/PageMeta';
-import { Card } from '../components/ui/Card';
+import { MarketingFooter } from '../components/layout/Footer';
+import { MarketingNav } from '../components/layout/MarketingNav';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Address } from '../components/ui/Address';
+import { Amount } from '../components/ui/Amount';
 import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
-import { StatsCard } from '../components/shared/StatsCard';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Code } from '../components/ui/Code';
+import { CopyButton } from '../components/ui/CopyButton';
+import { DetailList } from '../components/ui/DetailList';
+import { Drawer } from '../components/ui/Drawer';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { FilterChips } from '../components/ui/FilterChips';
+import { Heading } from '../components/ui/Heading';
+import { Activity, Search, Wallet } from '../components/ui/Icon';
+import { List, type Column, type ListState } from '../components/ui/List';
+import { NoResults } from '../components/ui/NoResults';
+import { Pagination } from '../components/ui/Pagination';
+import { Panel } from '../components/ui/Panel';
+import { SearchInput } from '../components/ui/SearchInput';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { Select } from '../components/ui/Select';
+import { SiteBanner } from '../components/ui/SiteBanner';
+import { Skeleton } from '../components/ui/Skeleton';
+import { StatRow } from '../components/ui/StatRow';
+import { StatTile } from '../components/ui/StatTile';
+import { StatusPill } from '../components/ui/StatusPill';
+import { Switch } from '../components/ui/Switch';
+import { TxLink } from '../components/ui/TxLink';
+import type { Asset } from '../components/ui/types';
+import { cx } from '../components/ui/cx';
+import { ACTIONS, LABELS } from '../copy/common';
+import {
+  ADDRESS_DRAWER,
+  ALL_TYPES,
+  EXPLORER_ELSEWHERE_LINKS,
+  EXPLORER_EMPTY,
+  EXPLORER_ERRORS,
+  EXPLORER_FILTERS,
+  EXPLORER_PAGE,
+  EXPLORER_SCOPE,
+  EXPLORER_SEARCH,
+  EXPLORER_STATS,
+  EXPLORER_TABLE,
+  KIND_LABEL,
+  KIND_STATUSES,
+  EVENT_DRAWER,
+  PAYMENT_INTERVAL,
+  RECORD_DRAWER,
+  TRANSACTION_ENTITY_LABEL,
+  TRANSACTION_TABLE,
+  eventAt,
+  lastUpdate,
+  openEntityListInApp,
+  openListInApp,
+  recordMetaPrefix,
+  requestsWaitingSub,
+  searchResultsFor,
+  streamsActiveSub,
+  unnamedRecord,
+  vaultsRecentSub,
+  type ExplorerLoadProblem,
+  type ExplorerRecordKind,
+  type ExplorerScope,
+  type ExplorerTransactionEntity,
+} from '../copy/explorer';
+import { EVENT_WORD, toEventKind } from '../copy/events';
+import { formatDateTime, formatRelative, formatShortId, toDate } from '../copy/format';
+import { BUILD_NETWORK, IS_TEST_BUILD, viewOnExplorer } from '../copy/network';
+import {
+  airdropStatus,
+  lifecycleStatus,
+  spendingRequestStatus,
+  STATUS,
+  type StatusKey,
+} from '../copy/status';
 import { useWallet } from '../hooks/useWallet';
-import { formatLogicalId } from '../utils/display';
-import { isExplorerHost } from '../utils/publicUrls';
-import { getExplorerTxUrl, getExplorerAddressUrl } from '../utils/blockchain';
+import { useWalletModal } from '../hooks/useWalletModal';
+import { getExplorerAddressUrl } from '../utils/blockchain';
 import {
   detectQueryKind,
-  ExplorerApiError,
+  explorerLoadProblem,
   getExplorerAddress,
   getExplorerStats,
   getExplorerTransactions,
+  isHiddenTestRecord,
   searchExplorer,
-  toUnixMs,
+  type ExplorerAddressProposal,
   type ExplorerAddressResponse,
+  type ExplorerAddressStream,
+  type ExplorerAddressVault,
   type ExplorerSearchResponse,
+  type ExplorerSearchTransaction,
+  type ExplorerSortField,
+  type ExplorerSortOrder,
   type ExplorerStatsResponse,
   type ExplorerTransactionRow,
   type ExplorerTransactionsQuery,
-  type ExplorerSortField,
-  type ExplorerSortOrder,
-  type ExplorerTxType,
 } from '../utils/explorerQueries';
+import { appHref, isExplorerHost } from '../utils/publicUrls';
+import { getCachedTokenMeta, resolveTokenMeta } from '../utils/tokenMeta';
 
-type Scope = 'global' | 'personal' | 'treasury';
-type EntityTypeFilter = 'all' | 'stream' | 'vault' | 'payment' | 'airdrop' | 'proposal';
-type StatusFilter = 'all' | 'ACTIVE' | 'PENDING' | 'COMPLETED' | 'EXECUTED' | 'DEPLOYED' | 'CREATED';
+const PAGE_SIZE = 20;
+const AUTO_UPDATE_MS = 30_000;
+const CLOCK_TICK_MS = 15_000;
+const LONG_ID = 16;
+const KINDS: ExplorerRecordKind[] = ['vault', 'stream', 'payment', 'airdrop', 'proposal'];
+const SORT_FIELDS: ExplorerSortField[] = ['time', 'amount', 'status'];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DOCKED_DRAWER_QUERY = '(min-width: 1024px)';
+const NO_RECORDS: ExplorerRecord[] = [];
+const NO_TRANSACTIONS: ExplorerSearchTransaction[] = [];
 
-const PAGE_SIZE_OPTIONS = [10, 15, 25, 50];
-const DEFAULT_PAGE_SIZE = 15;
-const COLUMN_VISIBILITY_STORAGE_KEY = 'fg.explorer.columns';
+type KindFilter = 'all' | ExplorerRecordKind;
+type Load<T> =
+  | { state: 'loading' }
+  | { state: 'error'; problem: ExplorerLoadProblem }
+  | { state: 'ready'; data: T };
 
-interface TypeMeta {
-  label: string;
-  icon: LucideIcon;
-  detailPath: (row: ExplorerTransactionRow) => string;
-}
-
-const TYPE_META: Record<ExplorerTxType, TypeMeta> = {
-  VAULT: {
-    label: 'Vault',
-    icon: Shield,
-    detailPath: (row) => `/vaults/${row.id}`,
-  },
-  STREAM: {
-    label: 'Stream',
-    icon: Waves,
-    detailPath: (row) => `/streams/${row.id}`,
-  },
-  PAYMENT: {
-    label: 'Payment',
-    icon: Wallet,
-    detailPath: (row) => `/payments/${row.id}`,
-  },
-  AIRDROP: {
-    label: 'Airdrop',
-    icon: Gift,
-    detailPath: (row) => `/airdrops/${row.id}`,
-  },
-  PROPOSAL: {
-    label: 'Proposal',
-    icon: FileText,
-    detailPath: (row) => `/proposals/${row.id}`,
-  },
+type ExplorerRecord = {
+  key: string;
+  kind: ExplorerRecordKind;
+  id: string;
+  appId: string | null;
+  name: string | null;
+  from: string | null;
+  to: string | null;
+  amount: number | null;
+  asset: Asset | null;
+  rawStatus: string;
+  interval: string | null;
+  createdAt: string | number | null;
+  event: { type: string; at: string | number | null } | null;
+  txHash: string | null;
+  contractAddress: string | null;
+  vaultId: string | null;
 };
 
-const TYPE_FILTER_TABS: Array<{ value: EntityTypeFilter; label: string; icon: LucideIcon }> = [
-  { value: 'all', label: 'All', icon: Layers },
-  { value: 'stream', label: 'Streams', icon: Waves },
-  { value: 'vault', label: 'Vaults', icon: Shield },
-  { value: 'payment', label: 'Payments', icon: Wallet },
-  { value: 'airdrop', label: 'Airdrops', icon: Gift },
-  { value: 'proposal', label: 'Proposals', icon: FileText },
-];
+const TX_TYPE_KIND: Record<ExplorerTransactionRow['tx_type'], ExplorerRecordKind> = {
+  VAULT: 'vault',
+  STREAM: 'stream',
+  PAYMENT: 'payment',
+  AIRDROP: 'airdrop',
+  PROPOSAL: 'proposal',
+};
 
-const SECONDARY_TYPE_LINKS: Array<{ to: string; label: string; icon: LucideIcon }> = [
-  { to: '/bounties', label: 'Bounties', icon: Target },
-  { to: '/rewards', label: 'Rewards', icon: Trophy },
-  { to: '/grants', label: 'Grants', icon: Sparkles },
-];
+const APP_LIST_PATH: Record<ExplorerRecordKind, string> = {
+  vault: '/vaults',
+  stream: '/streams',
+  payment: '/payments',
+  airdrop: '/airdrops',
+  proposal: '/proposals',
+};
 
-const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
-  { value: 'all', label: 'All' },
-  { value: 'ACTIVE', label: 'Active' },
-  { value: 'PENDING', label: 'Pending' },
-  { value: 'DEPLOYED', label: 'Deployed' },
-  { value: 'EXECUTED', label: 'Executed' },
-  { value: 'COMPLETED', label: 'Completed' },
-];
+const TRANSACTION_ENTITY_PATH: Record<ExplorerTransactionEntity, string> = {
+  stream: '/streams',
+  payment: '/payments',
+  airdrop: '/airdrops',
+  reward: '/rewards',
+  bounty: '/bounties',
+  grant: '/grants',
+};
 
-function getStatusClasses(status: string): string {
-  switch (status?.toUpperCase()) {
-    case 'ACTIVE':
-      return 'bg-accent/10 text-accent border-accent/30';
-    case 'PENDING':
-    case 'CREATED':
-      return 'bg-secondary/15 text-textPrimary border-secondary';
-    case 'EXECUTED':
-      return 'bg-primary/10 text-primary border-primary/30';
-    case 'COMPLETED':
-      return 'bg-primarySoft text-primaryHover border-primary/20';
-    case 'DEPLOYED':
-      return 'bg-brand-100 text-primaryHover border-brand-300';
-    case 'FAILED':
-    case 'CANCELLED':
-      return 'bg-error/10 text-error border-error/30';
+function isTokenType(tokenType: string | null | undefined): boolean {
+  return tokenType === 'CASHTOKENS' || tokenType === 'FUNGIBLE_TOKEN';
+}
+
+function assetFor(
+  tokenType: string | null | undefined,
+  category: string | null | undefined
+): Asset {
+  if (!isTokenType(tokenType)) return { kind: 'bch' };
+  const meta = getCachedTokenMeta(category);
+  return {
+    kind: 'token',
+    tokenId: category ?? '',
+    symbol: meta?.symbol,
+    decimals: meta?.decimals ?? 0,
+  };
+}
+
+function fromFeedRow(row: ExplorerTransactionRow): ExplorerRecord {
+  const kind = TX_TYPE_KIND[row.tx_type];
+  const eventEntity = row.latest_event?.entity_id ?? null;
+  const hasOwnName = kind === 'vault' || kind === 'airdrop' || kind === 'proposal';
+  return {
+    key: `${kind}:${row.id}`,
+    kind,
+    id: row.id,
+    appId: typeof eventEntity === 'string' && UUID.test(eventEntity) ? eventEntity : null,
+    name: hasOwnName ? row.name?.trim() || null : null,
+    from: kind === 'proposal' ? null : (row.sender ?? null),
+    to: row.recipient ?? null,
+    amount: row.amount,
+    asset: assetFor(row.token_type, row.token_category),
+    rawStatus: row.status,
+    interval: kind === 'payment' ? (row.name ?? null) : null,
+    createdAt: row.created_at,
+    event: row.latest_event
+      ? { type: row.latest_event.event_type, at: row.latest_event.created_at }
+      : null,
+    txHash: row.tx_hash ?? row.latest_event?.tx_hash ?? null,
+    contractAddress: row.contract_address ?? null,
+    vaultId: row.vault_id ?? null,
+  };
+}
+
+function fromVault(vault: ExplorerAddressVault): ExplorerRecord {
+  return {
+    key: `vault:${vault.vault_id}`,
+    kind: 'vault',
+    id: vault.vault_id,
+    appId: null,
+    name: vault.name?.trim() || null,
+    from: vault.creator,
+    to: null,
+    amount: vault.total_deposit,
+    asset: { kind: 'bch' },
+    rawStatus: vault.contract_address ? 'DEPLOYED' : 'CREATED',
+    interval: null,
+    createdAt: vault.created_at,
+    event: null,
+    txHash: null,
+    contractAddress: vault.contract_address ?? null,
+    vaultId: null,
+  };
+}
+
+function fromStream(stream: ExplorerAddressStream): ExplorerRecord {
+  return {
+    key: `stream:${stream.stream_id}`,
+    kind: 'stream',
+    id: stream.stream_id,
+    appId: stream.id && UUID.test(stream.id) ? stream.id : null,
+    name: null,
+    from: stream.sender,
+    to: stream.recipient,
+    amount: stream.total_amount,
+    asset: stream.token_type === null ? null : assetFor(stream.token_type, stream.token_category),
+    rawStatus: stream.status,
+    interval: null,
+    createdAt: stream.created_at,
+    event: null,
+    txHash: null,
+    contractAddress: null,
+    vaultId: null,
+  };
+}
+
+function fromProposal(proposal: ExplorerAddressProposal): ExplorerRecord {
+  return {
+    key: `proposal:${proposal.id}`,
+    kind: 'proposal',
+    id: proposal.id,
+    appId: null,
+    name: proposal.reason?.trim() || null,
+    from: null,
+    to: proposal.recipient,
+    amount: proposal.amount,
+    asset: { kind: 'bch' },
+    rawStatus: proposal.status,
+    interval: null,
+    createdAt: proposal.created_at,
+    event: null,
+    txHash: null,
+    contractAddress: null,
+    vaultId: proposal.vault_id,
+  };
+}
+
+type SearchFound = { records: ExplorerRecord[]; transactions: ExplorerSearchTransaction[] };
+
+function searchFound(response: ExplorerSearchResponse): SearchFound {
+  const records = [
+    ...response.vaults.map(fromVault),
+    ...response.streams.map(fromStream),
+    ...response.proposals.map(fromProposal),
+  ];
+  return {
+    records: records.filter((record) => !isHiddenTestRecord(record.name)),
+    transactions: response.transactions,
+  };
+}
+
+function transactionKey(tx: ExplorerSearchTransaction): string {
+  return `${tx.tx_hash}:${tx.entity_type}:${tx.entity_id}:${tx.event_type}`;
+}
+
+/** A transaction event, with the matching search record when the search also found it. */
+type SearchEvent = { tx: ExplorerSearchTransaction; record: ExplorerRecord | null };
+
+function entityKey(tx: ExplorerSearchTransaction): string {
+  return `${tx.entity_type}:${tx.entity_id}`;
+}
+
+/** Pairs stream events with the stream records found by the same search, so each stream shows once. */
+function reconcileSearch(
+  records: ExplorerRecord[],
+  transactions: ExplorerSearchTransaction[]
+): { events: SearchEvent[]; others: ExplorerRecord[]; count: number } {
+  const streamsByAppId = new Map(
+    records
+      .filter((record) => record.kind === 'stream' && record.appId)
+      .map((record) => [record.appId, record])
+  );
+  const events = transactions.map((tx) => {
+    const record = tx.entity_type === 'stream' ? streamsByAppId.get(tx.entity_id) : undefined;
+    return { tx, record: record ? { ...record, txHash: record.txHash ?? tx.tx_hash } : null };
+  });
+  const paired = new Set(events.flatMap((event) => (event.record ? [event.record.key] : [])));
+  const others = records.filter((record) => !paired.has(record.key));
+  const count = new Set(transactions.map(entityKey)).size + others.length;
+  return { events, others, count };
+}
+
+function eventRecordId(event: SearchEvent): string {
+  return shortId(event.record?.id ?? event.tx.entity_id);
+}
+
+function transactionAppTarget(tx: ExplorerSearchTransaction): { path: string; label: string } {
+  const list = TRANSACTION_ENTITY_PATH[tx.entity_type];
+  return UUID.test(tx.entity_id)
+    ? { path: `${list}/${tx.entity_id}`, label: RECORD_DRAWER.openInApp }
+    : { path: list, label: openEntityListInApp(tx.entity_type) };
+}
+
+function statusKeyFor(record: ExplorerRecord): StatusKey | null {
+  const raw = record.rawStatus;
+  switch (record.kind) {
+    case 'vault':
+      return (
+        KIND_STATUSES.vault.find((option) => option.value === raw.toUpperCase())?.status ?? null
+      );
+    case 'airdrop':
+      return airdropStatus(raw);
+    case 'proposal':
+      return spendingRequestStatus(raw);
     default:
-      return 'bg-surfaceAlt text-textMuted border-border';
+      return lifecycleStatus(raw);
   }
 }
 
-function formatAddress(address: string | null | undefined, head = 8, tail = 6): string {
-  if (!address) return '';
-  if (address.length <= head + tail + 1) return address;
-  return `${address.slice(0, head)}…${address.slice(-tail)}`;
+function displayName(record: ExplorerRecord): string {
+  return record.name ?? unnamedRecord(record.kind, shortId(record.id));
 }
 
-function formatRelativeTime(ms: number): string {
-  if (!Number.isFinite(ms)) return '-';
-  const diff = Date.now() - ms;
-  if (diff < 0) return new Date(ms).toLocaleString();
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(ms).toLocaleDateString();
+function shortId(id: string): string {
+  return id.length > LONG_ID ? formatShortId(id) : id;
 }
 
-function formatBch(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '0';
-  if (value === 0) return '0';
-  if (Math.abs(value) >= 1) {
-    return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+/** Relative time that reads "just now" rather than "in 1 day" when the server clock runs ahead. */
+function relativeSince(at: string | number | null, now: number): string | null {
+  const time = toDate(at);
+  return time ? formatRelative(time, Math.max(now, time.getTime())) : null;
+}
+
+function lastUpdateText(record: ExplorerRecord, now: number): string {
+  const word = record.event ? EVENT_WORD[toEventKind(record.event.type)] : EVENT_WORD.created;
+  const relative = relativeSince(record.event?.at ?? record.createdAt, now);
+  return relative ? eventAt(word, relative) : EXPLORER_TABLE.timeNotRecorded;
+}
+
+function intervalText(record: ExplorerRecord): string | null {
+  if (!record.interval) return null;
+  return PAYMENT_INTERVAL[record.interval.toUpperCase()] ?? null;
+}
+
+function appTarget(record: ExplorerRecord): { path: string; label: string } {
+  if (
+    record.appId &&
+    (record.kind === 'stream' || record.kind === 'payment' || record.kind === 'airdrop')
+  ) {
+    return {
+      path: `${APP_LIST_PATH[record.kind]}/${record.appId}`,
+      label: RECORD_DRAWER.openInApp,
+    };
   }
-  return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
+  return {
+    path: APP_LIST_PATH[record.kind],
+    label: openListInApp(record.kind),
+  };
 }
 
-function formatEventLabel(eventType: string | undefined | null): string {
-  if (!eventType) return '';
-  return eventType
-    .split('_')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+function readScope(raw: string | null): ExplorerScope {
+  return raw === 'personal' || raw === 'you' ? 'you' : 'everyone';
 }
 
-interface CopyButtonProps {
-  value: string;
-  label?: string;
+function readKind(raw: string | null): KindFilter {
+  return KINDS.find((kind) => kind === raw) ?? 'all';
 }
 
-function CopyButton({ value, label }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(
-    (event: React.MouseEvent) => {
-      event.stopPropagation();
-      event.preventDefault();
-      navigator.clipboard.writeText(value).then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1400);
-      });
-    },
-    [value],
+function readStatus(kind: KindFilter, raw: string | null): string {
+  if (kind === 'all' || !raw) return '';
+  const upper = raw.toUpperCase();
+  return KIND_STATUSES[kind].some((option) => option.value === upper) ? upper : '';
+}
+
+function readSort(raw: string | null): ExplorerSortField {
+  return SORT_FIELDS.find((field) => field === raw) ?? 'time';
+}
+
+function readOrder(raw: string | null): ExplorerSortOrder {
+  return raw === 'asc' ? 'asc' : 'desc';
+}
+
+function subscribeDocked(onChange: () => void): () => void {
+  const query = window.matchMedia(DOCKED_DRAWER_QUERY);
+  query.addEventListener('change', onChange);
+  return () => query.removeEventListener('change', onChange);
+}
+
+function readDocked(): boolean {
+  return window.matchMedia(DOCKED_DRAWER_QUERY).matches;
+}
+
+function useNow(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+function useTokenSymbols(records: ExplorerRecord[]): void {
+  const [, setVersion] = useState(0);
+  const missing = new Set<string>();
+  for (const record of records) {
+    const asset = record.asset;
+    if (asset?.kind === 'token' && asset.tokenId && !getCachedTokenMeta(asset.tokenId))
+      missing.add(asset.tokenId);
+  }
+  const missingKey = [...missing].sort().join(',');
+
+  useEffect(() => {
+    if (!missingKey) return undefined;
+    let cancelled = false;
+    void Promise.all(missingKey.split(',').map((category) => resolveTokenMeta(category))).then(
+      (metas) => {
+        if (!cancelled && metas.some(Boolean)) setVersion((v) => v + 1);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [missingKey]);
+}
+
+function withFreshAssets(records: ExplorerRecord[]): ExplorerRecord[] {
+  return records.map((record) =>
+    record.asset?.kind === 'token' && !record.asset.symbol
+      ? { ...record, asset: assetFor('CASHTOKENS', record.asset.tokenId) }
+      : record
   );
+}
 
+function AmountCell({ record, align }: { record: ExplorerRecord; align: 'end' | 'column' }) {
+  if (record.amount === null || !record.asset) {
+    return <span className="text-ink-muted">{EXPLORER_TABLE.notRecorded}</span>;
+  }
+  const every = intervalText(record);
   return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      aria-label={label || 'Copy'}
-      className="inline-flex items-center justify-center rounded-md border border-transparent p-1 text-textMuted hover:border-border hover:text-textPrimary transition-colors"
+    <span
+      className={cx(
+        'inline-flex flex-col gap-0.5',
+        align === 'end' ? 'items-end' : 'items-start md:items-end'
+      )}
     >
-      {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-accent" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
-  );
-}
-
-interface AddressTagProps {
-  address: string | null | undefined;
-  onSelect?: (address: string) => void;
-  network: 'mainnet' | 'chipnet';
-  emptyLabel?: string;
-}
-
-function AddressTag({ address, onSelect, network, emptyLabel = ' - ' }: AddressTagProps) {
-  if (!address) {
-    return <span className="font-mono text-xs text-textMuted">{emptyLabel}</span>;
-  }
-  const initial = address.replace(/[^a-z0-9]/gi, '').slice(0, 1).toUpperCase() || '?';
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primarySoft font-mono text-[10px] font-semibold text-primaryHover">
-        {initial}
+      <span className="text-ink">
+        <Amount value={record.amount} asset={record.asset} precision="list" />
       </span>
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          onSelect?.(address);
-        }}
-        className="font-mono text-xs text-textPrimary hover:text-primary"
-        title={address}
-      >
-        {formatAddress(address)}
-      </button>
-      <CopyButton value={address} label="Copy address" />
-      <a
-        href={getExplorerAddressUrl(address, network)}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(event) => event.stopPropagation()}
-        className="text-textMuted hover:text-primary"
-        title="Open on Chaingraph"
-      >
-        <ExternalLink className="h-3.5 w-3.5" />
-      </a>
+      {every ? <span className="text-small text-ink-muted">{every}</span> : null}
     </span>
   );
 }
 
-interface FilterChipProps<T extends string> {
-  value: T;
-  active: T;
-  label: string;
-  icon?: LucideIcon;
-  onSelect: (value: T) => void;
+function PartyCell({ record, side }: { record: ExplorerRecord; side: 'from' | 'to' }) {
+  const address = side === 'from' ? record.from : record.to;
+  if (side === 'from' && record.kind === 'proposal') return <span>{KIND_LABEL.vault.one}</span>;
+  if (side === 'to' && record.kind === 'airdrop') return <span>{EXPLORER_TABLE.claimList}</span>;
+  if (!address) return <span className="text-ink-muted">{EXPLORER_TABLE.nobody}</span>;
+  return <Address value={address} copy={false} />;
 }
 
-function FilterChip<T extends string>({ value, active, label, icon: Icon, onSelect }: FilterChipProps<T>) {
-  const isActive = active === value;
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(value)}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-sans font-medium transition-colors whitespace-nowrap ${
-        isActive
-          ? 'bg-primary text-white border-primary shadow-sm'
-          : 'bg-surface text-textSecondary border-border hover:border-primary/40 hover:text-textPrimary'
-      }`}
-    >
-      {Icon && <Icon className="h-3.5 w-3.5" />}
-      {label}
-    </button>
-  );
-}
-
-interface ScopeTabsProps {
-  scope: Scope;
-  onChange: (scope: Scope) => void;
-  walletAddress: string | null;
-}
-
-function ScopeTabs({ scope, onChange, walletAddress }: ScopeTabsProps) {
-  const tabs: Array<{ value: Scope; label: string; icon: LucideIcon; description: string; disabled?: boolean }> = [
+function buildColumns(now: number): Column<ExplorerRecord>[] {
+  return [
     {
-      value: 'global',
-      label: 'Global',
-      icon: Globe2,
-      description: 'All FlowGuard activity',
+      key: 'name',
+      header: EXPLORER_TABLE.name,
+      primary: true,
+      cell: (record) => (
+        <span className="flex min-w-0 flex-col gap-0.5">
+          {record.name ? (
+            <>
+              <span className="break-words">{record.name}</span>
+              <span className="text-small text-ink-muted">
+                {recordMetaPrefix(record.kind)}
+                <span className="whitespace-nowrap">{shortId(record.id)}</span>
+              </span>
+            </>
+          ) : (
+            <span>
+              {KIND_LABEL[record.kind].one}{' '}
+              <span className="whitespace-nowrap">{shortId(record.id)}</span>
+            </span>
+          )}
+        </span>
+      ),
     },
     {
-      value: 'personal',
-      label: 'Personal',
-      icon: Wallet,
-      description: walletAddress ? formatAddress(walletAddress) : 'Connect a wallet',
-      disabled: !walletAddress,
+      key: 'status',
+      header: EXPLORER_TABLE.status,
+      sortable: true,
+      mobile: 'top',
+      cell: (record) => {
+        const status = statusKeyFor(record);
+        return status ? <StatusPill status={status} size="sm" /> : null;
+      },
     },
     {
-      value: 'treasury',
-      label: 'Treasury',
-      icon: Shield,
-      description: 'Vault-scoped activity',
+      key: 'from',
+      header: EXPLORER_TABLE.from,
+      mobile: 'hidden',
+      cell: (record) => <PartyCell record={record} side="from" />,
+    },
+    {
+      key: 'to',
+      header: EXPLORER_TABLE.to,
+      mobile: 'hidden',
+      cell: (record) => <PartyCell record={record} side="to" />,
+    },
+    {
+      key: 'amount',
+      header: EXPLORER_TABLE.amount,
+      align: 'end',
+      sortable: true,
+      mobile: 'bottom-start',
+      cell: (record) => <AmountCell record={record} align="column" />,
+    },
+    {
+      key: 'time',
+      header: EXPLORER_TABLE.lastUpdate,
+      align: 'end',
+      sortable: true,
+      mobile: 'bottom-end',
+      cell: (record) => {
+        const at = toDate(record.event?.at ?? record.createdAt);
+        return (
+          <span
+            className="whitespace-nowrap"
+            title={at ? (formatDateTime(at, { withZone: true }) ?? undefined) : undefined}
+          >
+            {lastUpdateText(record, now)}
+          </span>
+        );
+      },
     },
   ];
-  return (
-    <div className="inline-flex rounded-2xl border border-border bg-surface p-1 shadow-sm">
-      {tabs.map((tab) => {
-        const Icon = tab.icon;
-        const isActive = scope === tab.value;
-        return (
-          <button
-            key={tab.value}
-            type="button"
-            onClick={() => !tab.disabled && onChange(tab.value)}
-            disabled={tab.disabled}
-            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-              isActive
-                ? 'bg-primary text-white shadow-sm'
-                : tab.disabled
-                ? 'cursor-not-allowed text-textMuted/60'
-                : 'text-textSecondary hover:bg-surfaceAlt hover:text-textPrimary'
-            }`}
-            title={tab.disabled ? 'Connect a wallet to view personal activity' : tab.description}
-          >
-            <Icon className="h-4 w-4" />
-            <span>{tab.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
-interface InlineStatusBannerProps {
-  variant: 'error' | 'info' | 'warning';
-  title: string;
-  description?: string;
-  onRetry?: () => void;
-  onDismiss?: () => void;
+function txAction(record: ExplorerRecord) {
+  return record.txHash ? (
+    <span className="whitespace-nowrap">
+      <TxLink txid={record.txHash} network={BUILD_NETWORK} />
+    </span>
+  ) : null;
 }
 
-function InlineStatusBanner({ variant, title, description, onRetry, onDismiss }: InlineStatusBannerProps) {
-  const tones: Record<InlineStatusBannerProps['variant'], { bg: string; border: string; text: string; icon: LucideIcon }> = {
-    error: { bg: 'bg-error/10', border: 'border-error/30', text: 'text-error', icon: TriangleAlert },
-    info: { bg: 'bg-primary/5', border: 'border-primary/20', text: 'text-primary', icon: Activity },
-    warning: { bg: 'bg-secondary/15', border: 'border-secondary', text: 'text-textPrimary', icon: TriangleAlert },
-  };
-  const tone = tones[variant];
-  const Icon = tone.icon;
-  return (
-    <div className={`flex items-start justify-between gap-3 rounded-2xl border p-4 ${tone.bg} ${tone.border}`}>
-      <div className="flex items-start gap-3">
-        <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${tone.text}`} />
-        <div>
-          <p className={`font-sans text-sm font-semibold ${tone.text}`}>{title}</p>
-          {description && <p className="mt-1 font-sans text-xs text-textMuted">{description}</p>}
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {onRetry && (
-          <Button variant="outline" size="sm" onClick={onRetry}>
-            <RefreshCw className="mr-2 h-3.5 w-3.5" />
-            Retry
-          </Button>
-        )}
-        {onDismiss && (
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="rounded-md p-1 text-textMuted hover:text-textPrimary"
-            aria-label="Dismiss"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RowSkeleton({ count = 6 }: { count?: number }) {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: count }).map((_, idx) => (
-        <div
-          key={idx}
-          className="h-14 animate-pulse rounded-xl border border-border/40 bg-surfaceAlt"
-        />
-      ))}
-    </div>
-  );
-}
-
-function StatSkeleton() {
-  return (
-    <div className="h-28 animate-pulse rounded-lg border border-border/40 bg-surfaceAlt" />
-  );
-}
-
-type ColumnKey = 'type' | 'entity' | 'parties' | 'amount' | 'status' | 'event' | 'time';
-
-interface ColumnCtx {
-  network: 'mainnet' | 'chipnet';
+function RecordDetails({
+  record,
+  now,
+  onSelectAddress,
+}: {
+  record: ExplorerRecord;
+  now: number;
   onSelectAddress: (address: string) => void;
-}
-
-interface ExplorerColumn {
-  key: ColumnKey;
-  label: string;
-  align: 'left' | 'right' | 'center';
-  sortField?: ExplorerSortField;
-  cell: (tx: ExplorerTransactionRow, ctx: ColumnCtx) => ReactNode;
-}
-
-const EXPLORER_COLUMNS: ExplorerColumn[] = [
-  {
-    key: 'type',
-    label: 'Type',
-    align: 'left',
-    sortField: 'type',
-    cell: (tx) => {
-      const meta = TYPE_META[tx.tx_type];
-      const Icon = meta?.icon || Hash;
-      const detailPath = meta ? meta.detailPath(tx) : '#';
-      return (
-        <CrossLink
-          to={detailPath}
-          className="inline-flex items-center gap-2 rounded-full border border-border bg-surfaceAlt px-2.5 py-1 text-xs font-medium text-textPrimary hover:border-primary/40 hover:bg-primarySoft"
-        >
-          <Icon className="h-3.5 w-3.5 text-primary" />
-          {meta?.label || tx.tx_type}
-        </CrossLink>
-      );
-    },
-  },
-  {
-    key: 'entity',
-    label: 'Entity',
-    align: 'left',
-    cell: (tx) => {
-      const meta = TYPE_META[tx.tx_type];
-      const detailPath = meta ? meta.detailPath(tx) : '#';
-      return (
-        <div className="flex flex-col">
-          <CrossLink to={detailPath} className="font-sans text-sm font-medium text-textPrimary hover:text-primary">
-            {tx.name || formatLogicalId(tx.id)}
-          </CrossLink>
-          <span className="font-mono text-[11px] text-textMuted">{formatLogicalId(tx.id)}</span>
-        </div>
-      );
-    },
-  },
-  {
-    key: 'parties',
-    label: 'Parties',
-    align: 'left',
-    cell: (tx, { network, onSelectAddress }) => (
-      <div className="flex items-center gap-2">
-        <AddressTag address={tx.sender} onSelect={onSelectAddress} network={network} />
-        {tx.recipient && (
-          <>
-            <ChevronRight className="h-3.5 w-3.5 text-textMuted" />
-            <AddressTag address={tx.recipient} onSelect={onSelectAddress} network={network} />
-          </>
-        )}
-      </div>
-    ),
-  },
-  {
-    key: 'amount',
-    label: 'Amount',
-    align: 'right',
-    sortField: 'amount',
-    cell: (tx) => (
-      <div className="flex flex-col items-end">
-        <span className="font-display text-sm font-semibold text-textPrimary">
-          {formatTokenAmount(tx.amount, tx.token_type ?? null, tx.token_category ?? null, { noSuffix: true })}
-        </span>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-textMuted">
-          {tokenSymbol(tx.token_type ?? null, tx.token_category ?? null)}
-        </span>
-      </div>
-    ),
-  },
-  {
-    key: 'status',
-    label: 'Status',
-    align: 'center',
-    sortField: 'status',
-    cell: (tx) => (
-      <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${getStatusClasses(tx.status)}`}>
-        {tx.status}
+}) {
+  const status = statusKeyFor(record);
+  const target = appTarget(record);
+  const created = formatDateTime(record.createdAt, { withZone: true });
+  const every = intervalText(record);
+  const addressValue = (address: string | null) =>
+    address ? (
+      <span className="inline-flex flex-col items-start gap-1 sm:items-end">
+        <Address value={address} />
+        <Button variant="link" onClick={() => onSelectAddress(address)}>
+          {RECORD_DRAWER.seeAddress}
+        </Button>
       </span>
-    ),
-  },
-  {
-    key: 'event',
-    label: 'Latest event',
-    align: 'left',
-    cell: (tx) => {
-      const eventMs = tx.latest_event ? toUnixMs(tx.latest_event.created_at) : NaN;
-      return tx.latest_event ? (
-        <div className="flex flex-col">
-          <span className="text-xs text-textPrimary">{formatEventLabel(tx.latest_event.event_type)}</span>
-          <span className="font-mono text-[11px] text-textMuted">{formatRelativeTime(eventMs)}</span>
-        </div>
-      ) : (
-        <span className="text-xs text-textMuted"> - </span>
-      );
+    ) : null;
+
+  const items = [
+    { label: RECORD_DRAWER.type, value: KIND_LABEL[record.kind].one },
+    {
+      label: RECORD_DRAWER.id,
+      value: (
+        <span className="inline-flex items-center gap-1">
+          <Code>{shortId(record.id)}</Code>
+          <CopyButton value={record.id} label={RECORD_DRAWER.copyId} />
+        </span>
+      ),
     },
-  },
-  {
-    key: 'time',
-    label: 'Time / Tx',
-    align: 'right',
-    sortField: 'time',
-    cell: (tx, { network }) => {
-      const txHash = tx.latest_event?.tx_hash || tx.tx_hash || null;
-      const createdMs = toUnixMs(tx.created_at);
-      const eventMs = tx.latest_event ? toUnixMs(tx.latest_event.created_at) : NaN;
-      // The tx shown is the latest on-chain event, so pair it with that event's
-      // time, not the row's DB creation (which can be many minutes earlier).
-      const txTimeMs = Number.isNaN(eventMs) ? createdMs : eventMs;
-      return (
-        <div className="flex flex-col items-end">
-          <span className="text-xs text-textPrimary" title={new Date(txTimeMs).toLocaleString()}>
-            {formatRelativeTime(txTimeMs)}
-          </span>
-          {txHash && (
-            <a
-              href={getExplorerTxUrl(txHash, network)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-0.5 inline-flex items-center gap-1 font-mono text-[11px] text-textMuted hover:text-primary"
-              title="View raw tx on Chaingraph"
-            >
-              {formatAddress(txHash, 6, 4)}
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          )}
-        </div>
-      );
+    ...(record.kind === 'proposal'
+      ? []
+      : [{ label: RECORD_DRAWER.from, value: addressValue(record.from) }]),
+    ...(record.kind === 'vault' || record.kind === 'airdrop'
+      ? []
+      : [{ label: RECORD_DRAWER.to, value: addressValue(record.to) }]),
+    {
+      label: record.kind === 'vault' ? RECORD_DRAWER.deposited : RECORD_DRAWER.amount,
+      value:
+        record.amount !== null && record.asset ? (
+          <Amount value={record.amount} asset={record.asset} />
+        ) : (
+          EXPLORER_TABLE.notRecorded
+        ),
     },
-  },
-];
-
-const DEFAULT_COLUMN_VISIBILITY: Record<ColumnKey, boolean> = {
-  type: true, entity: true, parties: true, amount: true, status: true, event: true, time: true,
-};
-
-function alignClass(align: 'left' | 'right' | 'center'): string {
-  return align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
-}
-
-interface TransactionCellProps {
-  tx: ExplorerTransactionRow;
-  network: 'mainnet' | 'chipnet';
-  onSelectAddress: (address: string) => void;
-}
-
-interface TransactionRowProps extends TransactionCellProps {
-  visibleColumns: Record<ColumnKey, boolean>;
-}
-
-function TransactionRow({ tx, network, onSelectAddress, visibleColumns }: TransactionRowProps) {
-  return (
-    <tr className="group border-b border-border/60 transition-colors hover:bg-surfaceAlt/60">
-      {EXPLORER_COLUMNS.filter((column) => visibleColumns[column.key]).map((column) => (
-        <td key={column.key} className={`px-4 py-3 ${alignClass(column.align)}`}>
-          {column.cell(tx, { network, onSelectAddress })}
-        </td>
-      ))}
-    </tr>
-  );
-}
-
-function TransactionCard({ tx, network, onSelectAddress }: TransactionCellProps) {
-  const meta = TYPE_META[tx.tx_type];
-  const Icon = meta?.icon || Hash;
-  const detailPath = meta ? meta.detailPath(tx) : `#`;
-  const txHash = tx.latest_event?.tx_hash || tx.tx_hash || null;
-  const createdMs = toUnixMs(tx.created_at);
-  const eventMs = tx.latest_event ? toUnixMs(tx.latest_event.created_at) : NaN;
-  const txTimeMs = Number.isNaN(eventMs) ? createdMs : eventMs;
+    ...(every ? [{ label: RECORD_DRAWER.howOften, value: every }] : []),
+    { label: RECORD_DRAWER.created, value: created ?? EXPLORER_TABLE.timeNotRecorded },
+    { label: RECORD_DRAWER.lastUpdate, value: lastUpdateText(record, now) },
+    ...(record.contractAddress
+      ? [{ label: RECORD_DRAWER.contract, value: <Address value={record.contractAddress} /> }]
+      : []),
+    ...(record.vaultId
+      ? [{ label: RECORD_DRAWER.vault, value: <Code>{shortId(record.vaultId)}</Code> }]
+      : []),
+    ...(record.txHash
+      ? [
+          {
+            label: RECORD_DRAWER.transaction,
+            value: <TxLink txid={record.txHash} network={BUILD_NETWORK} />,
+          },
+        ]
+      : []),
+  ];
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <CrossLink to={detailPath} className="inline-flex items-center gap-2 rounded-full bg-primarySoft px-2.5 py-1 text-xs font-medium text-primaryHover">
-          <Icon className="h-3.5 w-3.5" />
-          {meta?.label || tx.tx_type}
-        </CrossLink>
-        <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${getStatusClasses(tx.status)}`}>
-          {tx.status}
-        </span>
+    <div className="flex flex-col gap-6 px-4 pb-6 sm:px-6">
+      <div className="flex flex-col gap-2">
+        <Heading level="section" as="h2">
+          {displayName(record)}
+        </Heading>
+        {status ? (
+          <div>
+            <StatusPill status={status} />
+          </div>
+        ) : null}
+        <p className="text-small text-ink-secondary">{RECORD_DRAWER.readOnly}</p>
       </div>
-      <CrossLink to={detailPath} className="mt-3 block">
-        <p className="font-sans text-sm font-semibold text-textPrimary">{tx.name || formatLogicalId(tx.id)}</p>
-        <p className="font-mono text-[11px] text-textMuted">{formatLogicalId(tx.id)}</p>
-      </CrossLink>
-      <div className="mt-3 flex items-baseline justify-between">
-        <span className="font-display text-lg font-semibold text-textPrimary">
-          {formatTokenAmount(tx.amount, tx.token_type ?? null, tx.token_category ?? null, { noSuffix: true })}
-        </span>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-textMuted">
-          {tokenSymbol(tx.token_type ?? null, tx.token_category ?? null)}
-        </span>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-        <AddressTag address={tx.sender} onSelect={onSelectAddress} network={network} />
-        {tx.recipient && (
-          <>
-            <ChevronRight className="h-3.5 w-3.5 text-textMuted" />
-            <AddressTag address={tx.recipient} onSelect={onSelectAddress} network={network} />
-          </>
-        )}
-      </div>
-      <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3 text-xs text-textMuted">
-        <span title={new Date(txTimeMs).toLocaleString()}>{formatRelativeTime(txTimeMs)}</span>
-        {txHash && (
-          <a
-            href={getExplorerTxUrl(txHash, network)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-mono text-textMuted hover:text-primary"
-          >
-            {formatAddress(txHash, 6, 4)}
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        )}
+      <DetailList items={items} />
+      <div className="flex flex-col items-start gap-2">
+        <AppLink path={target.path} label={target.label} />
+        <p className="text-small text-ink-secondary">{RECORD_DRAWER.openInAppLine}</p>
       </div>
     </div>
   );
 }
 
-interface AddressPanelProps {
+function AppLink({
+  path,
+  label,
+  variant = 'primary',
+  hiddenSuffix,
+}: {
+  path: string;
+  label: string;
+  variant?: 'primary' | 'link';
+  hiddenSuffix?: string;
+}) {
+  const content = (
+    <>
+      {label}
+      {hiddenSuffix ? <span className="sr-only">{hiddenSuffix}</span> : null}
+    </>
+  );
+  if (isExplorerHost()) {
+    return (
+      <ButtonLink variant={variant} href={appHref(path)} external>
+        {content}
+      </ButtonLink>
+    );
+  }
+  return (
+    <ButtonLink variant={variant} to={path}>
+      {content}
+    </ButtonLink>
+  );
+}
+
+function AddressDetails({
+  address,
+  load,
+  onRetry,
+  now,
+}: {
   address: string;
-  data: ExplorerAddressResponse | null;
-  loading: boolean;
-  error: string | null;
-  onClose: () => void;
+  load: Load<ExplorerAddressResponse>;
   onRetry: () => void;
-  network: 'mainnet' | 'chipnet';
-}
-
-function AddressPanel({ address, data, loading, error, onClose, onRetry, network }: AddressPanelProps) {
+  now: number;
+}) {
   return (
-    <Card className="sticky top-4 p-5">
-      <div className="flex items-start justify-between gap-3 border-b border-border/60 pb-4">
-        <div className="min-w-0">
-          <p className="font-mono text-[11px] uppercase tracking-wider text-textMuted">Address</p>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="font-mono text-sm text-textPrimary" title={address}>
-              {formatAddress(address, 12, 8)}
-            </span>
-            <CopyButton value={address} label="Copy address" />
-            <a
-              href={getExplorerAddressUrl(address, network)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-textMuted hover:text-primary"
-              title="Open on Chaingraph"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md p-1 text-textMuted hover:bg-surfaceAlt hover:text-textPrimary"
-          aria-label="Close address panel"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      {error && (
-        <div className="mt-4">
-          <InlineStatusBanner
-            variant="error"
-            title="Couldn't load address"
-            description={error}
-            onRetry={onRetry}
-          />
-        </div>
-      )}
-
-      {loading && (
-        <div className="mt-4 space-y-3">
-          <div className="h-16 animate-pulse rounded-lg border border-border/40 bg-surfaceAlt" />
-          <div className="h-16 animate-pulse rounded-lg border border-border/40 bg-surfaceAlt" />
-        </div>
-      )}
-
-      {data && !loading && (
-        <div className="mt-4 space-y-5">
-          <div className="rounded-xl border border-border bg-surfaceAlt p-4">
-            <p className="font-mono text-[11px] uppercase tracking-wider text-textMuted">Balance</p>
-            <p className="font-display text-2xl text-textPrimary">{formatBch(data.balance)} BCH</p>
-            <p className="font-mono text-[11px] text-textMuted">{data.balanceSat.toLocaleString()} sats</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-lg border border-border bg-surface p-3">
-              <p className="font-mono text-[10px] uppercase tracking-wider text-textMuted">Vaults created</p>
-              <p className="font-display text-lg text-textPrimary">{data.activity.vaultsCreated}</p>
-            </div>
-            <div className="rounded-lg border border-border bg-surface p-3">
-              <p className="font-mono text-[10px] uppercase tracking-wider text-textMuted">As signer</p>
-              <p className="font-display text-lg text-textPrimary">{data.activity.vaultsAsSigner}</p>
-            </div>
-            <div className="rounded-lg border border-border bg-surface p-3">
-              <p className="font-mono text-[10px] uppercase tracking-wider text-textMuted">Streams sent</p>
-              <p className="font-display text-lg text-textPrimary">{data.activity.streamsSent}</p>
-            </div>
-            <div className="rounded-lg border border-border bg-surface p-3">
-              <p className="font-mono text-[10px] uppercase tracking-wider text-textMuted">Streams received</p>
-              <p className="font-display text-lg text-textPrimary">{data.activity.streamsReceived}</p>
-            </div>
-          </div>
-
-          {data.vaults.length > 0 && (
-            <div>
-              <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-textMuted">Vaults</p>
-              <ul className="space-y-1.5">
-                {data.vaults.slice(0, 5).map((vault) => (
-                  <li key={vault.vault_id}>
-                    <Link
-                      to={`/vaults/${vault.vault_id}`}
-                      className="flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2 text-xs hover:border-primary/40"
-                    >
-                      <span className="truncate font-sans text-textPrimary">{vault.name}</span>
-                      <span className="font-mono text-[10px] text-textMuted">{formatBch(vault.total_deposit)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {data.streams.sent.length + data.streams.received.length > 0 && (
-            <div>
-              <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-textMuted">Recent streams</p>
-              <ul className="space-y-1.5">
-                {[...data.streams.sent.slice(0, 3), ...data.streams.received.slice(0, 3)].map((stream) => (
-                  <li key={stream.stream_id}>
-                    <Link
-                      to={`/streams/${stream.stream_id}`}
-                      className="flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2 text-xs hover:border-primary/40"
-                    >
-                      <span className="truncate font-mono text-textPrimary">{formatLogicalId(stream.stream_id)}</span>
-                      <span className="font-mono text-[10px] text-textMuted">{formatBch(stream.total_amount)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-interface SearchResultsPanelProps {
-  results: ExplorerSearchResponse;
-  network: 'mainnet' | 'chipnet';
-  onSelectAddress: (address: string) => void;
-  onClose: () => void;
-}
-
-function SearchResultsPanel({ results, network, onSelectAddress, onClose }: SearchResultsPanelProps) {
-  const empty = results.totalResults === 0;
-  return (
-    <Card className="mb-6 p-5">
-      <div className="flex items-start justify-between gap-3 border-b border-border/60 pb-3">
+    <div className="flex flex-col gap-6 px-4 pb-6 sm:px-6">
+      <div className="flex flex-col gap-2">
+        <Heading level="section" as="h2">
+          {ADDRESS_DRAWER.title}
+        </Heading>
+        <Address value={address} variant="full" />
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-wider text-textMuted">Search results</p>
-          <h2 className="font-display text-xl text-textPrimary">
-            "{results.query}" <span className="text-textMuted"> -  {results.totalResults}</span>
-          </h2>
+          <ButtonLink
+            variant="link"
+            href={getExplorerAddressUrl(address, BUILD_NETWORK)}
+            external
+            className="inline-flex items-center gap-1"
+          >
+            {viewOnExplorer(BUILD_NETWORK)}
+          </ButtonLink>
         </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-textMuted hover:bg-surfaceAlt hover:text-textPrimary" aria-label="Close search">
-          <X className="h-4 w-4" />
-        </button>
       </div>
-
-      {empty && (
-        <div className="py-8 text-center">
-          <Inbox className="mx-auto mb-3 h-10 w-10 text-textMuted" />
-          <p className="font-sans text-sm text-textMuted">Nothing matches "{results.query}".</p>
-          <p className="mt-1 font-sans text-xs text-textMuted">Try a vault name, stream id, address, or recipient.</p>
+      {load.state === 'loading' ? (
+        <div aria-busy="true">
+          <Skeleton kind="text" lines={5} />
         </div>
+      ) : load.state === 'error' ? (
+        <ErrorState
+          title={EXPLORER_ERRORS.addressTitle}
+          reason={EXPLORER_ERRORS.reason[load.problem]}
+          onRetry={onRetry}
+        />
+      ) : (
+        <AddressSummary data={load.data} now={now} />
       )}
-
-      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-        {results.results.addresses.length > 0 && (
-          <section>
-            <h3 className="mb-2 flex items-center gap-2 font-sans text-sm font-semibold text-textPrimary">
-              <Wallet className="h-4 w-4 text-primary" />
-              Address
-            </h3>
-            <ul className="space-y-2">
-              {results.results.addresses.map((row) => (
-                <li key={row.address}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectAddress(row.address)}
-                    className="flex w-full items-center justify-between rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-left text-xs hover:border-primary/40"
-                  >
-                    <span className="font-mono text-textPrimary">{formatAddress(row.address, 12, 8)}</span>
-                    <ChevronRight className="h-3.5 w-3.5 text-textMuted" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {results.results.vaults.length > 0 && (
-          <section>
-            <h3 className="mb-2 flex items-center gap-2 font-sans text-sm font-semibold text-textPrimary">
-              <Shield className="h-4 w-4 text-primary" />
-              Vaults · {results.results.vaults.length}
-            </h3>
-            <ul className="space-y-2">
-              {results.results.vaults.map((vault) => (
-                <li key={vault.vault_id}>
-                  <CrossLink to={`/vaults/${vault.vault_id}`} className="flex items-center justify-between rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
-                    <div className="min-w-0">
-                      <p className="truncate font-sans font-medium text-textPrimary">{vault.name}</p>
-                      <p className="font-mono text-[11px] text-textMuted">{formatLogicalId(vault.vault_id)}</p>
-                    </div>
-                    <span className="font-mono text-[11px] text-primary">{formatBch(vault.total_deposit)}</span>
-                  </CrossLink>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {results.results.streams.length > 0 && (
-          <section>
-            <h3 className="mb-2 flex items-center gap-2 font-sans text-sm font-semibold text-textPrimary">
-              <Waves className="h-4 w-4 text-primary" />
-              Streams · {results.results.streams.length}
-            </h3>
-            <ul className="space-y-2">
-              {results.results.streams.map((stream) => (
-                <li key={stream.stream_id}>
-                  <CrossLink to={`/streams/${stream.stream_id}`} className="block rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
-                    <div className="flex items-center justify-between">
-                      <p className="font-mono text-textPrimary">{formatLogicalId(stream.stream_id)}</p>
-                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${getStatusClasses(stream.status)}`}>
-                        {stream.status}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-1 font-mono text-[11px] text-textMuted">
-                      <span>{formatAddress(stream.sender)}</span>
-                      <ChevronRight className="h-3 w-3" />
-                      <span>{formatAddress(stream.recipient)}</span>
-                    </div>
-                  </CrossLink>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {results.results.proposals.length > 0 && (
-          <section>
-            <h3 className="mb-2 flex items-center gap-2 font-sans text-sm font-semibold text-textPrimary">
-              <FileText className="h-4 w-4 text-primary" />
-              Proposals · {results.results.proposals.length}
-            </h3>
-            <ul className="space-y-2">
-              {results.results.proposals.map((proposal) => (
-                <li key={proposal.id}>
-                  <Link to={`/proposals/${proposal.id}`} className="block rounded-lg border border-border bg-surfaceAlt px-3 py-2 text-xs hover:border-primary/40">
-                    <div className="flex items-center justify-between">
-                      <p className="truncate font-sans text-textPrimary">{proposal.reason || formatLogicalId(proposal.id)}</p>
-                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${getStatusClasses(proposal.status)}`}>
-                        {proposal.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 font-mono text-[11px] text-textMuted">
-                      {formatAddress(proposal.recipient)} · {formatBch(proposal.amount)}
-                    </p>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </div>
-
-      <div className="mt-4 border-t border-border/60 pt-3 text-xs text-textMuted">
-        <button type="button" onClick={onClose} className="text-primary hover:text-primaryHover">
-          Clear search and return to feed
-        </button>
-      </div>
-    </Card>
-  );
-}
-
-interface UnifiedSearchBarProps {
-  initial: string;
-  onSearch: (query: string) => void;
-  onClear: () => void;
-}
-
-function UnifiedSearchBar({ initial, onSearch, onClear }: UnifiedSearchBarProps) {
-  const [value, setValue] = useState(initial);
-  useEffect(() => {
-    setValue(initial);
-  }, [initial]);
-
-  const detectedKind = useMemo(() => detectQueryKind(value), [value]);
-
-  const handleSubmit = useCallback(
-    (event: React.FormEvent) => {
-      event.preventDefault();
-      const trimmed = value.trim();
-      if (!trimmed) return;
-      onSearch(trimmed);
-    },
-    [value, onSearch],
-  );
-
-  const hintMap: Record<typeof detectedKind, string> = {
-    address: 'Looks like an address - will open the address panel',
-    tx: 'Looks like a 32-byte hash - searched as a transaction',
-    category: 'Looks like a token category - searched as cashtokens',
-    text: 'Free text - searched across vaults, streams, proposals',
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-2">
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-textMuted" />
-          <Input
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            placeholder="Search txid, address, contract, vault, stream, or token category…"
-            className="pl-12 pr-10 py-3 text-base"
-          />
-          {value && (
-            <button
-              type="button"
-              onClick={() => {
-                setValue('');
-                onClear();
-              }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-textMuted hover:bg-surfaceAlt hover:text-textPrimary"
-              aria-label="Clear search"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        <Button type="submit" size="lg" className="px-5">
-          <Search className="h-4 w-4 md:mr-2" />
-          <span className="hidden md:inline">Search</span>
-        </Button>
-      </div>
-      {value.trim() && (
-        <p className="font-mono text-[11px] text-textMuted">{hintMap[detectedKind]}</p>
-      )}
-    </form>
-  );
-}
-
-interface PaginationBarProps {
-  page: number;
-  total: number;
-  pageSize: number;
-  onPageChange: (page: number) => void;
-}
-
-function PaginationBar({ page, total, pageSize, onPageChange }: PaginationBarProps) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
-  const end = Math.min(total, page * pageSize);
-  return (
-    <div className="flex flex-col items-start justify-between gap-3 rounded-2xl border border-border bg-surfaceAlt px-4 py-3 sm:flex-row sm:items-center">
-      <p className="font-mono text-xs text-textMuted">
-        {total === 0 ? 'No results' : `Showing ${start}–${end} of ${total.toLocaleString()}`}
-      </p>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPageChange(Math.max(1, page - 1))}
-          disabled={page <= 1}
-        >
-          <ChevronLeft className="h-4 w-4" />
-          Prev
-        </Button>
-        <span className="rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-xs text-textPrimary">
-          {page} / {totalPages}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-          disabled={page >= totalPages}
-        >
-          Next
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
     </div>
   );
 }
 
-interface NetworkBadgeProps {
-  network: 'mainnet' | 'chipnet';
-  blockHeight?: number;
-  loading: boolean;
-  onRefresh: () => void;
+function countText(count: number | null): string {
+  return count === null ? ADDRESS_DRAWER.countMissing : String(count);
 }
 
-function NetworkBadge({ network, blockHeight, loading, onRefresh }: NetworkBadgeProps) {
+function PartMissing() {
+  return <p className="text-small text-ink-secondary">{ADDRESS_DRAWER.partMissing}</p>;
+}
+
+function AddressSummary({ data, now }: { data: ExplorerAddressResponse; now: number }) {
+  const { sent, received } = data.streams;
+  const streams =
+    sent === null && received === null
+      ? null
+      : [
+          ...(sent ?? []).map((stream) => ({ stream, direction: ADDRESS_DRAWER.sent })),
+          ...(received ?? []).map((stream) => ({ stream, direction: ADDRESS_DRAWER.received })),
+        ];
+  const streamsPartial = streams !== null && (sent === null || received === null);
+  const vaults = data.vaults?.filter((vault) => !isHiddenTestRecord(vault.name)) ?? null;
+
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-xs">
-      <span className={`h-2 w-2 rounded-full ${network === 'mainnet' ? 'bg-accent' : 'bg-secondary'} ${loading ? 'animate-pulse' : ''}`} />
-      <span className="font-mono font-semibold uppercase tracking-wider text-textPrimary">{network}</span>
-      {typeof blockHeight === 'number' && (
-        <span className="font-mono text-textMuted">#{blockHeight.toLocaleString()}</span>
-      )}
-      <button
-        type="button"
-        onClick={onRefresh}
-        className="ml-1 rounded-md p-1 text-textMuted hover:bg-surfaceAlt hover:text-textPrimary"
-        aria-label="Refresh"
-      >
-        <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
-      </button>
+    <>
+      <DetailList
+        items={[
+          {
+            label: ADDRESS_DRAWER.balance,
+            value:
+              data.balance === null ? (
+                LABELS.balanceUnavailable
+              ) : (
+                <Amount value={data.balance} asset={{ kind: 'bch' }} />
+              ),
+          },
+          { label: ADDRESS_DRAWER.vaultsCreated, value: countText(data.activity.vaultsCreated) },
+          { label: ADDRESS_DRAWER.streamsSent, value: countText(data.activity.streamsSent) },
+          {
+            label: ADDRESS_DRAWER.streamsReceived,
+            value: countText(data.activity.streamsReceived),
+          },
+          {
+            label: ADDRESS_DRAWER.requestsPaying,
+            value: countText(data.activity.proposalsReceived),
+          },
+        ]}
+      />
+      <section className="flex flex-col gap-3" aria-label={ADDRESS_DRAWER.streams}>
+        <Heading level="item" as="h3">
+          {ADDRESS_DRAWER.streams}
+        </Heading>
+        {streams === null ? (
+          <PartMissing />
+        ) : streams.length === 0 && !streamsPartial ? (
+          <p className="text-small text-ink-secondary">{ADDRESS_DRAWER.noStreams}</p>
+        ) : (
+          <ul className="flex flex-col">
+            {streams.map(({ stream, direction }) => {
+              const record = fromStream(stream);
+              const status = statusKeyFor(record);
+              return (
+                <li
+                  key={`${direction}:${stream.stream_id}`}
+                  className="flex items-start justify-between gap-3 border-t border-line py-3 first:border-t-0"
+                >
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-label text-ink">{displayName(record)}</span>
+                    <span className="text-small text-ink-muted">
+                      {eventAt(
+                        direction,
+                        relativeSince(record.createdAt, now) ?? EXPLORER_TABLE.timeNotRecorded
+                      )}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 flex-col items-end gap-1 text-small">
+                    <AmountCell record={record} align="end" />
+                    {status ? <StatusPill status={status} size="sm" /> : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {streamsPartial ? <PartMissing /> : null}
+      </section>
+      <section className="flex flex-col gap-3" aria-label={ADDRESS_DRAWER.vaults}>
+        <Heading level="item" as="h3">
+          {ADDRESS_DRAWER.vaults}
+        </Heading>
+        {vaults === null ? (
+          <PartMissing />
+        ) : vaults.length === 0 ? (
+          <p className="text-small text-ink-secondary">{ADDRESS_DRAWER.noVaults}</p>
+        ) : (
+          <ul className="flex flex-col">
+            {vaults.map((vault) => {
+              const record = fromVault(vault);
+              return (
+                <li
+                  key={vault.vault_id}
+                  className="flex items-start justify-between gap-3 border-t border-line py-3 first:border-t-0"
+                >
+                  <span className="text-label text-ink">{displayName(record)}</span>
+                  <span className="shrink-0 text-small">
+                    <AmountCell record={record} align="end" />
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+function ExplorerShell({ embedded, children }: { embedded: boolean; children: React.ReactNode }) {
+  if (embedded) return <PageContainer>{children}</PageContainer>;
+  return (
+    <div className="flex min-h-screen flex-col bg-canvas">
+      {IS_TEST_BUILD ? <SiteBanner kind="test-network" /> : null}
+      <MarketingNav />
+      <main className="flex-1">
+        <PageContainer>{children}</PageContainer>
+      </main>
+      <MarketingFooter />
     </div>
   );
 }
 
 export default function ExplorerPage({ embedded = false }: { embedded?: boolean } = {}) {
   const wallet = useWallet();
-  const navigate = useNavigate();
+  const openWalletModal = useWalletModal((state) => state.openModal);
   const [searchParams, setSearchParams] = useSearchParams();
-  const network: 'mainnet' | 'chipnet' = import.meta.env.VITE_BCH_NETWORK === 'mainnet' ? 'mainnet' : 'chipnet';
-  const onExplorerHost = isExplorerHost();
+  const now = useNow();
+  const docked = useSyncExternalStore(subscribeDocked, readDocked, () => true);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  /* -------------------------- URL-driven state ----------------------- */
-
-  const scope = (searchParams.get('scope') as Scope) || 'global';
-  const entityType = (searchParams.get('type') as EntityTypeFilter) || 'all';
-  const statusFilter = (searchParams.get('status') as StatusFilter) || 'all';
-  const page = Math.max(1, Number(searchParams.get('page')) || 1);
-  const queryParam = searchParams.get('q') || '';
+  const scope = readScope(searchParams.get('scope'));
+  const kind = readKind(searchParams.get('type'));
+  const status = readStatus(kind, searchParams.get('status'));
+  const page = Math.max(1, Math.trunc(Number(searchParams.get('page'))) || 1);
+  const query = searchParams.get('q')?.trim() ?? '';
   const activeAddress = searchParams.get('address');
-  const pageSizeParam = Number(searchParams.get('pageSize'));
-  const pageSize = PAGE_SIZE_OPTIONS.includes(pageSizeParam) ? pageSizeParam : DEFAULT_PAGE_SIZE;
-  const sort = (searchParams.get('sort') as ExplorerSortField) || 'time';
-  const order = (searchParams.get('order') as ExplorerSortOrder) || 'desc';
+  const sort = readSort(searchParams.get('sort'));
+  const order = readOrder(searchParams.get('order'));
+  const walletAddress = wallet.address ?? null;
+  const needsWallet = scope === 'you' && !walletAddress;
+  const filtersSet = kind !== 'all' || status !== '';
 
   const updateParams = useCallback(
-    (mutate: (current: URLSearchParams) => void) => {
+    (mutate: (next: URLSearchParams) => void) => {
       const next = new URLSearchParams(searchParams);
       mutate(next);
-      setSearchParams(next, { replace: false });
+      setSearchParams(next);
     },
-    [searchParams, setSearchParams],
+    [searchParams, setSearchParams]
   );
 
-  /* --------------------- Column visibility (localStorage) ------------ */
+  const [reloadKey, setReloadKey] = useState(0);
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
 
-  const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>(() => {
-    try {
-      const raw = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
-      if (raw) return { ...DEFAULT_COLUMN_VISIBILITY, ...JSON.parse(raw) };
-    } catch {
-      /* localStorage unavailable — fall back to defaults */
-    }
-    return DEFAULT_COLUMN_VISIBILITY;
-  });
-  const [columnMenuOpen, setColumnMenuOpen] = useState(false);
-  const columnMenuRef = useRef<HTMLDivElement | null>(null);
-
-  const toggleColumn = useCallback((key: ColumnKey) => {
-    setVisibleColumns((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      if (!Object.values(next).some(Boolean)) return prev; // keep at least one column
-      try {
-        localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        /* persistence is best-effort */
-      }
-      return next;
-    });
-  }, []);
-
+  const [stats, setStats] = useState<Load<ExplorerStatsResponse>>({ state: 'loading' });
   useEffect(() => {
-    if (!columnMenuOpen) return;
-    const onClick = (event: MouseEvent) => {
-      if (columnMenuRef.current && !columnMenuRef.current.contains(event.target as Node)) {
-        setColumnMenuOpen(false);
+    let cancelled = false;
+    getExplorerStats().then(
+      (data) => {
+        if (!cancelled) setStats({ state: 'ready', data });
+      },
+      (error: unknown) => {
+        console.error('[Explorer] totals', error);
+        if (!cancelled) setStats({ state: 'error', problem: explorerLoadProblem(error) });
       }
+    );
+    return () => {
+      cancelled = true;
     };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [columnMenuOpen]);
+  }, [reloadKey]);
 
-  const handleSort = useCallback((field: ExplorerSortField) => {
-    updateParams((next) => {
-      const currentSort = next.get('sort') || 'time';
-      const currentOrder = next.get('order') || 'desc';
-      if (currentSort === field) {
-        next.set('order', currentOrder === 'asc' ? 'desc' : 'asc');
-      } else {
-        next.set('sort', field);
-        next.set('order', 'desc');
-      }
-      next.delete('page');
-    });
-  }, [updateParams]);
-
-  const handlePageSizeChange = useCallback((size: number) => {
-    updateParams((next) => {
-      if (size === DEFAULT_PAGE_SIZE) next.delete('pageSize');
-      else next.set('pageSize', String(size));
-      next.delete('page');
-    });
-  }, [updateParams]);
-
-  /* ------------------------------- Stats ----------------------------- */
-
-  const [stats, setStats] = useState<ExplorerStatsResponse | null>(null);
-  const [statsLoading, setStatsLoading] = useState(true);
-  const [statsError, setStatsError] = useState<string | null>(null);
-
-  const loadStats = useCallback(async () => {
-    try {
-      setStatsError(null);
-      const data = await getExplorerStats();
-      setStats(data);
-    } catch (error) {
-      const message = error instanceof ExplorerApiError ? error.message : 'Failed to load network stats';
-      setStatsError(message);
-    } finally {
-      setStatsLoading(false);
-    }
-  }, []);
-
+  const [feed, setFeed] = useState<Load<{ records: ExplorerRecord[]; total: number }>>({
+    state: 'loading',
+  });
   useEffect(() => {
-    void loadStats();
-  }, [loadStats]);
-
-  /* --------------------------- Transactions -------------------------- */
-
-  const [transactions, setTransactions] = useState<ExplorerTransactionRow[]>([]);
-  const [txTotal, setTxTotal] = useState(0);
-  const [txLoading, setTxLoading] = useState(true);
-  const [txError, setTxError] = useState<string | null>(null);
-
-  const effectiveAddress = useMemo(() => {
-    if (scope === 'personal') return wallet.address || null;
-    if (scope === 'treasury') return null;
-    return null;
-  }, [scope, wallet.address]);
-
-  const loadTransactions = useCallback(async () => {
-    try {
-      setTxLoading(true);
-      setTxError(null);
-      const query: ExplorerTransactionsQuery = {
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-        sort,
-        order,
-      };
-      if (entityType !== 'all') query.type = entityType;
-      if (statusFilter !== 'all') query.status = statusFilter;
-      if (effectiveAddress) query.address = effectiveAddress;
-      if (scope === 'treasury') query.type = query.type || 'vault';
-
-      const data = await getExplorerTransactions(query);
-      setTransactions(data.transactions);
-      setTxTotal(data.total);
-    } catch (error) {
-      const message = error instanceof ExplorerApiError ? error.message : 'Failed to load activity';
-      setTxError(message);
-      setTransactions([]);
-      setTxTotal(0);
-    } finally {
-      setTxLoading(false);
-    }
-  }, [entityType, statusFilter, effectiveAddress, scope, page, pageSize, sort, order]);
-
-  useEffect(() => {
-    void loadTransactions();
-  }, [loadTransactions]);
-
-  /* ------------------------------ Search ----------------------------- */
-
-  const [searchResults, setSearchResults] = useState<ExplorerSearchResponse | null>(null);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-
-  const runSearch = useCallback(
-    async (query: string) => {
-      const trimmed = query.trim();
-      if (!trimmed) return;
-      const kind = detectQueryKind(trimmed);
-      if (kind === 'address') {
-        updateParams((next) => {
-          next.set('address', trimmed);
-          next.delete('q');
+    if (needsWallet) return undefined;
+    let cancelled = false;
+    setFeed((current) => (current.state === 'ready' ? current : { state: 'loading' }));
+    const request: ExplorerTransactionsQuery = {
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+      sort,
+      order,
+      type: kind === 'all' ? undefined : kind,
+      status: status || undefined,
+      address: scope === 'you' ? (walletAddress ?? undefined) : undefined,
+    };
+    getExplorerTransactions(request).then(
+      (data) => {
+        if (cancelled) return;
+        const records = data.transactions
+          .map(fromFeedRow)
+          .filter((record) => !isHiddenTestRecord(record.name));
+        const hiddenHere = data.transactions.length - records.length + data.dropped;
+        setFeed({
+          state: 'ready',
+          data: { records, total: Math.max(records.length, data.total - hiddenHere) },
         });
-        setSearchResults(null);
-        return;
+        setLastLoadedAt(Date.now());
+      },
+      (error: unknown) => {
+        console.error('[Explorer] activity', error);
+        if (!cancelled) setFeed({ state: 'error', problem: explorerLoadProblem(error) });
       }
-      updateParams((next) => {
-        next.set('q', trimmed);
-        next.delete('address');
-      });
-      try {
-        setSearchLoading(true);
-        setSearchError(null);
-        const data = await searchExplorer(trimmed);
-        setSearchResults(data);
-      } catch (error) {
-        const message = error instanceof ExplorerApiError ? error.message : 'Search failed';
-        setSearchError(message);
-        setSearchResults(null);
-      } finally {
-        setSearchLoading(false);
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [needsWallet, page, sort, order, kind, status, scope, walletAddress, reloadKey]);
+
+  const [searchText, setSearchText] = useState(query || activeAddress || '');
+  const [search, setSearch] = useState<Load<SearchFound> | null>(null);
+  useEffect(() => {
+    if (!query) {
+      setSearch(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setSearch({ state: 'loading' });
+    searchExplorer(query).then(
+      (data) => {
+        if (!cancelled) setSearch({ state: 'ready', data: searchFound(data) });
+      },
+      (error: unknown) => {
+        console.error('[Explorer] search', error);
+        if (!cancelled) setSearch({ state: 'error', problem: explorerLoadProblem(error) });
       }
-    },
-    [updateParams],
-  );
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [query, reloadKey]);
+
+  const [addressLoad, setAddressLoad] = useState<Load<ExplorerAddressResponse>>({
+    state: 'loading',
+  });
+  const [addressReload, setAddressReload] = useState(0);
+  useEffect(() => {
+    if (!activeAddress) return undefined;
+    let cancelled = false;
+    setAddressLoad({ state: 'loading' });
+    getExplorerAddress(activeAddress).then(
+      (data) => {
+        if (!cancelled) setAddressLoad({ state: 'ready', data });
+      },
+      (error: unknown) => {
+        console.error('[Explorer] address', error);
+        if (!cancelled) setAddressLoad({ state: 'error', problem: explorerLoadProblem(error) });
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAddress, addressReload]);
 
   useEffect(() => {
-    if (!queryParam) {
-      setSearchResults(null);
-      return;
-    }
-    void (async () => {
-      try {
-        setSearchLoading(true);
-        setSearchError(null);
-        const data = await searchExplorer(queryParam);
-        setSearchResults(data);
-      } catch (error) {
-        const message = error instanceof ExplorerApiError ? error.message : 'Search failed';
-        setSearchError(message);
-        setSearchResults(null);
-      } finally {
-        setSearchLoading(false);
-      }
-    })();
-  }, [queryParam]);
+    if (!autoUpdate) return undefined;
+    const timer = window.setInterval(() => {
+      const top = listRef.current?.getBoundingClientRect().top ?? 0;
+      if (!document.hidden && top >= 0) setReloadKey((key) => key + 1);
+    }, AUTO_UPDATE_MS);
+    return () => window.clearInterval(timer);
+  }, [autoUpdate]);
 
-  const clearSearch = useCallback(() => {
-    updateParams((next) => {
-      next.delete('q');
-    });
-    setSearchResults(null);
-    setSearchError(null);
-  }, [updateParams]);
+  const feedRecords = feed.state === 'ready' ? feed.data.records : NO_RECORDS;
+  const searchMatches = search?.state === 'ready' ? search.data.records : NO_RECORDS;
+  const searchTransactions = search?.state === 'ready' ? search.data.transactions : NO_TRANSACTIONS;
+  useTokenSymbols(useMemo(() => [...feedRecords, ...searchMatches], [feedRecords, searchMatches]));
+  const shownFeed = withFreshAssets(feedRecords);
+  const shownSearch = withFreshAssets(searchMatches);
 
-  /* ---------------------------- Address pane ------------------------- */
+  const [selected, setSelected] = useState<ExplorerRecord | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<ExplorerSearchTransaction | null>(null);
+  const columns = useMemo(() => buildColumns(now), [now]);
 
-  const [addressData, setAddressData] = useState<ExplorerAddressResponse | null>(null);
-  const [addressLoading, setAddressLoading] = useState(false);
-  const [addressError, setAddressError] = useState<string | null>(null);
-
-  const loadAddress = useCallback(async (address: string) => {
-    try {
-      setAddressLoading(true);
-      setAddressError(null);
-      const data = await getExplorerAddress(address);
-      setAddressData(data);
-    } catch (error) {
-      const message = error instanceof ExplorerApiError ? error.message : 'Failed to load address';
-      setAddressError(message);
-      setAddressData(null);
-    } finally {
-      setAddressLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!activeAddress) {
-      setAddressData(null);
-      setAddressError(null);
-      return;
-    }
-    void loadAddress(activeAddress);
-  }, [activeAddress, loadAddress]);
-
-  const selectAddress = useCallback(
+  const openAddress = useCallback(
     (address: string) => {
-      updateParams((next) => {
-        next.set('address', address);
-        next.delete('q');
-      });
-      setSearchResults(null);
+      setSelected(null);
+      updateParams((next) => next.set('address', address));
     },
-    [updateParams],
+    [updateParams]
   );
 
   const closeAddress = useCallback(() => {
-    updateParams((next) => {
-      next.delete('address');
-    });
+    updateParams((next) => next.delete('address'));
   }, [updateParams]);
 
-  /* ----------------------- Auto-promote scope ------------------------ */
-
-  // If user is on /streams/activity (back-compat), redirect to canonical URL.
-  // App.tsx now points that route at this page, so the only thing we still
-  // need to do is force a default scope=personal when none is in the URL.
-  useEffect(() => {
-    const path = window.location.pathname;
-    if (path === '/streams/activity' && !searchParams.get('scope')) {
-      updateParams((next) => {
-        next.set('scope', 'personal');
-        if (!next.get('type')) next.set('type', 'stream');
-      });
+  const submitSearch = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (detectQueryKind(trimmed) === 'address') {
+      openAddress(trimmed);
+      return;
     }
-  }, [searchParams, updateParams]);
+    updateParams((next) => {
+      next.set('q', trimmed);
+      next.delete('address');
+    });
+  };
 
-  /* ------------------------ Derived stats values --------------------- */
+  const clearSearch = () => {
+    setSearchText('');
+    updateParams((next) => next.delete('q'));
+  };
 
-  const activeContracts = stats?.flowguard.vaults.total ?? 0;
-  const totalStreams = stats?.flowguard.streams.total ?? 0;
-  const totalFunded = stats?.flowguard.vaults.totalValue ?? 0;
-  const proposalsCount = stats?.flowguard.proposals.total ?? 0;
-  const tx24h =
-    (stats?.flowguard.streams.recent24h ?? 0) +
-    (stats?.flowguard.vaults.recent24h ?? 0) +
-    (stats?.flowguard.proposals.recent24h ?? 0);
+  const setScope = (next: ExplorerScope) =>
+    updateParams((params) => {
+      if (next === 'you') params.set('scope', 'personal');
+      else params.delete('scope');
+      params.delete('page');
+    });
 
-  const personalDisabled = scope === 'personal' && !wallet.address;
+  const setKind = (next: KindFilter) =>
+    updateParams((params) => {
+      if (next === 'all') params.delete('type');
+      else params.set('type', next);
+      params.delete('status');
+      params.delete('page');
+    });
 
-  /* ---------------------------- Handlers ----------------------------- */
+  const setStatus = (next: string) =>
+    updateParams((params) => {
+      if (next) params.set('status', next);
+      else params.delete('status');
+      params.delete('page');
+    });
 
-  const handleScopeChange = useCallback(
-    (next: Scope) => {
-      updateParams((params) => {
-        params.set('scope', next);
-        params.delete('page');
-        if (next !== 'personal') params.delete('address');
-      });
-    },
-    [updateParams],
-  );
+  const clearFilters = () =>
+    updateParams((params) => {
+      params.delete('type');
+      params.delete('status');
+      params.delete('page');
+    });
 
-  const handleTypeChange = useCallback(
-    (next: EntityTypeFilter) => {
-      updateParams((params) => {
-        params.set('type', next);
-        params.delete('page');
-      });
-    },
-    [updateParams],
-  );
+  const setPage = (next: number) => {
+    updateParams((params) => {
+      if (next <= 1) params.delete('page');
+      else params.set('page', String(next));
+    });
+    listRef.current?.scrollIntoView({ block: 'start' });
+  };
 
-  const handleStatusChange = useCallback(
-    (next: StatusFilter) => {
-      updateParams((params) => {
-        params.set('status', next);
-        params.delete('page');
-      });
-    },
-    [updateParams],
-  );
+  const setSortKey = (key: string) => {
+    const field = readSort(key);
+    updateParams((params) => {
+      if (field === sort) params.set('order', order === 'asc' ? 'desc' : 'asc');
+      else {
+        params.set('sort', field);
+        params.set('order', 'desc');
+      }
+      params.delete('page');
+    });
+  };
 
-  const handlePageChange = useCallback(
-    (next: number) => {
-      updateParams((params) => {
-        params.set('page', String(next));
-      });
-      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
-    },
-    [updateParams],
-  );
+  const refresh = () => setReloadKey((key) => key + 1);
 
-  /* ------------------------------ Render ----------------------------- */
+  const queryKind = detectQueryKind(searchText);
+  const searchHint = searchText.trim()
+    ? EXPLORER_SEARCH.hint[queryKind]
+    : EXPLORER_SEARCH.hint.text;
+  const typeOptions = [
+    { value: 'all' as KindFilter, label: ALL_TYPES },
+    ...KINDS.map((value) => ({ value: value as KindFilter, label: KIND_LABEL[value].many })),
+  ];
+  const statusOptions =
+    kind === 'all'
+      ? []
+      : [
+          { value: '', label: EXPLORER_FILTERS.anyStatus },
+          ...KIND_STATUSES[kind].map((option) => ({
+            value: option.value,
+            label: statusWord(option.status),
+          })),
+        ];
+
+  const feedState: ListState =
+    feed.state === 'loading'
+      ? 'loading'
+      : feed.state === 'error'
+        ? 'error'
+        : shownFeed.length > 0
+          ? 'ready'
+          : filtersSet
+            ? 'no-results'
+            : 'empty';
+
+  const stateLine = lastLoadedAt
+    ? lastUpdate(formatRelative(lastLoadedAt, Math.max(now, lastLoadedAt)) ?? '')
+    : EXPLORER_PAGE.notUpdatedYet;
+
+  const statsData = stats.state === 'ready' ? stats.data : null;
+  const tileState = (value: number | null | undefined): 'loading' | 'error' | 'ready' =>
+    stats.state === 'ready' ? (typeof value === 'number' ? 'ready' : 'error') : stats.state;
+  const drawerSide = docked ? 'right' : 'full';
 
   return (
-    <>
-      <PageMeta
-        title="Explorer"
-        description="Search Bitcoin Cash addresses, transactions, vaults, streams, payments, airdrops, and proposals across FlowGuard."
-        path={onExplorerHost ? '/' : '/explorer'}
+    <ExplorerShell embedded={embedded}>
+      <PageHeader
+        title={EXPLORER_PAGE.title}
+        description={EXPLORER_PAGE.description}
+        stateLine={stateLine}
+        secondaryActions={[
+          <Button key="refresh" variant="secondary" onClick={refresh}>
+            {EXPLORER_PAGE.refresh}
+          </Button>,
+        ]}
       />
-      <ExplorerShell embedded={embedded}>
-        <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6 md:py-10">
-            {/* Header */}
-            <header className="mb-8">
-              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-[11px] font-mono uppercase tracking-wider text-textMuted">
-                    <Zap className="h-3 w-3 text-primary" />
-                    FlowGuard Explorer
-                  </div>
-                  <h1 className="font-display text-4xl text-textPrimary md:text-5xl lg:text-6xl">
-                    Explore Bitcoin Cash activity
-                  </h1>
-                  <p className="mt-3 max-w-2xl font-sans text-sm leading-relaxed text-textMuted md:text-base">
-                    One canonical surface for vaults, streams, payments, airdrops, proposals, and lifecycle events - across global, personal, and treasury scopes.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <NetworkBadge
-                    network={network}
-                    blockHeight={stats?.network.blockHeight}
-                    loading={statsLoading}
-                    onRefresh={loadStats}
+
+      <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-1.5">
+          <SearchInput
+            label={EXPLORER_SEARCH.label}
+            placeholder={EXPLORER_SEARCH.placeholder}
+            value={searchText}
+            onChange={setSearchText}
+            onSubmit={submitSearch}
+          />
+          <p className="text-small text-ink-secondary" aria-live="polite">
+            {searchHint}
+          </p>
+        </div>
+
+        {query ? (
+          <SearchResults
+            query={query}
+            load={search}
+            records={shownSearch}
+            transactions={searchTransactions}
+            columns={columns}
+            now={now}
+            onOpen={setSelected}
+            onOpenEvent={setSelectedEvent}
+            onClear={clearSearch}
+            onRetry={refresh}
+          />
+        ) : (
+          <>
+            {scope === 'everyone' ? (
+              <StatRow>
+                <StatTile
+                  label={EXPLORER_STATS.vaults}
+                  state={tileState(statsData?.vaults.total)}
+                  onRetry={refresh}
+                  value={statsData?.vaults.total ?? null}
+                  sub={countSub(statsData?.vaults.recent24h, vaultsRecentSub)}
+                />
+                <StatTile
+                  label={EXPLORER_STATS.streams}
+                  state={tileState(statsData?.streams.total)}
+                  onRetry={refresh}
+                  value={statsData?.streams.total ?? null}
+                  sub={countSub(statsData?.streams.active, streamsActiveSub)}
+                />
+                <StatTile
+                  label={EXPLORER_STATS.requests}
+                  state={tileState(statsData?.proposals.total)}
+                  onRetry={refresh}
+                  value={statsData?.proposals.total ?? null}
+                  sub={countSub(statsData?.proposals.active, requestsWaitingSub)}
+                />
+                <StatTile
+                  label={EXPLORER_STATS.recent}
+                  state={tileState(statsData ? recentTotal(statsData) : null)}
+                  onRetry={refresh}
+                  value={statsData ? recentTotal(statsData) : null}
+                  sub={EXPLORER_STATS.recentSub}
+                />
+              </StatRow>
+            ) : null}
+
+            <div ref={listRef} className="flex scroll-mt-header flex-col gap-4">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <SegmentedControl
+                  label={EXPLORER_SCOPE.label}
+                  options={EXPLORER_SCOPE.options}
+                  value={scope}
+                  onChange={setScope}
+                />
+                <div className="lg:w-drawer">
+                  <Switch
+                    label={EXPLORER_FILTERS.autoUpdate}
+                    description={EXPLORER_FILTERS.autoUpdateLine}
+                    checked={autoUpdate}
+                    onChange={setAutoUpdate}
                   />
                 </div>
               </div>
 
-              {/* Unified search */}
-              <div className="mt-6">
-                <UnifiedSearchBar initial={queryParam} onSearch={runSearch} onClear={clearSearch} />
-              </div>
-            </header>
-
-            {/* Stats row */}
-            <section className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4 lg:grid-cols-5">
-              {statsLoading && !stats ? (
-                Array.from({ length: 5 }).map((_, idx) => <StatSkeleton key={idx} />)
-              ) : statsError && !stats ? (
-                <div className="col-span-full">
-                  <InlineStatusBanner
-                    variant="error"
-                    title="Couldn't load network stats"
-                    description={statsError}
-                    onRetry={loadStats}
+              {needsWallet ? (
+                <Panel>
+                  <EmptyState
+                    icon={Wallet}
+                    title={EXPLORER_SCOPE.connectTitle}
+                    description={EXPLORER_SCOPE.connectLine}
+                    action={
+                      <Button variant="primary" data-wallet-trigger onClick={openWalletModal}>
+                        {ACTIONS.connectWallet}
+                      </Button>
+                    }
                   />
-                </div>
+                </Panel>
               ) : (
                 <>
-                  <StatsCard
-                    label="Active contracts"
-                    value={activeContracts.toLocaleString()}
-                    subtitle={`${stats?.flowguard.vaults.recent24h ?? 0} new today`}
-                    icon={Shield}
-                    color="primary"
-                  />
-                  <StatsCard
-                    label="Total streams"
-                    value={totalStreams.toLocaleString()}
-                    subtitle={`${stats?.flowguard.streams.active ?? 0} active`}
-                    icon={Waves}
-                    color="accent"
-                  />
-                  <StatsCard
-                    label="Funded BCH"
-                    value={`${formatBch(totalFunded)}`}
-                    subtitle={`${formatBch(stats?.flowguard.streams.totalVolume ?? 0)} streamed`}
-                    icon={BarChart3}
-                    color="primary"
-                  />
-                  <StatsCard
-                    label="Proposals"
-                    value={proposalsCount.toLocaleString()}
-                    subtitle={`${stats?.flowguard.proposals.active ?? 0} pending`}
-                    icon={FileText}
-                    color="secondary"
-                  />
-                  <StatsCard
-                    label="24h activity"
-                    value={tx24h.toLocaleString()}
-                    subtitle="new entities created"
-                    icon={Activity}
-                    color="muted"
-                  />
-                </>
-              )}
-            </section>
-
-            {/* Search results */}
-            {queryParam && (
-              <div className="mb-6">
-                {searchLoading && !searchResults ? (
-                  <Card className="p-5">
-                    <RowSkeleton count={4} />
-                  </Card>
-                ) : searchError ? (
-                  <InlineStatusBanner
-                    variant="error"
-                    title="Search failed"
-                    description={searchError}
-                    onRetry={() => runSearch(queryParam)}
-                  />
-                ) : searchResults ? (
-                  <SearchResultsPanel
-                    results={searchResults}
-                    network={network}
-                    onSelectAddress={selectAddress}
-                    onClose={clearSearch}
-                  />
-                ) : null}
-              </div>
-            )}
-
-            {/* Scope + filter controls */}
-            <section className="mb-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-textMuted">Scope</p>
-                  <ScopeTabs scope={scope} onChange={handleScopeChange} walletAddress={wallet.address || null} />
-                </div>
-                <div className="flex items-center gap-2">
-                  {scope === 'personal' && wallet.address && (
-                    <span className="inline-flex items-center gap-2 rounded-full border border-border bg-surfaceAlt px-3 py-1.5 text-xs text-textPrimary">
-                      <Wallet className="h-3.5 w-3.5 text-primary" />
-                      <span className="font-mono">{formatAddress(wallet.address)}</span>
-                    </span>
-                  )}
-                  <Button variant="outline" size="sm" onClick={loadTransactions}>
-                    <RefreshCw className={`mr-2 h-3.5 w-3.5 ${txLoading ? 'animate-spin' : ''}`} />
-                    Refresh
-                  </Button>
-                </div>
-              </div>
-            </section>
-
-            <section className="mb-4 space-y-3">
-              <div>
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-textMuted">Entity type</p>
-                <div className="flex flex-wrap gap-2">
-                  {TYPE_FILTER_TABS.map((tab) => (
-                    <FilterChip
-                      key={tab.value}
-                      value={tab.value}
-                      active={entityType}
-                      label={tab.label}
-                      icon={tab.icon}
-                      onSelect={handleTypeChange}
-                    />
-                  ))}
-                  {SECONDARY_TYPE_LINKS.map((link) => (
-                    <Link
-                      key={link.to}
-                      to={link.to}
-                      className="inline-flex items-center gap-2 rounded-full border border-dashed border-border bg-surface px-3 py-1.5 text-xs font-medium text-textMuted transition-colors hover:border-primary/40 hover:text-textPrimary"
-                    >
-                      <link.icon className="h-3.5 w-3.5" />
-                      {link.label}
-                      <ArrowUpRight className="h-3 w-3" />
-                    </Link>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-textMuted">Status</p>
-                <div className="flex flex-wrap gap-2">
-                  {STATUS_FILTERS.map((status) => (
-                    <FilterChip
-                      key={status.value}
-                      value={status.value}
-                      active={statusFilter}
-                      label={status.label}
-                      onSelect={handleStatusChange}
-                    />
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            {/* Main grid: activity + optional address panel */}
-            <section className={`grid gap-6 ${activeAddress ? 'lg:grid-cols-[1fr_360px]' : ''}`}>
-              <div className="space-y-4">
-                {personalDisabled && (
-                  <InlineStatusBanner
-                    variant="info"
-                    title="Connect a wallet for personal activity"
-                    description="Personal scope filters the feed to the addresses your wallet controls."
-                  />
-                )}
-
-                {txError && (
-                  <InlineStatusBanner
-                    variant="error"
-                    title="Couldn't load activity"
-                    description={txError}
-                    onRetry={loadTransactions}
-                  />
-                )}
-
-                <Card padding="none" className="overflow-hidden">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-surfaceAlt/60 px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <Box className="h-4 w-4 text-primary" />
-                      <h2 className="font-display text-base text-textPrimary">Activity</h2>
-                      {!txLoading && (
-                        <span className="rounded-full bg-primarySoft px-2 py-0.5 font-mono text-[10px] text-primaryHover">
-                          {txTotal.toLocaleString()}
-                        </span>
-                      )}
+                  {scope === 'you' ? (
+                    <p className="text-small text-ink-secondary">{EXPLORER_SCOPE.youLine}</p>
+                  ) : null}
+                  <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                    <div className="-mx-4 min-w-0 overflow-x-auto px-4 md:mx-0 md:px-0">
+                      <FilterChips
+                        label={EXPLORER_FILTERS.typeLabel}
+                        options={typeOptions}
+                        selected={[kind]}
+                        onChange={(values) => setKind(values[0] ?? 'all')}
+                      />
                     </div>
-                    <div className="flex items-center gap-2">
-                      {/* Rows per page */}
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-[11px] text-textMuted">Rows</span>
-                        <select
-                          value={pageSize}
-                          onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                          className="rounded-md border border-border bg-surface px-2 py-1 font-mono text-[11px] text-textPrimary outline-none hover:border-borderHover focus:border-primary/50"
-                          aria-label="Rows per page"
-                        >
-                          {PAGE_SIZE_OPTIONS.map((size) => (
-                            <option key={size} value={size}>{size}</option>
-                          ))}
-                        </select>
+                    {statusOptions.length > 0 ? (
+                      <div className="md:w-popover">
+                        <Select
+                          label={EXPLORER_FILTERS.statusLabel}
+                          options={statusOptions}
+                          value={status}
+                          onValueChange={setStatus}
+                          dense
+                        />
                       </div>
-
-                      {/* Column visibility (desktop table only) */}
-                      <div className="relative hidden lg:block" ref={columnMenuRef}>
-                        <button
-                          onClick={() => setColumnMenuOpen((open) => !open)}
-                          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 font-mono text-[11px] text-textPrimary transition-colors hover:border-borderHover"
-                          aria-haspopup="true"
-                          aria-expanded={columnMenuOpen}
-                        >
-                          <Columns3 className="h-3.5 w-3.5 text-textMuted" />
-                          Columns
-                          <ChevronDown className="h-3 w-3 text-textMuted" />
-                        </button>
-                        {columnMenuOpen && (
-                          <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
-                            {EXPLORER_COLUMNS.map((column) => (
-                              <button
-                                key={column.key}
-                                onClick={() => toggleColumn(column.key)}
-                                className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-textPrimary transition-colors hover:bg-surfaceAlt"
-                              >
-                                {column.label}
-                                <span className={`flex h-4 w-4 items-center justify-center rounded border ${visibleColumns[column.key] ? 'border-primary bg-primary text-white' : 'border-border'}`}>
-                                  {visibleColumns[column.key] && <Check className="h-3 w-3" />}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                    ) : null}
                   </div>
 
-                  {txLoading ? (
-                    <div className="p-4">
-                      <RowSkeleton count={8} />
-                    </div>
-                  ) : transactions.length === 0 ? (
-                    <div className="px-6 py-16 text-center">
-                      <Inbox className="mx-auto mb-3 h-10 w-10 text-textMuted" />
-                      <p className="font-sans text-sm font-semibold text-textPrimary">No activity</p>
-                      <p className="mt-1 font-sans text-xs text-textMuted">
-                        {scope === 'personal'
-                          ? 'No on-chain activity for the connected wallet under these filters.'
-                          : 'Try widening the entity type or status filters.'}
-                      </p>
-                      <div className="mt-4 flex justify-center gap-2">
-                        <Button variant="outline" size="sm" onClick={() => handleTypeChange('all')}>
-                          Reset entity type
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => handleStatusChange('all')}>
-                          Reset status
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Desktop table */}
-                      <div className="hidden lg:block">
-                        <table className="w-full">
-                          <thead className="bg-surfaceAlt/30">
-                            <tr>
-                              {EXPLORER_COLUMNS.filter((column) => visibleColumns[column.key]).map((column) => {
-                                const active = column.sortField && sort === column.sortField;
-                                return (
-                                  <th
-                                    key={column.key}
-                                    className={`px-4 py-3 font-mono text-[11px] uppercase tracking-wider text-textMuted ${alignClass(column.align)} ${column.sortField ? 'cursor-pointer select-none hover:text-textPrimary' : ''}`}
-                                    onClick={() => column.sortField && handleSort(column.sortField)}
-                                  >
-                                    <span className={`inline-flex items-center gap-1 ${column.align === 'right' ? 'flex-row-reverse' : ''}`}>
-                                      {column.label}
-                                      {column.sortField && (
-                                        active
-                                          ? (order === 'asc'
-                                              ? <ArrowUp className="h-3 w-3 text-primary" />
-                                              : <ArrowDown className="h-3 w-3 text-primary" />)
-                                          : <ArrowUpDown className="h-3 w-3 text-textMuted/50" />
-                                      )}
-                                    </span>
-                                  </th>
-                                );
-                              })}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {transactions.map((tx) => (
-                              <TransactionRow
-                                key={`${tx.tx_type}-${tx.id}`}
-                                tx={tx}
-                                network={network}
-                                onSelectAddress={selectAddress}
-                                visibleColumns={visibleColumns}
-                              />
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      {/* Mobile cards */}
-                      <div className="space-y-3 p-3 lg:hidden">
-                        {transactions.map((tx) => (
-                          <TransactionCard
-                            key={`m-${tx.tx_type}-${tx.id}`}
-                            tx={tx}
-                            network={network}
-                            onSelectAddress={selectAddress}
-                          />
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </Card>
-
-                <PaginationBar
-                  page={page}
-                  total={txTotal}
-                  pageSize={pageSize}
-                  onPageChange={handlePageChange}
-                />
-              </div>
-
-              {activeAddress && (
-                <aside>
-                  <AddressPanel
-                    address={activeAddress}
-                    data={addressData}
-                    loading={addressLoading}
-                    error={addressError}
-                    onClose={closeAddress}
-                    onRetry={() => loadAddress(activeAddress)}
-                    network={network}
+                  <List
+                    label={EXPLORER_TABLE.label}
+                    columns={columns}
+                    rows={shownFeed}
+                    rowKey={(record) => record.key}
+                    onRowOpen={setSelected}
+                    rowAction={txAction}
+                    state={feedState}
+                    sort={{ key: sort, direction: order, onChange: setSortKey }}
+                    empty={
+                      scope === 'you' ? (
+                        <EmptyState
+                          icon={Activity}
+                          title={EXPLORER_EMPTY.youTitle}
+                          description={EXPLORER_EMPTY.youLine}
+                          action={
+                            <AppLink path="/streams/create" label={EXPLORER_EMPTY.youAction} />
+                          }
+                        />
+                      ) : (
+                        <EmptyState
+                          icon={Activity}
+                          title={EXPLORER_EMPTY.everyoneTitle}
+                          description={EXPLORER_EMPTY.everyoneLine}
+                        />
+                      )
+                    }
+                    noResults={<NoResults thing={EXPLORER_TABLE.things} onClear={clearFilters} />}
+                    error={
+                      <ErrorState
+                        title={EXPLORER_ERRORS.activityTitle}
+                        reason={
+                          feed.state === 'error' ? EXPLORER_ERRORS.reason[feed.problem] : undefined
+                        }
+                        onRetry={refresh}
+                      />
+                    }
                   />
-                </aside>
-              )}
-            </section>
 
-            {/* Cross-links */}
-            <section className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-              <Card padding="md" hover className="flex items-start gap-3">
-                <div className="rounded-full bg-primarySoft p-2">
-                  <Users className="h-5 w-5 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-display text-sm text-textPrimary">Browse vaults</p>
-                  <p className="font-sans text-xs text-textMuted">Inspect treasury covenants and signer sets.</p>
-                  <button
-                    type="button"
-                    onClick={() => navigate('/vaults')}
-                    className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primaryHover"
-                  >
-                    Open vaults <ChevronRight className="h-3 w-3" />
-                  </button>
-                </div>
-              </Card>
-              <Card padding="md" hover className="flex items-start gap-3">
-                <div className="rounded-full bg-primarySoft p-2">
-                  <Waves className="h-5 w-5 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-display text-sm text-textPrimary">Stream workspace</p>
-                  <p className="font-sans text-xs text-textMuted">Manage active schedules, payouts, and refills.</p>
-                  <button
-                    type="button"
-                    onClick={() => navigate('/streams')}
-                    className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primaryHover"
-                  >
-                    Open streams <ChevronRight className="h-3 w-3" />
-                  </button>
-                </div>
-              </Card>
-              <Card padding="md" hover className="flex items-start gap-3">
-                <div className="rounded-full bg-primarySoft p-2">
-                  <Clock className="h-5 w-5 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-display text-sm text-textPrimary">24h pulse</p>
-                  <p className="font-sans text-xs text-textMuted">
-                    {tx24h.toLocaleString()} new entities · {stats?.flowguard.streams.recent24h ?? 0} streams · {stats?.flowguard.vaults.recent24h ?? 0} vaults
-                  </p>
-                </div>
-              </Card>
-            </section>
+                  {feed.state === 'ready' && shownFeed.length > 0 ? (
+                    <Pagination
+                      page={page}
+                      pageSize={PAGE_SIZE}
+                      total={feed.data.total}
+                      onPage={setPage}
+                    />
+                  ) : null}
+                </>
+              )}
+            </div>
+          </>
+        )}
+
+        <div className="flex flex-col gap-1 text-small text-ink-secondary">
+          <p>{EXPLORER_PAGE.coverage}</p>
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span>{EXPLORER_PAGE.elsewhere}</span>
+            {EXPLORER_ELSEWHERE_LINKS.map((link) => (
+              <CrossLink
+                key={link.path}
+                to={link.path}
+                data-inline
+                className="text-brand underline underline-offset-4 transition-colors duration-(--duration-fast) ease-standard hover:text-brand-hover"
+              >
+                {link.label}
+              </CrossLink>
+            ))}
+          </p>
         </div>
-      </ExplorerShell>
-    </>
+      </div>
+
+      <Drawer
+        open={selected !== null && !activeAddress}
+        onClose={() => setSelected(null)}
+        side={drawerSide}
+        label={RECORD_DRAWER.label}
+      >
+        {selected ? (
+          <RecordDetails record={selected} now={now} onSelectAddress={openAddress} />
+        ) : null}
+      </Drawer>
+      <Drawer
+        open={selectedEvent !== null && !activeAddress}
+        onClose={() => setSelectedEvent(null)}
+        side={drawerSide}
+        label={EVENT_DRAWER.label}
+      >
+        {selectedEvent ? <EventDetails tx={selectedEvent} /> : null}
+      </Drawer>
+      <Drawer
+        open={Boolean(activeAddress)}
+        onClose={closeAddress}
+        side={drawerSide}
+        label={ADDRESS_DRAWER.label}
+      >
+        {activeAddress ? (
+          <AddressDetails
+            address={activeAddress}
+            load={addressLoad}
+            onRetry={() => setAddressReload((key) => key + 1)}
+            now={now}
+          />
+        ) : null}
+      </Drawer>
+    </ExplorerShell>
   );
 }
 
-function ExplorerShell({ embedded, children }: { embedded: boolean; children: React.ReactNode }) {
-  if (embedded) {
-    return <>{children}</>;
-  }
+function statusWord(status: StatusKey): string {
+  return STATUS[status].word;
+}
+
+function countSub(
+  count: number | null | undefined,
+  describe: (count: number) => string
+): string | undefined {
+  return typeof count === 'number' ? describe(count) : undefined;
+}
+
+function recentTotal({ vaults, streams, proposals }: ExplorerStatsResponse): number | null {
+  const counts = [vaults.recent24h, streams.recent24h, proposals.recent24h];
+  return counts.every((count): count is number => count !== null)
+    ? counts.reduce((sum, count) => sum + count, 0)
+    : null;
+}
+
+function buildTransactionColumns(now: number): Column<SearchEvent>[] {
+  return [
+    {
+      key: 'record',
+      header: TRANSACTION_TABLE.record,
+      primary: true,
+      cell: (event) => (
+        <span>
+          {TRANSACTION_ENTITY_LABEL[event.tx.entity_type].one}{' '}
+          <span className="whitespace-nowrap">{eventRecordId(event)}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'happened',
+      header: TRANSACTION_TABLE.happened,
+      mobile: 'bottom-start',
+      cell: ({ tx }) => EVENT_WORD[toEventKind(tx.event_type)],
+    },
+    {
+      key: 'when',
+      header: TRANSACTION_TABLE.when,
+      align: 'end',
+      mobile: 'bottom-end',
+      cell: ({ tx }) => {
+        const at = toDate(tx.created_at);
+        return (
+          <span
+            className="whitespace-nowrap"
+            title={at ? (formatDateTime(at, { withZone: true }) ?? undefined) : undefined}
+          >
+            {relativeSince(tx.created_at, now) ?? EXPLORER_TABLE.timeNotRecorded}
+          </span>
+        );
+      },
+    },
+  ];
+}
+
+function EventDetails({ tx }: { tx: ExplorerSearchTransaction }) {
+  const label = TRANSACTION_ENTITY_LABEL[tx.entity_type].one;
+  const target = transactionAppTarget(tx);
+  const at = formatDateTime(tx.created_at, { withZone: true });
+  const items = [
+    { label: RECORD_DRAWER.type, value: label },
+    {
+      label: RECORD_DRAWER.id,
+      value: (
+        <span className="inline-flex items-center gap-1">
+          <Code>{shortId(tx.entity_id)}</Code>
+          <CopyButton value={tx.entity_id} label={RECORD_DRAWER.copyId} />
+        </span>
+      ),
+    },
+    { label: EVENT_DRAWER.happened, value: EVENT_WORD[toEventKind(tx.event_type)] },
+    {
+      label: EVENT_DRAWER.when,
+      value: at ?? EXPLORER_TABLE.timeNotRecorded,
+    },
+    {
+      label: RECORD_DRAWER.transaction,
+      value: <TxLink txid={tx.tx_hash} network={BUILD_NETWORK} />,
+    },
+  ];
+
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <main className="flex-1 pb-20">{children}</main>
-      <Footer />
+    <div className="flex flex-col gap-6 px-4 pb-6 sm:px-6">
+      <div className="flex flex-col gap-2">
+        <Heading level="section" as="h2">
+          {label} <span className="whitespace-nowrap">{shortId(tx.entity_id)}</span>
+        </Heading>
+        <p className="text-small text-ink-secondary">{RECORD_DRAWER.readOnly}</p>
+      </div>
+      <DetailList items={items} />
+      <div className="flex flex-col items-start gap-2">
+        <AppLink path={target.path} label={target.label} />
+        <p className="text-small text-ink-secondary">{RECORD_DRAWER.openInAppLine}</p>
+      </div>
     </div>
+  );
+}
+
+function SearchResults({
+  query,
+  load,
+  records,
+  transactions,
+  columns,
+  now,
+  onOpen,
+  onOpenEvent,
+  onClear,
+  onRetry,
+}: {
+  query: string;
+  load: Load<SearchFound> | null;
+  records: ExplorerRecord[];
+  transactions: ExplorerSearchTransaction[];
+  columns: Column<ExplorerRecord>[];
+  now: number;
+  onOpen: (record: ExplorerRecord) => void;
+  onOpenEvent: (tx: ExplorerSearchTransaction) => void;
+  onClear: () => void;
+  onRetry: () => void;
+}) {
+  const isTransaction = detectQueryKind(query) === 'transaction';
+  const transactionColumns = useMemo(() => buildTransactionColumns(now), [now]);
+  const { events, others, count } = useMemo(
+    () => reconcileSearch(records, transactions),
+    [records, transactions]
+  );
+  const ready = load?.state === 'ready';
+  const showTransactions = ready && events.length > 0;
+  const showRecords = !showTransactions || others.length > 0;
+  const state: ListState =
+    !load || load.state === 'loading'
+      ? 'loading'
+      : load.state === 'error'
+        ? 'error'
+        : others.length > 0
+          ? 'ready'
+          : 'empty';
+
+  return (
+    <section className="flex flex-col gap-4" aria-label={EXPLORER_SEARCH.listLabel}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 wrap-anywhere">
+          <Heading level="section" as="h2">
+            {ready
+              ? searchResultsFor(count, query)
+              : EXPLORER_SEARCH.listLabel}
+          </Heading>
+        </div>
+        <Button variant="ghost" onClick={onClear}>
+          {EXPLORER_SEARCH.clear}
+        </Button>
+      </div>
+      {showTransactions ? (
+        <section className="flex flex-col gap-3" aria-label={EXPLORER_SEARCH.inTransaction}>
+          <Heading level="item" as="h3">
+            {EXPLORER_SEARCH.inTransaction}
+          </Heading>
+          <List
+            label={EXPLORER_SEARCH.inTransaction}
+            columns={transactionColumns}
+            rows={events}
+            rowKey={({ tx }) => transactionKey(tx)}
+            onRowOpen={(event) => (event.record ? onOpen(event.record) : onOpenEvent(event.tx))}
+            state="ready"
+            empty={null}
+            noResults={null}
+            error={null}
+          />
+        </section>
+      ) : null}
+      {showTransactions && showRecords ? (
+        <Heading level="item" as="h3">
+          {EXPLORER_SEARCH.matchingRecords}
+        </Heading>
+      ) : null}
+      {showRecords ? (
+        <List
+          label={showTransactions ? EXPLORER_SEARCH.matchingRecords : EXPLORER_SEARCH.listLabel}
+          columns={columns}
+          rows={others}
+          rowKey={(record) => record.key}
+          onRowOpen={onOpen}
+          rowAction={txAction}
+          state={state}
+          empty={
+            isTransaction ? (
+              <EmptyState
+                icon={Search}
+                title={EXPLORER_SEARCH.transactionTitle}
+                description={EXPLORER_SEARCH.transactionNone}
+                action={<TxLink txid={query} network={BUILD_NETWORK} />}
+              />
+            ) : (
+              <div className="wrap-anywhere">
+                <EmptyState
+                  icon={Search}
+                  title={EXPLORER_SEARCH.noneTitle(query)}
+                  description={EXPLORER_SEARCH.noneLine}
+                />
+              </div>
+            )
+          }
+          noResults={null}
+          error={
+            load?.state === 'error' ? (
+              <ErrorState
+                title={EXPLORER_SEARCH.failedTitle}
+                reason={EXPLORER_ERRORS.reason[load.problem]}
+                onRetry={onRetry}
+              />
+            ) : null
+          }
+        />
+      ) : null}
+    </section>
   );
 }

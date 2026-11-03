@@ -1,676 +1,730 @@
-import React, { useState } from 'react';
-import { ArrowRight, Landmark, Plus, Shield, Siren, SlidersHorizontal } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Card } from '../../components/ui/Card';
-import { Button } from '../../components/ui/Button';
-import { Input } from '../../components/ui/Input';
-import { Select } from '../../components/ui/Select';
-import { Textarea } from '../../components/ui/Textarea';
-import { StatsCard } from '../../components/shared/StatsCard';
-import { DataTable, type Column } from '../../components/shared/DataTable';
-import { DaoPreviewBanner } from '../../components/dao/DaoPreviewBanner';
-import { DaoSectionNav } from '../../components/dao/DaoSectionNav';
-import { DaoWorkspaceModal } from '../../components/dao/DaoWorkspaceModal';
+import { useState } from 'react';
+import { PageContainer } from '../../components/layout/PageContainer';
+import { Stack } from '../../components/layout/Stack';
 import {
-  deriveDaoSummary,
-  useDaoWorkspace,
-  type DaoGuardrailDraft,
-  type DaoPolicyLaneDraft,
-  type DaoRecipientRuleDraft,
-  type DaoWorkspaceGuardrail,
-  type DaoWorkspacePolicyLane,
-  type DaoWorkspaceRecipientRule,
-} from '../../stores/useDaoWorkspace';
-import { buildDaoBatchStreamState } from '../../utils/daoStreamLaunch';
+  CardLabelled,
+  OrganizationHeader,
+  OrganizationSection,
+} from '../../components/dao/DaoSectionNav';
+import { SampleEditDialog } from '../../components/dao/DaoWorkspaceModal';
+import { Address } from '../../components/ui/Address';
+import { AddressInput } from '../../components/ui/AddressInput';
+import { Button } from '../../components/ui/Button';
+import { ButtonLink } from '../../components/ui/ButtonLink';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { Plus, ShieldCheck, Users } from '../../components/ui/Icon';
+import { Input } from '../../components/ui/Input';
+import { List, type Column } from '../../components/ui/List';
+import { Notice } from '../../components/ui/Notice';
+import { Panel } from '../../components/ui/Panel';
+import { Select } from '../../components/ui/Select';
+import { StatRow } from '../../components/ui/StatRow';
+import { StatTile } from '../../components/ui/StatTile';
+import { StatusPill } from '../../components/ui/StatusPill';
+import { useToast } from '../../components/ui/Toast';
+import { LABELS } from '../../copy/common';
+import { BUILD_NETWORK } from '../../copy/network';
+import { isValidAddress } from '../../utils/address';
+import {
+  ACTIVITY,
+  DIALOG,
+  RECIPIENT_STATUS_WORD,
+  RECIPIENT_USE_WORD,
+  RULES,
+  SAMPLE,
+  approvalsWords,
+  hoursWords,
+  usd,
+  waitWords,
+  type RecipientStatus,
+  type RecipientUse,
+} from '../../copy/organization';
+import type { DaoAssetRuleRow, DaoRecipientRow, DaoSpendingRuleRow } from '../../data/daoBeta';
+import { ruleName, useDaoWorkspace, type RecipientDraft } from '../../stores/useDaoWorkspace';
 
-const emptyLaneDraft: DaoPolicyLaneDraft = {
-  lane: '',
-  txCap: '$2.5K',
-  dailyCap: '$7.5K',
-  approvers: '2 of 4 signers',
-  executionWindow: 'Immediate',
-  assets: 'BCH',
+const NO_RULE = '';
+const EMERGENCY = /emergency/i;
+
+const USE_OPTIONS = (Object.keys(RECIPIENT_USE_WORD) as RecipientUse[]).map((value) => ({
+  value,
+  label: RECIPIENT_USE_WORD[value],
+}));
+const STATUS_OPTIONS = (Object.keys(RECIPIENT_STATUS_WORD) as RecipientStatus[]).map((value) => ({
+  value,
+  label: RECIPIENT_STATUS_WORD[value],
+}));
+
+function useRuleOptions() {
+  const rules = useDaoWorkspace((state) => state.rules);
+  return [
+    { value: NO_RULE, label: DIALOG.none },
+    ...rules.map((rule) => ({ value: rule.id, label: rule.name })),
+  ];
+}
+
+function NameCell({ title, meta }: { title: string; meta: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-title-item text-ink">{title}</span>
+      <span className="text-small text-ink-muted">{meta}</span>
+    </div>
+  );
+}
+
+function wholeNumber(text: string, min: number): number | null {
+  const value = Number(text);
+  return text.trim() !== '' && Number.isInteger(value) && value >= min ? value : null;
+}
+
+function dollars(text: string): number | null {
+  const value = Number(text);
+  return text.trim() !== '' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function HelpList({ title, lines }: { title: string; lines: readonly string[] }) {
+  return (
+    <Panel title={title}>
+      <ul className="flex list-disc flex-col gap-2 pl-5 text-body text-ink-secondary">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    </Panel>
+  );
+}
+
+type RuleForm = {
+  name: string;
+  approvals: string;
+  signers: string;
+  perPayment: string;
+  daily: string;
+  wait: string;
+  assets: string;
 };
 
-const emptyRecipientDraft: DaoRecipientRuleDraft = {
-  name: '',
-  address: '',
-  category: 'Vendor',
-  assetScope: 'BCH',
-  lane: 'Finance lane',
-  status: 'Approved',
-};
+function toRuleForm(rule?: DaoSpendingRuleRow): RuleForm {
+  if (!rule)
+    return {
+      name: '',
+      approvals: '',
+      signers: '',
+      perPayment: '',
+      daily: '',
+      wait: '0',
+      assets: '',
+    };
+  return {
+    name: rule.name,
+    approvals: String(rule.approvalsNeeded),
+    signers: String(rule.signerCount),
+    perPayment: String(rule.limitPerPaymentUsd),
+    daily: String(rule.dailyLimitUsd),
+    wait: String(rule.waitHours),
+    assets: rule.assets,
+  };
+}
 
-export const DaoTreasuryPolicyPage: React.FC = () => {
-  const navigate = useNavigate();
-  const {
-    assets,
-    vaults,
-    proposals,
-    members,
-    policyLanes,
-    recipientRules,
-    guardrails,
-    addPolicyLane,
-    updatePolicyLane,
-    addRecipientRule,
-    updateRecipientRule,
-    removeRecipientRule,
-    updateGuardrail,
-  } = useDaoWorkspace();
-  const summary = deriveDaoSummary({ assets, vaults, proposals, policyLanes, recipientRules, members });
+function RuleDialog({
+  rule,
+  onClose,
+  onRemove,
+}: {
+  rule?: DaoSpendingRuleRow;
+  onClose: () => void;
+  onRemove: (id: string) => void;
+}) {
+  const saveRule = useDaoWorkspace((state) => state.saveRule);
+  const { toast } = useToast();
+  const [form, setForm] = useState<RuleForm>(() => toRuleForm(rule));
+  const [submitted, setSubmitted] = useState(false);
 
-  const [isLaneModalOpen, setIsLaneModalOpen] = useState(false);
-  const [editingLane, setEditingLane] = useState<DaoWorkspacePolicyLane | null>(null);
-  const [laneDraft, setLaneDraft] = useState<DaoPolicyLaneDraft>(emptyLaneDraft);
+  const name = form.name.trim();
+  const approvals = wholeNumber(form.approvals, 1);
+  const signers = approvals === null ? null : wholeNumber(form.signers, approvals);
+  const perPayment = dollars(form.perPayment);
+  const daily = dollars(form.daily);
+  const wait = wholeNumber(form.wait, 0);
+  const errors = {
+    name: name ? undefined : DIALOG.nameMissing,
+    approvals: approvals === null ? RULES.errors.approvals : undefined,
+    signers: approvals !== null && signers === null ? RULES.errors.signers(approvals) : undefined,
+    perPayment: perPayment === null ? RULES.errors.limit : undefined,
+    daily: daily === null ? RULES.errors.limit : undefined,
+    wait: wait === null ? RULES.errors.wait : undefined,
+  };
+  const shown = (key: keyof typeof errors) => (submitted ? errors[key] : undefined);
+  const update = (key: keyof RuleForm, value: string) =>
+    setForm((current) => ({ ...current, [key]: value }));
 
-  const [isGuardrailModalOpen, setIsGuardrailModalOpen] = useState(false);
-  const [editingGuardrail, setEditingGuardrail] = useState<DaoWorkspaceGuardrail | null>(null);
-  const [guardrailDraft, setGuardrailDraft] = useState<DaoGuardrailDraft>({
-    assetClass: '',
-    defaultLane: '',
-    dailyNetCap: '',
-    routingRule: '',
-    notes: '',
-  });
-
-  const [isRecipientModalOpen, setIsRecipientModalOpen] = useState(false);
-  const [editingRecipient, setEditingRecipient] = useState<DaoWorkspaceRecipientRule | null>(null);
-  const [recipientDraft, setRecipientDraft] = useState<DaoRecipientRuleDraft>(emptyRecipientDraft);
-
-  const laneColumns: Column<DaoWorkspacePolicyLane>[] = [
-    {
-      key: 'lane',
-      label: 'Execution Lane',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-display text-lg text-textPrimary">{row.lane}</p>
-          <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">{row.assets}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'approvers',
-      label: 'Approvers',
-      sortable: true,
-      render: (row) => <span className="text-sm text-textPrimary">{row.approvers}</span>,
-    },
-    {
-      key: 'txCap',
-      label: 'Per Tx Cap',
-      sortable: true,
-      render: (row) => <span className="rounded-full bg-surfaceAlt px-3 py-1 text-xs font-mono text-textPrimary">{row.txCap}</span>,
-    },
-    {
-      key: 'dailyCap',
-      label: 'Daily Cap',
-      sortable: true,
-      render: (row) => <span className="text-sm text-textPrimary">{row.dailyCap}</span>,
-    },
-    {
-      key: 'executionWindow',
-      label: 'Execution Window',
-      sortable: true,
-      render: (row) => (
-        <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-mono uppercase tracking-[0.18em] text-primary">
-          {row.executionWindow}
-        </span>
-      ),
-    },
-  ];
-
-  const guardrailColumns: Column<DaoWorkspaceGuardrail>[] = [
-    {
-      key: 'assetClass',
-      label: 'Asset Class',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-display text-lg text-textPrimary">{row.assetClass}</p>
-          <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">{row.defaultLane}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'dailyNetCap',
-      label: 'Daily Net Cap',
-      sortable: true,
-      render: (row) => <span className="rounded-full bg-surfaceAlt px-3 py-1 text-xs font-mono text-textPrimary">{row.dailyNetCap}</span>,
-    },
-    {
-      key: 'routingRule',
-      label: 'Routing Rule',
-      sortable: true,
-      render: (row) => <span className="text-sm leading-6 text-textSecondary">{row.routingRule}</span>,
-    },
-    {
-      key: 'notes',
-      label: 'Notes',
-      sortable: true,
-      render: (row) => <span className="text-sm leading-6 text-textSecondary">{row.notes}</span>,
-    },
-  ];
-
-  const recipientColumns: Column<DaoWorkspaceRecipientRule>[] = [
-    {
-      key: 'name',
-      label: 'Recipient',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-display text-lg text-textPrimary">{row.name}</p>
-          <p className="text-xs font-mono text-textMuted">{row.address}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'category',
-      label: 'Category',
-      sortable: true,
-      render: (row) => <span className="rounded-full bg-surfaceAlt px-3 py-1 text-xs font-mono text-textPrimary">{row.category}</span>,
-    },
-    {
-      key: 'assetScope',
-      label: 'Asset Scope',
-      sortable: true,
-      render: (row) => <span className="text-sm text-textPrimary">{row.assetScope}</span>,
-    },
-    {
-      key: 'lane',
-      label: 'Policy Lane',
-      sortable: true,
-      render: (row) => <span className="text-sm text-textPrimary">{row.lane}</span>,
-    },
-    {
-      key: 'status',
-      label: 'Status',
-      sortable: true,
-      render: (row) => (
-        <span
-          className={`rounded-full px-3 py-1 text-xs font-mono uppercase tracking-[0.18em] ${
-            row.status === 'Approved'
-              ? 'bg-primary/10 text-primary'
-              : row.status === 'Watch'
-                ? 'bg-secondary/10 text-secondary'
-                : 'bg-error/10 text-error'
-          }`}
-        >
-          {row.status}
-        </span>
-      ),
-    },
-  ];
-
-  const openLaneModal = (lane?: DaoWorkspacePolicyLane) => {
-    if (lane) {
-      setEditingLane(lane);
-      setLaneDraft({
-        lane: lane.lane,
-        txCap: lane.txCap,
-        dailyCap: lane.dailyCap,
-        approvers: lane.approvers,
-        executionWindow: lane.executionWindow,
-        assets: lane.assets,
-      });
-    } else {
-      setEditingLane(null);
-      setLaneDraft(emptyLaneDraft);
-    }
-    setIsLaneModalOpen(true);
+  const save = () => {
+    setSubmitted(true);
+    if (
+      !name ||
+      approvals === null ||
+      signers === null ||
+      perPayment === null ||
+      daily === null ||
+      wait === null
+    )
+      return;
+    saveRule(
+      {
+        name,
+        approvalsNeeded: approvals,
+        signerCount: signers,
+        limitPerPaymentUsd: perPayment,
+        dailyLimitUsd: daily,
+        waitHours: wait,
+        assets: form.assets.trim(),
+      },
+      rule?.id
+    );
+    toast({ tone: 'success', title: rule ? ACTIVITY.ruleUpdated : ACTIVITY.ruleAdded });
+    onClose();
   };
 
-  const openGuardrailModal = (guardrail: DaoWorkspaceGuardrail) => {
-    setEditingGuardrail(guardrail);
-    setGuardrailDraft({
-      assetClass: guardrail.assetClass,
-      defaultLane: guardrail.defaultLane,
-      dailyNetCap: guardrail.dailyNetCap,
-      routingRule: guardrail.routingRule,
-      notes: guardrail.notes,
+  const numberProps = { type: 'number', inputMode: 'numeric' as const, min: 0 };
+
+  return (
+    <SampleEditDialog
+      open
+      title={rule ? RULES.dialog.editTitle : RULES.dialog.addTitle}
+      line={RULES.dialog.line}
+      saveLabel={rule ? DIALOG.save : RULES.dialog.create}
+      onSave={save}
+      onClose={onClose}
+      remove={rule ? { label: RULES.remove.action, onSelect: () => onRemove(rule.id) } : undefined}
+    >
+      <Input
+        label={RULES.fields.name}
+        value={form.name}
+        placeholder={RULES.fields.namePlaceholder}
+        onChange={(event) => update('name', event.target.value)}
+        error={shown('name')}
+      />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Input
+          {...numberProps}
+          label={RULES.fields.approvals}
+          value={form.approvals}
+          onChange={(event) => update('approvals', event.target.value)}
+          error={shown('approvals')}
+        />
+        <Input
+          {...numberProps}
+          label={RULES.fields.signers}
+          value={form.signers}
+          onChange={(event) => update('signers', event.target.value)}
+          error={shown('signers')}
+        />
+        <Input
+          {...numberProps}
+          label={RULES.fields.perPayment}
+          value={form.perPayment}
+          placeholder={RULES.fields.limitPlaceholder}
+          onChange={(event) => update('perPayment', event.target.value)}
+          error={shown('perPayment')}
+        />
+        <Input
+          {...numberProps}
+          label={RULES.fields.daily}
+          value={form.daily}
+          placeholder={RULES.fields.limitPlaceholder}
+          onChange={(event) => update('daily', event.target.value)}
+          error={shown('daily')}
+        />
+      </div>
+      <Input
+        {...numberProps}
+        label={RULES.fields.wait}
+        helper={RULES.fields.waitHelper}
+        value={form.wait}
+        onChange={(event) => update('wait', event.target.value)}
+        error={shown('wait')}
+      />
+      <Input
+        label={RULES.fields.assets}
+        optional
+        value={form.assets}
+        placeholder={RULES.fields.assetsPlaceholder}
+        onChange={(event) => update('assets', event.target.value)}
+      />
+    </SampleEditDialog>
+  );
+}
+
+function AssetRuleDialog({ row, onClose }: { row: DaoAssetRuleRow; onClose: () => void }) {
+  const saveAssetRule = useDaoWorkspace((state) => state.saveAssetRule);
+  const ruleOptions = useRuleOptions();
+  const { toast } = useToast();
+  const [ruleId, setRuleId] = useState(row.ruleId ?? NO_RULE);
+  const [daily, setDaily] = useState(row.dailyLimitUsd === null ? '' : String(row.dailyLimitUsd));
+  const [goesTo, setGoesTo] = useState(row.goesTo);
+  const [notes, setNotes] = useState(row.notes);
+  const [submitted, setSubmitted] = useState(false);
+
+  const dailyValue = daily.trim() === '' ? null : dollars(daily);
+  const dailyError =
+    submitted && daily.trim() !== '' && dailyValue === null ? RULES.errors.limit : undefined;
+
+  const save = () => {
+    setSubmitted(true);
+    if (daily.trim() !== '' && dailyValue === null) return;
+    saveAssetRule(row.id, {
+      ruleId: ruleId === NO_RULE ? null : ruleId,
+      dailyLimitUsd: dailyValue,
+      goesTo: goesTo.trim(),
+      notes: notes.trim(),
     });
-    setIsGuardrailModalOpen(true);
-  };
-
-  const openRecipientModal = (recipient?: DaoWorkspaceRecipientRule) => {
-    if (recipient) {
-      setEditingRecipient(recipient);
-      setRecipientDraft({
-        name: recipient.name,
-        address: recipient.address,
-        category: recipient.category,
-        assetScope: recipient.assetScope,
-        lane: recipient.lane,
-        status: recipient.status,
-      });
-    } else {
-      setEditingRecipient(null);
-      setRecipientDraft(emptyRecipientDraft);
-    }
-    setIsRecipientModalOpen(true);
+    toast({ tone: 'success', title: ACTIVITY.assetRuleUpdated });
+    onClose();
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 md:px-6">
-      <div className="mb-6">
-        <p className="mb-3 text-xs font-mono uppercase tracking-[0.24em] text-textMuted">DAO Treasury</p>
-        <h1 className="font-display text-3xl text-textPrimary md:text-5xl">Treasury Policy</h1>
-        <p className="mt-3 max-w-3xl text-base leading-7 text-textSecondary">
-          Control how treasury value moves by editing execution lanes, asset guardrails, and recipient routing rules.
-        </p>
-      </div>
-
-      <DaoSectionNav />
-
-      <DaoPreviewBanner
-        eyebrow="Policy Surface"
-        title="Thresholds, delays, whitelists, and asset rules in one place."
-        description="This page is built to act like a full treasury policy console, even before the backend policy engine lands. Lanes, guardrails, and routing rules are all editable and persist locally."
+    <SampleEditDialog
+      open
+      title={RULES.assets.editTitle}
+      line={RULES.assets.line}
+      saveLabel={DIALOG.save}
+      onSave={save}
+      onClose={onClose}
+    >
+      <p className="text-title-item text-ink">{row.asset}</p>
+      <Select
+        label={RULES.assets.defaultRule}
+        options={ruleOptions}
+        value={ruleId}
+        onValueChange={setRuleId}
       />
+      <Input
+        type="number"
+        inputMode="numeric"
+        min={0}
+        label={RULES.fields.daily}
+        optional
+        helper={RULES.assets.dailyHelper}
+        value={daily}
+        onChange={(event) => setDaily(event.target.value)}
+        error={dailyError}
+      />
+      <Input
+        label={RULES.assets.goesTo}
+        optional
+        value={goesTo}
+        placeholder={RULES.assets.goesToPlaceholder}
+        onChange={(event) => setGoesTo(event.target.value)}
+      />
+      <Input
+        label={RULES.assets.notes}
+        optional
+        value={notes}
+        onChange={(event) => setNotes(event.target.value)}
+      />
+    </SampleEditDialog>
+  );
+}
 
-      <div className="mb-8 flex flex-wrap gap-3">
-        <Button
-          onClick={() =>
-            navigate(
-              '/streams/batch-create',
-              {
-                state: buildDaoBatchStreamState(recipientRules, {
-                  source: 'dao-policy',
-                  title: 'Open payroll batch from policy',
-                  description: 'Approved routing rules are preloaded into the shared batch stream console so treasury ops can act without rebuilding the roster.',
-                  preferredLane: 'Finance lane',
-                }),
-              },
-            )
+const EMPTY_RECIPIENT: RecipientDraft = {
+  name: '',
+  address: '',
+  usedFor: 'payroll',
+  assets: '',
+  ruleId: null,
+  status: 'underReview',
+};
+
+function RecipientDialog({
+  row,
+  onClose,
+  onRemove,
+}: {
+  row?: DaoRecipientRow;
+  onClose: () => void;
+  onRemove: (id: string) => void;
+}) {
+  const saveRecipient = useDaoWorkspace((state) => state.saveRecipient);
+  const ruleOptions = useRuleOptions();
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<RecipientDraft>(() => (row ? { ...row } : EMPTY_RECIPIENT));
+  const [submitted, setSubmitted] = useState(false);
+
+  const isNew = !row;
+  const name = draft.name.trim();
+  const address = draft.address.trim();
+  const addressMissing = isNew && !address;
+  const nameError = submitted && !name ? DIALOG.nameMissing : undefined;
+  const addressError = submitted && addressMissing ? RULES.recipients.addressMissing : undefined;
+  const update = <K extends keyof RecipientDraft>(key: K, value: RecipientDraft[K]) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+
+  const save = () => {
+    setSubmitted(true);
+    if (!name || addressMissing || (address && address !== row?.address && !isValidAddress(address, BUILD_NETWORK))) return;
+    saveRecipient({ ...draft, name, address, assets: draft.assets.trim() }, row?.id);
+    toast({ tone: 'success', title: row ? ACTIVITY.recipientUpdated : ACTIVITY.recipientAdded });
+    onClose();
+  };
+
+  return (
+    <SampleEditDialog
+      open
+      title={row ? RULES.recipients.editTitle : RULES.recipients.addTitle}
+      line={RULES.recipients.line}
+      saveLabel={row ? DIALOG.save : RULES.recipients.create}
+      onSave={save}
+      onClose={onClose}
+      remove={
+        row ? { label: RULES.removeRecipient.action, onSelect: () => onRemove(row.id) } : undefined
+      }
+    >
+      <Input
+        label={RULES.recipients.name}
+        value={draft.name}
+        placeholder={RULES.recipients.namePlaceholder}
+        onChange={(event) => update('name', event.target.value)}
+        error={nameError}
+      />
+      <AddressInput
+        label={RULES.recipients.addressLabel}
+        helper={isNew ? RULES.recipients.newAddressHelper : RULES.recipients.addressHelper}
+        network={BUILD_NETWORK}
+        value={draft.address}
+        onChange={(value) => update('address', value)}
+        error={addressError}
+      />
+      <Select
+        label={RULES.recipients.usedFor}
+        options={USE_OPTIONS}
+        value={draft.usedFor}
+        onValueChange={(value) => update('usedFor', value)}
+      />
+      <Input
+        label={RULES.recipients.assets}
+        optional
+        value={draft.assets}
+        placeholder={RULES.fields.assetsPlaceholder}
+        onChange={(event) => update('assets', event.target.value)}
+      />
+      <Select
+        label={RULES.recipients.rule}
+        options={ruleOptions}
+        value={draft.ruleId ?? NO_RULE}
+        onValueChange={(value) => update('ruleId', value === NO_RULE ? null : value)}
+      />
+      <Select
+        label={RULES.recipients.status}
+        helper={RULES.recipients.statusHelper}
+        options={STATUS_OPTIONS}
+        value={draft.status}
+        onValueChange={(value) => update('status', value)}
+      />
+    </SampleEditDialog>
+  );
+}
+
+type Editing =
+  | { kind: 'rule'; row?: DaoSpendingRuleRow }
+  | { kind: 'asset'; row: DaoAssetRuleRow }
+  | { kind: 'recipient'; row?: DaoRecipientRow };
+
+type Removing =
+  | { kind: 'rule'; row: DaoSpendingRuleRow }
+  | { kind: 'recipient'; row: DaoRecipientRow };
+
+export function DaoTreasuryPolicyPage() {
+  const { rules, assetRules, recipients, removeRule, removeRecipient } = useDaoWorkspace();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [removing, setRemoving] = useState<Removing | null>(null);
+
+  const approvedCount = recipients.filter((row) => row.status === 'approved').length;
+  const emergencyRule = rules.find((rule) => EMERGENCY.test(rule.name));
+  const openAddRule = () => setEditing({ kind: 'rule' });
+  const openAddRecipient = () => setEditing({ kind: 'recipient' });
+
+  const ruleColumns: Column<DaoSpendingRuleRow>[] = [
+    {
+      key: 'rule',
+      header: RULES.list.rule,
+      primary: true,
+      mobile: 'top',
+      cell: (row) => <NameCell title={row.name} meta={row.assets || DIALOG.none} />,
+    },
+    {
+      key: 'approvals',
+      header: RULES.list.approvals,
+      mobile: 'bottom-end',
+      cell: (row) => approvalsWords(row.approvalsNeeded, row.signerCount),
+    },
+    {
+      key: 'perPayment',
+      header: RULES.list.perPayment,
+      align: 'end',
+      mobile: 'bottom-start',
+      cell: (row) => (
+        <CardLabelled before={RULES.upTo} after={RULES.each}>
+          {usd(row.limitPerPaymentUsd)}
+        </CardLabelled>
+      ),
+    },
+    {
+      key: 'daily',
+      header: RULES.list.daily,
+      align: 'end',
+      mobile: 'bottom-start',
+      mobileLabel: RULES.list.daily,
+      cell: (row) => usd(row.dailyLimitUsd),
+    },
+    {
+      key: 'wait',
+      header: RULES.list.wait,
+      mobile: 'bottom-end',
+      cell: (row) => waitWords(row.waitHours),
+    },
+  ];
+
+  const assetColumns: Column<DaoAssetRuleRow>[] = [
+    {
+      key: 'asset',
+      header: RULES.assets.asset,
+      primary: true,
+      mobile: 'top',
+      cell: (row) => <NameCell title={row.asset} meta={row.notes || DIALOG.none} />,
+    },
+    {
+      key: 'rule',
+      header: RULES.assets.defaultRule,
+      mobile: 'bottom-start',
+      mobileLabel: RULES.list.rule,
+      cell: (row) => ruleName(rules, row.ruleId) ?? DIALOG.none,
+    },
+    {
+      key: 'daily',
+      header: RULES.assets.daily,
+      align: 'end',
+      mobile: 'bottom-end',
+      cell: (row) =>
+        row.dailyLimitUsd === null ? (
+          RULES.noDailyLimit
+        ) : (
+          <CardLabelled before={RULES.assets.daily}>{usd(row.dailyLimitUsd)}</CardLabelled>
+        ),
+    },
+    {
+      key: 'goesTo',
+      header: RULES.assets.goesTo,
+      mobile: 'hidden',
+      cell: (row) => row.goesTo || DIALOG.none,
+    },
+  ];
+
+  const recipientColumns: Column<DaoRecipientRow>[] = [
+    {
+      key: 'recipient',
+      header: RULES.recipients.recipient,
+      primary: true,
+      mobile: 'top',
+      cell: (row) => <NameCell title={row.name} meta={RECIPIENT_USE_WORD[row.usedFor]} />,
+    },
+    {
+      key: 'address',
+      header: RULES.recipients.address,
+      mobile: 'hidden',
+      cell: (row) =>
+        row.address ? <Address value={row.address} copy={false} /> : RULES.recipients.noAddress,
+    },
+    {
+      key: 'assets',
+      header: RULES.recipients.assets,
+      mobile: 'hidden',
+      cell: (row) => row.assets || DIALOG.none,
+    },
+    {
+      key: 'rule',
+      header: RULES.recipients.rule,
+      mobile: 'bottom-start',
+      mobileLabel: RULES.list.rule,
+      cell: (row) => ruleName(rules, row.ruleId) ?? DIALOG.none,
+    },
+    {
+      key: 'status',
+      header: RULES.recipients.status,
+      mobile: 'bottom-end',
+      cell: (row) => <StatusPill status={row.status} size="sm" />,
+    },
+  ];
+
+  const startRemove = (next: Removing) => {
+    setEditing(null);
+    setRemoving(next);
+  };
+
+  const confirmRemove = async () => {
+    if (!removing) return;
+    if (removing.kind === 'rule') {
+      removeRule(removing.row.id);
+      toast({ tone: 'success', title: RULES.remove.done });
+    } else {
+      removeRecipient(removing.row.id);
+      toast({ tone: 'success', title: RULES.removeRecipient.done });
+    }
+    setRemoving(null);
+  };
+
+  const removeCopy =
+    removing?.kind === 'rule'
+      ? { ...RULES.remove, title: RULES.remove.title(removing.row.name), body: RULES.remove.body }
+      : removing?.kind === 'recipient'
+        ? {
+            ...RULES.removeRecipient,
+            title: RULES.removeRecipient.title(removing.row.name),
+            body: RULES.removeRecipient.body(removing.row.name),
+          }
+        : null;
+
+  return (
+    <PageContainer>
+      <OrganizationHeader
+        page="rules"
+        sample
+        stateLine={SAMPLE.savedHere}
+        primaryAction={
+          <Button variant="primary" leadingIcon={Plus} onClick={openAddRule}>
+            {RULES.add}
+          </Button>
+        }
+      />
+      <Stack>
+        <Notice
+          tone="info"
+          title={RULES.notice.title}
+          action={
+            <ButtonLink variant="link" to="/vaults">
+              {RULES.notice.action}
+            </ButtonLink>
           }
         >
-          Launch policy-approved batch
-        </Button>
-        <Link to="/streams/create?template=tranche-cliff-staged" state={{
-          daoContext: {
-            source: 'dao-policy',
-            title: 'Open staged treasury vesting',
-            description: 'Launching the shared stream builder from treasury policy with a staged vesting template.',
-            preferredLane: 'Timelocked lane',
-          },
-        }}>
-          <Button variant="outline">Create staged treasury vesting</Button>
-        </Link>
-      </div>
+          <p>{RULES.notice.body}</p>
+        </Notice>
 
-      <div className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatsCard
-          label="Execution Lanes"
-          value={policyLanes.length}
-          subtitle="Immediate, finance, timelocked, emergency"
-          icon={SlidersHorizontal}
-          color="accent"
-        />
-        <StatsCard
-          label="Approved Recipients"
-          value={summary.whitelistedRecipients}
-          subtitle="Treasury routes currently allowed"
-          icon={Shield}
-          color="primary"
-        />
-        <StatsCard
-          label="Emergency Delay"
-          value={summary.emergencyDelay}
-          subtitle="High-friction override window"
-          icon={Siren}
-          color="secondary"
-        />
-        <StatsCard
-          label="Policy Coverage"
-          value={summary.policyCoverage}
-          subtitle={`${guardrails.length} asset guardrails in force`}
-          icon={Landmark}
-          color="muted"
-        />
-      </div>
+        <StatRow>
+          <StatTile label={RULES.stats.rules} value={rules.length} sub={SAMPLE.tag} />
+          <StatTile label={RULES.stats.recipients} value={approvedCount} />
+          <StatTile
+            label={RULES.stats.emergencyWait}
+            value={emergencyRule ? hoursWords(emergencyRule.waitHours) : LABELS.notSet}
+          />
+          <StatTile label={RULES.stats.assetRules} value={assetRules.length} />
+        </StatRow>
 
-      <div className="mb-8 grid gap-6 xl:grid-cols-[1.05fr,0.95fr]">
-        <Card padding="lg" className="border-border/40">
-          <div className="mb-5 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Execution Lanes</p>
-              <h2 className="mt-2 font-display text-2xl text-textPrimary">Threshold and timing model</h2>
-            </div>
-            <Button variant="outline" onClick={() => openLaneModal()}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Lane
+        <OrganizationSection title={RULES.list.title} description={RULES.list.description}>
+          <List
+            label={RULES.list.listLabel}
+            columns={ruleColumns}
+            rows={rules}
+            rowKey={(row) => row.id}
+            onRowOpen={(row) => setEditing({ kind: 'rule', row })}
+            state={rules.length > 0 ? 'ready' : 'empty'}
+            empty={
+              <EmptyState
+                icon={ShieldCheck}
+                title={RULES.empty.title}
+                description={RULES.empty.description}
+                action={
+                  <Button variant="primary" leadingIcon={Plus} onClick={openAddRule}>
+                    {RULES.add}
+                  </Button>
+                }
+              />
+            }
+            noResults={null}
+            error={null}
+          />
+        </OrganizationSection>
+
+        <OrganizationSection title={RULES.assets.title} description={RULES.assets.description}>
+          <List
+            label={RULES.assets.listLabel}
+            columns={assetColumns}
+            rows={assetRules}
+            rowKey={(row) => row.id}
+            onRowOpen={(row) => setEditing({ kind: 'asset', row })}
+            state="ready"
+            empty={null}
+            noResults={null}
+            error={null}
+          />
+        </OrganizationSection>
+
+        <OrganizationSection
+          title={RULES.recipients.title}
+          description={RULES.recipients.description}
+          action={
+            <Button variant="secondary" size="sm" leadingIcon={Plus} onClick={openAddRecipient}>
+              {RULES.recipients.add}
             </Button>
-          </div>
-          <div className="space-y-4">
-            {policyLanes.map((lane) => (
-              <button
-                key={lane.id}
-                onClick={() => openLaneModal(lane)}
-                className="w-full rounded-2xl border border-border/30 bg-surfaceAlt p-4 text-left transition-colors hover:border-borderHover hover:bg-surface"
-              >
-                <div className="mb-3 flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
-                  <div>
-                    <h3 className="font-display text-xl text-textPrimary">{lane.lane}</h3>
-                    <p className="text-sm text-textSecondary">{lane.approvers}</p>
-                  </div>
-                  <span className="rounded-full bg-surface px-3 py-1 text-xs font-mono text-textPrimary">
-                    {lane.executionWindow}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2 text-xs font-mono text-textMuted">
-                  <span className="rounded-full bg-surface px-2 py-1">{lane.txCap} / tx</span>
-                  <span className="rounded-full bg-surface px-2 py-1">{lane.dailyCap} daily</span>
-                  <span className="rounded-full bg-surface px-2 py-1">{lane.assets}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </Card>
-
-        <div className="space-y-6">
-          <Card padding="lg" className="border-border/40">
-            <div className="mb-4 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Policy Principles</p>
-                <h2 className="mt-2 font-display text-2xl text-textPrimary">How the treasury should behave</h2>
-              </div>
-              <div className="rounded-2xl bg-primary/10 p-3 text-primary">
-                <Shield className="h-6 w-6" />
-              </div>
-            </div>
-            <div className="space-y-3">
-              {[
-                'BCH operations should stay fast, but only inside caps and approved recipient paths.',
-                'Stablecoin settlement should require stronger review and richer accounting context.',
-                'Governance token flows should be timelocked and socially reviewable before execution.',
-                'NFT receipts and milestone proofs should behave like audit-sensitive treasury artifacts.',
-              ].map((item) => (
-                <div key={item} className="flex items-start gap-3 rounded-2xl bg-surfaceAlt p-4">
-                  <div className="mt-1 h-2 w-2 rounded-full bg-accent" />
-                  <p className="text-sm leading-6 text-textSecondary">{item}</p>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card padding="lg" className="border-border/40">
-            <div className="mb-4 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Guardrail Health</p>
-                <h2 className="mt-2 font-display text-2xl text-textPrimary">Asset rule coverage</h2>
-              </div>
-              <div className="rounded-2xl bg-secondary/10 p-3 text-secondary">
-                <Siren className="h-6 w-6" />
-              </div>
-            </div>
-            <div className="space-y-3">
-              {guardrails.map((guardrail) => (
-                <button
-                  key={guardrail.id}
-                  onClick={() => openGuardrailModal(guardrail)}
-                  className="w-full rounded-2xl border border-border/30 bg-surfaceAlt p-4 text-left transition-colors hover:border-borderHover hover:bg-surface"
-                >
-                  <div className="mb-2 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="font-display text-lg text-textPrimary">{guardrail.assetClass}</h3>
-                    <span className="rounded-full bg-surface px-2 py-1 text-[11px] font-mono uppercase tracking-[0.18em] text-textMuted">
-                      {guardrail.defaultLane}
-                    </span>
-                  </div>
-                  <p className="text-sm leading-6 text-textSecondary">{guardrail.routingRule}</p>
-                </button>
-              ))}
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      <div className="mb-8">
-        <div className="mb-4 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Policy Matrix</p>
-            <h2 className="mt-2 font-display text-2xl text-textPrimary">Lanes, caps, and delays</h2>
-          </div>
-          <Link to="/proposals" className="inline-flex items-center gap-2 text-sm font-mono text-accent hover:text-primary">
-            Compare with proposal queue
-            <ArrowRight className="h-4 w-4" />
-          </Link>
-        </div>
-        <DataTable
-          columns={laneColumns}
-          data={policyLanes}
-          onRowClick={openLaneModal}
-          enableImport={false}
-          emptyMessage="No policy lanes configured yet."
-        />
-      </div>
-
-      <div className="mb-8">
-        <div className="mb-4">
-          <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Asset Guardrails</p>
-          <h2 className="mt-2 font-display text-2xl text-textPrimary">Rules by treasury asset class</h2>
-        </div>
-        <DataTable
-          columns={guardrailColumns}
-          data={guardrails}
-          onRowClick={openGuardrailModal}
-          enableImport={false}
-          emptyMessage="No asset guardrails configured yet."
-        />
-      </div>
-
-      <div className="mb-8">
-        <div className="mb-4 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-mono uppercase tracking-[0.24em] text-textMuted">Recipient Rules</p>
-            <h2 className="mt-2 font-display text-2xl text-textPrimary">Whitelisted treasury destinations</h2>
-          </div>
-          <Button variant="outline" onClick={() => openRecipientModal()}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Recipient Rule
-          </Button>
-        </div>
-        <DataTable
-          columns={recipientColumns}
-          data={recipientRules}
-          onRowClick={openRecipientModal}
-          enableImport={false}
-          emptyMessage="No recipient rules configured yet."
-        />
-      </div>
-
-      <DaoWorkspaceModal
-        isOpen={isLaneModalOpen}
-        onClose={() => {
-          setEditingLane(null);
-          setIsLaneModalOpen(false);
-        }}
-        onSubmit={() => {
-          if (editingLane) {
-            updatePolicyLane(editingLane.id, laneDraft);
-          } else {
-            addPolicyLane(laneDraft);
           }
-          setEditingLane(null);
-          setIsLaneModalOpen(false);
-        }}
-        submitLabel={editingLane ? 'Update lane' : 'Create lane'}
-        submitDisabled={!laneDraft.lane.trim()}
-        title={editingLane ? 'Update policy lane' : 'Create policy lane'}
-        description="Use lanes to define spend caps, approval thresholds, delays, and which asset classes can move through each route."
-      >
-        <div className="grid gap-4 md:grid-cols-2">
-          <Input
-            label="Lane name"
-            value={laneDraft.lane}
-            onChange={(event) => setLaneDraft((current) => ({ ...current, lane: event.target.value }))}
-          />
-          <Input
-            label="Approvers"
-            value={laneDraft.approvers}
-            onChange={(event) => setLaneDraft((current) => ({ ...current, approvers: event.target.value }))}
-            placeholder="3 of 5 reviewers"
-          />
-          <Input
-            label="Per-transaction cap"
-            value={laneDraft.txCap}
-            onChange={(event) => setLaneDraft((current) => ({ ...current, txCap: event.target.value }))}
-          />
-          <Input
-            label="Daily cap"
-            value={laneDraft.dailyCap}
-            onChange={(event) => setLaneDraft((current) => ({ ...current, dailyCap: event.target.value }))}
-          />
-          <Input
-            label="Execution window"
-            value={laneDraft.executionWindow}
-            onChange={(event) => setLaneDraft((current) => ({ ...current, executionWindow: event.target.value }))}
-          />
-          <Input
-            label="Assets"
-            value={laneDraft.assets}
-            onChange={(event) => setLaneDraft((current) => ({ ...current, assets: event.target.value }))}
-            placeholder="BCH, USDh"
-          />
-        </div>
-      </DaoWorkspaceModal>
-
-      <DaoWorkspaceModal
-        isOpen={isGuardrailModalOpen}
-        onClose={() => {
-          setEditingGuardrail(null);
-          setIsGuardrailModalOpen(false);
-        }}
-        onSubmit={() => {
-          if (editingGuardrail) {
-            updateGuardrail(editingGuardrail.id, guardrailDraft);
-          }
-          setEditingGuardrail(null);
-          setIsGuardrailModalOpen(false);
-        }}
-        submitLabel="Update guardrail"
-        submitDisabled={!guardrailDraft.assetClass.trim()}
-        title="Update asset guardrail"
-        description="Guardrails define how each asset class should be routed, capped, and explained inside the treasury workspace."
-      >
-        <div className="grid gap-4 md:grid-cols-2">
-          <Input
-            label="Asset class"
-            value={guardrailDraft.assetClass}
-            onChange={(event) => setGuardrailDraft((current) => ({ ...current, assetClass: event.target.value }))}
-          />
-          <Select
-            label="Default lane"
-            value={guardrailDraft.defaultLane}
-            onChange={(event) => setGuardrailDraft((current) => ({ ...current, defaultLane: event.target.value }))}
-            options={policyLanes.map((lane) => ({ value: lane.lane, label: lane.lane }))}
-          />
-          <Input
-            label="Daily net cap"
-            value={guardrailDraft.dailyNetCap}
-            onChange={(event) => setGuardrailDraft((current) => ({ ...current, dailyNetCap: event.target.value }))}
-          />
-          <div className="md:col-span-2">
-            <Textarea
-              label="Routing rule"
-              rows={3}
-              value={guardrailDraft.routingRule}
-              onChange={(event) => setGuardrailDraft((current) => ({ ...current, routingRule: event.target.value }))}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <Textarea
-              label="Notes"
-              rows={3}
-              value={guardrailDraft.notes}
-              onChange={(event) => setGuardrailDraft((current) => ({ ...current, notes: event.target.value }))}
-            />
-          </div>
-        </div>
-      </DaoWorkspaceModal>
-
-      <DaoWorkspaceModal
-        isOpen={isRecipientModalOpen}
-        onClose={() => {
-          setEditingRecipient(null);
-          setIsRecipientModalOpen(false);
-        }}
-        onSubmit={() => {
-          if (editingRecipient) {
-            updateRecipientRule(editingRecipient.id, recipientDraft);
-          } else {
-            addRecipientRule(recipientDraft);
-          }
-          setEditingRecipient(null);
-          setIsRecipientModalOpen(false);
-        }}
-        onDelete={editingRecipient ? () => {
-          removeRecipientRule(editingRecipient.id);
-          setEditingRecipient(null);
-          setIsRecipientModalOpen(false);
-        } : undefined}
-        deleteLabel="Remove rule"
-        submitLabel={editingRecipient ? 'Update recipient rule' : 'Create recipient rule'}
-        submitDisabled={!recipientDraft.name.trim() || !recipientDraft.address.trim()}
-        title={editingRecipient ? 'Update recipient rule' : 'Add recipient rule'}
-        description="Recipient rules determine which treasury destinations are allowed, under which lane, and for which asset classes."
-      >
-        <div className="grid gap-4 md:grid-cols-2">
-          <Input
-            label="Recipient name"
-            value={recipientDraft.name}
-            onChange={(event) => setRecipientDraft((current) => ({ ...current, name: event.target.value }))}
-          />
-          <Input
-            label="Address"
-            value={recipientDraft.address}
-            onChange={(event) => setRecipientDraft((current) => ({ ...current, address: event.target.value }))}
-          />
-          <Select
-            label="Category"
-            value={recipientDraft.category}
-            onChange={(event) =>
-              setRecipientDraft((current) => ({
-                ...current,
-                category: event.target.value as DaoRecipientRuleDraft['category'],
-              }))
+        >
+          <List
+            label={RULES.recipients.listLabel}
+            columns={recipientColumns}
+            rows={recipients}
+            rowKey={(row) => row.id}
+            onRowOpen={(row) => setEditing({ kind: 'recipient', row })}
+            state={recipients.length > 0 ? 'ready' : 'empty'}
+            empty={
+              <EmptyState
+                icon={Users}
+                title={RULES.recipients.empty}
+                description={RULES.recipients.emptyLine}
+              />
             }
-            options={[
-              { value: 'Payroll', label: 'Payroll' },
-              { value: 'Vendor', label: 'Vendor' },
-              { value: 'Grant', label: 'Grant' },
-              { value: 'Delegate', label: 'Delegate' },
-              { value: 'Emergency', label: 'Emergency' },
-            ]}
+            noResults={null}
+            error={null}
           />
-          <Input
-            label="Asset scope"
-            value={recipientDraft.assetScope}
-            onChange={(event) => setRecipientDraft((current) => ({ ...current, assetScope: event.target.value }))}
-            placeholder="BCH, USDh"
-          />
-          <Select
-            label="Lane"
-            value={recipientDraft.lane}
-            onChange={(event) => setRecipientDraft((current) => ({ ...current, lane: event.target.value }))}
-            options={policyLanes.map((lane) => ({ value: lane.lane, label: lane.lane }))}
-          />
-          <Select
-            label="Status"
-            value={recipientDraft.status}
-            onChange={(event) =>
-              setRecipientDraft((current) => ({
-                ...current,
-                status: event.target.value as DaoRecipientRuleDraft['status'],
-              }))
-            }
-            options={[
-              { value: 'Approved', label: 'Approved' },
-              { value: 'Watch', label: 'Watch' },
-              { value: 'Blocked', label: 'Blocked' },
-            ]}
-          />
-        </div>
-      </DaoWorkspaceModal>
-    </div>
+        </OrganizationSection>
+
+        <HelpList title={RULES.help.title} lines={RULES.help.lines} />
+      </Stack>
+
+      {editing?.kind === 'rule' ? (
+        <RuleDialog
+          key={editing.row?.id ?? 'new'}
+          rule={editing.row}
+          onClose={() => setEditing(null)}
+          onRemove={(id) => {
+            const row = rules.find((rule) => rule.id === id);
+            if (row) startRemove({ kind: 'rule', row });
+          }}
+        />
+      ) : null}
+      {editing?.kind === 'asset' ? (
+        <AssetRuleDialog key={editing.row.id} row={editing.row} onClose={() => setEditing(null)} />
+      ) : null}
+      {editing?.kind === 'recipient' ? (
+        <RecipientDialog
+          key={editing.row?.id ?? 'new'}
+          row={editing.row}
+          onClose={() => setEditing(null)}
+          onRemove={(id) => {
+            const row = recipients.find((recipient) => recipient.id === id);
+            if (row) startRemove({ kind: 'recipient', row });
+          }}
+        />
+      ) : null}
+      <ConfirmDialog
+        open={removeCopy !== null}
+        title={removeCopy?.title ?? ''}
+        body={removeCopy?.body ?? ''}
+        confirmLabel={removeCopy?.action ?? ''}
+        keepLabel={removeCopy?.keep ?? ''}
+        tone="danger"
+        busyLabel={removeCopy?.busy ?? ''}
+        onConfirm={confirmRemove}
+        onClose={() => setRemoving(null)}
+      />
+    </PageContainer>
   );
-};
+}

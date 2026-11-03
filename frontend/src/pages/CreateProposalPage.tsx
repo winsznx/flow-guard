@@ -1,216 +1,307 @@
-import { useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Card } from '../components/ui/Card';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { Address } from '../components/ui/Address';
+import { AddressInput } from '../components/ui/AddressInput';
+import { Amount } from '../components/ui/Amount';
+import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Card } from '../components/ui/Card';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorState } from '../components/ui/ErrorState';
+import { ErrorSummary } from '../components/ui/ErrorSummary';
+import { Notice } from '../components/ui/Notice';
+import { Skeleton } from '../components/ui/Skeleton';
 import { Textarea } from '../components/ui/Textarea';
+import { TransactionReview } from '../components/ui/TransactionReview';
+import type { Asset } from '../components/ui/types';
+import { asFlowError, type FlowError } from '../copy/errors';
+import { formatAmount } from '../copy/format';
+import { addressErrors } from '../copy/network';
+import { REQUEST_CREATE } from '../copy/requests';
+import { signersRequiredShort, vaultTitle } from '../copy/vaults';
+import { useNetwork } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
-import { createProposal } from '../utils/api';
+import { createProposal, fetchVault } from '../utils/api';
+import { authFetch, type WalletForAuth } from '../utils/auth';
 import { createProposalOnChain } from '../utils/blockchain';
-import { ChevronLeft, Send, AlertCircle } from 'lucide-react';
+
+const BCH: Asset = { kind: 'bch' };
+const FIELD_IDS = {
+  recipient: 'request-recipient',
+  amount: 'request-amount',
+  reason: 'request-reason',
+} as const;
+
+type VaultSummary = {
+  name: string;
+  balance: number | null;
+  spendingCap: number;
+  approvalThreshold: number;
+  signerCount: number;
+  isSigner: boolean;
+};
+
+type Errors = Partial<Record<keyof typeof FIELD_IDS, string>>;
+
+function toSummary(raw: Record<string, unknown>): VaultSummary {
+  const id = typeof raw.id === 'string' ? raw.id : '';
+  const balance = typeof raw.balance === 'number' && raw.contractAddress ? raw.balance / 1e8 : null;
+  return {
+    name: vaultTitle({ id, name: typeof raw.name === 'string' ? raw.name : null }),
+    balance,
+    spendingCap: Number(raw.spendingCap) || 0,
+    approvalThreshold: Number(raw.approvalThreshold) || 0,
+    signerCount: Array.isArray(raw.signers) ? raw.signers.length : 0,
+    isSigner: raw.role === 'creator' || raw.role === 'signer',
+  };
+}
+
+/** A request whose signature never went out leaves a pending row behind. The server marks it abandoned. */
+async function abandonRequest(requestId: string, wallet: WalletForAuth): Promise<void> {
+  const response = await authFetch(`/api/proposals/${requestId}`, { wallet, method: 'DELETE' });
+  if (!response.ok) console.warn('Abandoned spending request was not cleaned up', response.status);
+}
 
 export default function CreateProposalPage() {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
+  const { id = '' } = useParams<{ id: string }>();
   const wallet = useWallet();
-  const [formData, setFormData] = useState({
-    recipient: '',
-    amount: '',
-    reason: '',
-  });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const network = useNetwork();
+  const [vault, setVault] = useState<VaultSummary | null>(null);
+  const [loadError, setLoadError] = useState<FlowError | null>(null);
+  const [recipient, setRecipient] = useState('');
+  const [recipientValid, setRecipientValid] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [errors, setErrors] = useState<Errors>({});
+  const [reviewing, setReviewing] = useState(false);
+  const [done, setDone] = useState(false);
 
-  const isValidBchAddress = (value: string): boolean => {
-    const addr = value.trim();
-    if (!addr) return false;
-    // Basic BCH cashaddr validation for now – expect chipnet or mainnet prefix
-    if (addr.startsWith('bchtest:') || addr.startsWith('bitcoincash:')) {
-      return true;
-    }
-    return false;
-  };
-
-  const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleSubmit = async () => {
-    if (!wallet.address) {
-      setError('Please connect your wallet first');
-      return;
-    }
-
-    if (!id) {
-      setError('Vault ID is missing');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
+  const load = useCallback(async () => {
+    setLoadError(null);
     try {
-      // Normalize inputs
-      const recipient = formData.recipient.trim();
-      const amountValue = parseFloat(formData.amount);
+      const raw = await fetchVault(id, wallet.address || undefined);
+      setVault(toSummary(raw));
+    } catch (error) {
+      setLoadError(asFlowError(error));
+    }
+  }, [id, wallet.address]);
 
-      // Validate form
-      if (!isValidBchAddress(recipient)) {
-        throw new Error('Recipient must be a valid BCH cash address (e.g. bchtest:qq...)');
-      }
-      if (!formData.amount || Number.isNaN(amountValue) || amountValue <= 0) {
-        throw new Error('Amount must be greater than 0');
-      }
-      if (!formData.reason.trim()) {
-        throw new Error('Reason is required');
-      }
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-      // Create proposal via API
-      const proposalData = {
-        recipient,
+  const backAction = { to: `/vaults/${id}`, label: REQUEST_CREATE.back };
+  const description = vault
+    ? REQUEST_CREATE.description(vault.name)
+    : REQUEST_CREATE.descriptionFallback;
+
+  if (loadError) {
+    return (
+      <PageContainer width="reading">
+        <PageHeader title={REQUEST_CREATE.title} description={description} back={backAction} />
+        <ErrorState
+          title={REQUEST_CREATE.loadFailedTitle}
+          reason={loadError.message}
+          onRetry={load}
+        />
+      </PageContainer>
+    );
+  }
+
+  if (!vault) {
+    return (
+      <PageContainer width="reading">
+        <PageHeader title={REQUEST_CREATE.title} description={description} back={backAction} />
+        <Skeleton kind="row" lines={4} />
+      </PageContainer>
+    );
+  }
+
+  const canSign = Boolean(wallet.signCashScriptTransaction);
+  const amountValue = Number.parseFloat(amount);
+
+  const validate = (): Errors => {
+    const next: Errors = {};
+    if (!recipient.trim()) next.recipient = REQUEST_CREATE.recipientRequired;
+    else if (!recipientValid) next.recipient = addressErrors(network).notAnAddress;
+    if (!Number.isFinite(amountValue) || amountValue <= 0)
+      next.amount = REQUEST_CREATE.amountRequired;
+    else if (vault.spendingCap > 0 && amountValue > vault.spendingCap) {
+      next.amount = REQUEST_CREATE.overLimit(formatAmount(vault.spendingCap, BCH) ?? '');
+    } else if (vault.balance !== null && amountValue > vault.balance) {
+      next.amount = REQUEST_CREATE.overBalance(formatAmount(vault.balance, BCH) ?? '');
+    }
+    if (!reason.trim()) next.reason = REQUEST_CREATE.reasonRequired;
+    return next;
+  };
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const next = validate();
+    setErrors(next);
+    if (Object.keys(next).length === 0) setReviewing(true);
+  };
+
+  const run = async () => {
+    const trimmed = recipient.trim();
+    const created = await createProposal(
+      id,
+      { recipient: trimmed, amount: amountValue, reason: reason.trim() },
+      wallet
+    );
+    try {
+      const txid = await createProposalOnChain(wallet, created.id, wallet.publicKey || '', {
+        vaultId: id,
+        proposalId: created.id,
         amount: amountValue,
-        reason: formData.reason.trim(),
-      };
-
-      const createdProposal = await createProposal(id, proposalData, wallet);
-
-      if (!wallet.signCashScriptTransaction) {
-        throw new Error(
-          'Connected wallet does not support CashScript signing. ' +
-          'Use Cashonize or a WalletConnect-compatible signer to create proposals on-chain.',
-        );
+        toAddress: trimmed,
+      });
+      setDone(true);
+      return { txid };
+    } catch (error) {
+      const flow = asFlowError(error);
+      if (!flow.txid && flow.code !== 'SEND_UNCONFIRMED' && flow.code !== 'SENT_NOT_SYNCED') {
+        await abandonRequest(String(created.id), wallet).catch((cleanup: unknown) => {
+          console.warn('Abandoned spending request was not cleaned up', cleanup);
+        });
       }
-
-      await createProposalOnChain(
-        wallet,
-        createdProposal.id,
-        wallet.publicKey || '',
-        {
-          vaultId: id,
-          proposalId: createdProposal.id,
-          amount: amountValue,
-          toAddress: recipient,
-        },
-      );
-
-      // Navigate back to vault detail page
-      navigate(`/vaults/${id}`);
-    } catch (err: any) {
-      // Provide more specific error messages for common failures
-      let errorMsg = err.message || 'Failed to create proposal';
-      if (errorMsg.includes('exceeds spending cap') || errorMsg.includes('spending cap')) {
-        errorMsg = 'Amount exceeds the vault spending cap. Please reduce the proposal amount.';
-      } else if (errorMsg.includes('already exists') || errorMsg.includes('proposal ID')) {
-        errorMsg = 'A proposal with this ID already exists. Please wait for the current proposal to be processed.';
-      } else if (errorMsg.includes('network') || errorMsg.includes('connection')) {
-        errorMsg = 'Network connection error. Please check your internet connection and try again.';
-      }
-      setError(errorMsg);
-      setIsSubmitting(false);
+      throw error;
     }
   };
+
+  const fieldLabels: Record<keyof typeof FIELD_IDS, string> = {
+    recipient: REQUEST_CREATE.recipient,
+    amount: REQUEST_CREATE.amount,
+    reason: REQUEST_CREATE.reason,
+  };
+  const invalid = (Object.keys(errors) as (keyof typeof FIELD_IDS)[]).filter((key) => errors[key]);
 
   return (
-    <div className="p-8">
-      <div className="max-w-3xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <Link
-            to={`/vaults/${id}`}
-            className="inline-flex items-center gap-2 text-primary hover:text-primaryHover font-mono mb-4 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Treasury
-          </Link>
-          <h1 className="text-3xl font-display font-bold text-textPrimary mb-2 sm:text-4xl lg:text-5xl">Create Proposal</h1>
-          <p className="text-textMuted font-mono">
-            Submit a payment proposal for multi-sig approval
-          </p>
-        </div>
-
-        {/* Error Alert */}
-        {error && (
-          <Card padding="lg" className="mb-6 bg-error/5 border-error/20">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-error flex-shrink-0 mt-0.5" />
-              <p className="text-error font-mono text-sm">{error}</p>
-            </div>
-          </Card>
-        )}
-
-        {/* Form */}
-        <Card padding="lg">
-          <div className="space-y-6">
-            {/* Recipient Address */}
-            <div>
-              <div className="flex items-start gap-4 mb-4">
-                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <Send className="w-6 h-6 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-xl font-display font-bold text-textPrimary mb-1">
-                    Recipient
-                  </h3>
-                  <p className="text-sm text-textMuted font-mono mb-4">
-                    BCH address that will receive the funds
-                  </p>
-                  <Input
-                    type="text"
-                    value={formData.recipient}
-                    onChange={(e) => handleInputChange('recipient', e.target.value)}
-                    placeholder="bitcoincash:qr2x3uy3... or bchtest:qq..."
-                    helpText="Must be a valid Bitcoin Cash address"
-                    required
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Amount */}
-            <div className="pt-6 border-t border-border">
-              <Input
-                label="Amount (BCH)"
-                type="number"
-                value={formData.amount}
-                onChange={(e) => handleInputChange('amount', e.target.value)}
-                placeholder="0.00"
-                step="0.00000001"
-                helpText="Must not exceed vault spending cap"
-                required
-              />
-            </div>
-
-            {/* Reason */}
-            <div className="pt-6 border-t border-border">
-              <Textarea
-                label="Reason / Description"
-                value={formData.reason}
-                onChange={(e) => handleInputChange('reason', e.target.value)}
-                rows={4}
-                placeholder="e.g., 'Q1 2024 contractor payment for backend development'"
-                helpText="Explain the purpose of this payment for other signers"
-                required
-              />
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-4 pt-6 border-t border-border">
-              <Link to={`/vaults/${id}`} className="flex-1">
-                <Button variant="outline" disabled={isSubmitting} className="w-full">
-                  Cancel
-                </Button>
-              </Link>
-              <Button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="flex-1"
-              >
-                {isSubmitting ? 'Creating Proposal...' : 'Create Proposal'}
-              </Button>
-            </div>
+    <PageContainer width="reading">
+      <PageHeader title={REQUEST_CREATE.title} description={description} back={backAction} />
+      <Stack>
+        <Card>
+          <div className="flex flex-col gap-2">
+            <p className="text-label text-ink-secondary">{REQUEST_CREATE.vaultSummary}</p>
+            <DetailList
+              items={[
+                {
+                  label: REQUEST_CREATE.heldLabel,
+                  value:
+                    vault.balance === null ? null : <Amount value={vault.balance} asset={BCH} />,
+                },
+                {
+                  label: REQUEST_CREATE.limitLabel,
+                  value:
+                    vault.spendingCap > 0
+                      ? REQUEST_CREATE.limitValue(formatAmount(vault.spendingCap, BCH) ?? '')
+                      : REQUEST_CREATE.noLimit,
+                },
+                {
+                  label: REQUEST_CREATE.approvalsLabel,
+                  value: signersRequiredShort(vault.approvalThreshold, vault.signerCount),
+                },
+              ]}
+            />
           </div>
         </Card>
-      </div>
-    </div>
+
+        {!vault.isSigner ? (
+          <Notice tone="neutral" title={REQUEST_CREATE.signersOnly} />
+        ) : !canSign ? (
+          <Notice tone="warning" title={REQUEST_CREATE.cantSign} />
+        ) : (
+          <form noValidate onSubmit={submit} className="flex flex-col gap-6">
+            <AddressInput
+              id={FIELD_IDS.recipient}
+              label={REQUEST_CREATE.recipient}
+              helper={REQUEST_CREATE.recipientHelper}
+              value={recipient}
+              onChange={setRecipient}
+              onValidChange={setRecipientValid}
+              network={network}
+              error={errors.recipient}
+              required
+            />
+            <AmountInput
+              id={FIELD_IDS.amount}
+              label={REQUEST_CREATE.amount}
+              helper={REQUEST_CREATE.amountHelper}
+              asset={BCH}
+              value={amount}
+              onChange={setAmount}
+              error={errors.amount}
+              required
+            />
+            <Textarea
+              id={FIELD_IDS.reason}
+              label={REQUEST_CREATE.reason}
+              helper={REQUEST_CREATE.reasonHelper}
+              placeholder={REQUEST_CREATE.reasonPlaceholder}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              error={errors.reason}
+              rows={3}
+            />
+            {invalid.length > 0 ? (
+              <ErrorSummary
+                title={REQUEST_CREATE.errorTitle}
+                message={REQUEST_CREATE.fixFields}
+                fields={invalid.map((key) => ({ label: fieldLabels[key], id: FIELD_IDS[key] }))}
+              />
+            ) : null}
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              {done ? (
+                <ButtonLink to={`/vaults/${id}`} variant="primary">
+                  {REQUEST_CREATE.back}
+                </ButtonLink>
+              ) : (
+                <>
+                  <ButtonLink to={`/vaults/${id}`} variant="ghost">
+                    {REQUEST_CREATE.back}
+                  </ButtonLink>
+                  <Button type="submit" variant="primary">
+                    {REQUEST_CREATE.submit}
+                  </Button>
+                </>
+              )}
+            </div>
+          </form>
+        )}
+      </Stack>
+
+      <TransactionReview
+        open={reviewing}
+        onClose={() => setReviewing(false)}
+        title={REQUEST_CREATE.review.title}
+        consequence={{
+          tone: 'info',
+          body: REQUEST_CREATE.review.consequence(vault.approvalThreshold),
+        }}
+        plan={
+          <div className="flex flex-col gap-1">
+            <Amount value={amount} asset={BCH} size="lg" />
+            <Address value={recipient.trim()} variant="full" />
+            <p className="text-body text-ink-secondary">{reason.trim()}</p>
+          </div>
+        }
+        summary={{ direction: 'fee-only', network }}
+        run={run}
+        next={
+          <div className="flex flex-col gap-2">
+            <p>{REQUEST_CREATE.review.done}</p>
+            <div>
+              <ButtonLink to={`/vaults/${id}`} variant="secondary" size="sm">
+                {REQUEST_CREATE.back}
+              </ButtonLink>
+            </div>
+          </div>
+        }
+      />
+    </PageContainer>
   );
 }

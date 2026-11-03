@@ -1,23 +1,14 @@
-/**
- * Network detection hook
- * Returns the current BCH network from environment variables
- */
-
 export type Network = 'chipnet' | 'mainnet';
 
 /**
- * Get the current BCH network
- * Reads from VITE_BCH_NETWORK environment variable
- * Defaults to 'chipnet' for safety
+ * The BCH network this build talks to, from VITE_BCH_NETWORK. Anything else falls back to
+ * chipnet so a misconfigured build can't touch real money. Safe at module scope.
  */
-export function useNetwork(): Network {
+export function getConfiguredNetwork(): Network {
   const network = import.meta.env.VITE_BCH_NETWORK as Network | undefined;
+  return network === 'mainnet' || network === 'chipnet' ? network : 'chipnet';
+}
 
-  // Validate network value
-  if (network && (network === 'chipnet' || network === 'mainnet')) {
-    return network;
-  }
-
-  // Default to chipnet for development safety
-  return 'chipnet';
+export function useNetwork(): Network {
+  return getConfiguredNetwork();
 }

@@ -1,227 +1,294 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Wallet, Copy, LogOut, ChevronDown, Check, ExternalLink, Settings } from 'lucide-react';
+import { Address } from './Address';
+import { Amount } from './Amount';
+import { BUTTON_BASE, BUTTON_VARIANTS } from './Button';
+import { ArrowUpRight, ChevronDown, Copy, Icon, LogOut, Settings, Wallet, type LucideIcon } from './Icon';
+import { cx } from './cx';
 import { useWallet } from '../../hooks/useWallet';
+import { getWalletDisplayName } from '../../connectors';
+import { ACTIONS, BUSY, LABELS, MOMENTS, TOASTS } from '../../copy/common';
+import { formatAmount } from '../../copy/format';
+import { NETWORK_LABEL, viewOnExplorer } from '../../copy/network';
 import { getExplorerAddressUrl } from '../../utils/blockchain';
+import { normalizeWalletNetwork } from '../../utils/txNotice';
 
-/**
- * Wallet Dropdown Component
- * Shows wallet details in a dropdown menu in the top-right corner
- */
-export const WalletDropdown = () => {
+const BCH = { kind: 'bch' } as const;
+const COPIED_RESET_MS = 2000;
+
+const FALLBACK_WALLET_NAME = 'Wallet';
+const SETTINGS = 'Settings';
+const NEW_TAB = ', opens in a new tab';
+
+const TRIGGER = cx(BUTTON_BASE, BUTTON_VARIANTS.secondary, 'h-control-md min-w-0 max-w-full gap-2 px-3 text-label');
+
+const TRIGGER_FIT = {
+  regular: {
+    root: 'max-sm:w-control-md max-sm:px-0 pointer-coarse:min-w-touch',
+    address: 'max-sm:sr-only',
+    balance: 'max-md:sr-only',
+    chevron: 'max-sm:hidden',
+  },
+  compact: {
+    root: 'max-lg:w-control-md max-lg:px-0 pointer-coarse:min-w-touch',
+    address: 'max-lg:sr-only',
+    balance: 'max-lg:sr-only',
+    chevron: 'max-lg:hidden',
+  },
+} as const;
+const ITEM =
+  'flex w-full min-h-control-md pointer-coarse:min-h-touch items-center gap-3 rounded-control px-3 text-left text-label transition-colors duration-(--duration-fast) ease-standard';
+const ITEM_TONE = {
+  plain: 'text-ink hover:bg-sunken focus-visible:bg-sunken',
+  danger: 'text-danger-ink hover:bg-danger-tint focus-visible:bg-danger-tint',
+} as const;
+
+function ItemIcon({ icon }: { icon: LucideIcon }) {
+  return (
+    <span aria-hidden="true" className="inline-flex text-ink-muted">
+      <Icon icon={icon} size={16} />
+    </span>
+  );
+}
+
+export type WalletChipProps = {
+  /** Icon only below 1024px, for the app top bar on phones and tablets. */
+  compact?: boolean;
+};
+
+export function WalletChip({ compact = false }: WalletChipProps) {
+  const fit = TRIGGER_FIT[compact ? 'compact' : 'regular'];
+  const wallet = useWallet();
+  const menuId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const wallet = useWallet();
+  const [disconnectFailed, setDisconnectFailed] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const copiedTimer = useRef<number | undefined>(undefined);
 
-  // Close dropdown when clicking outside
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+    if (!isOpen) return undefined;
+    menuItems(panelRef.current)[0]?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      setIsOpen(false);
     };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [isOpen]);
 
+  if (!wallet.isConnected || !wallet.address) return null;
+
+  const address = wallet.address;
+  const network = normalizeWalletNetwork(wallet.network);
+  const walletName = wallet.walletType ? getWalletDisplayName(wallet.walletType) : FALLBACK_WALLET_NAME;
+  const chipBalance = wallet.balance
+    ? formatAmount(wallet.balance.bch, BCH, { precision: 'list' }) ?? LABELS.balanceUnavailable
+    : LABELS.balanceUnavailable;
+
+  const closeMenu = (returnFocus: boolean) => {
+    setIsOpen(false);
+    if (returnFocus) triggerRef.current?.focus();
+  };
+
+  const toggleMenu = () => {
+    setDisconnectFailed(false);
+    setIsOpen((open) => !open);
+  };
+
   const handleCopyAddress = async () => {
-    if (wallet.address) {
-      await navigator.clipboard.writeText(wallet.address);
+    try {
+      await navigator.clipboard.writeText(address);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
+    } catch (error) {
+      console.warn('[WalletDropdown] Clipboard write failed:', error);
     }
   };
 
   const handleDisconnect = async () => {
     if (isDisconnecting) return;
     setIsDisconnecting(true);
+    setDisconnectFailed(false);
     try {
       await wallet.disconnect();
       setIsOpen(false);
     } catch (error) {
       console.error('[WalletDropdown] Disconnect failed:', error);
+      setDisconnectFailed(true);
     } finally {
       setIsDisconnecting(false);
     }
   };
 
-  const formatAddress = (address: string | null) => {
-    if (!address) return '';
-    return `${address.slice(0, 10)}...${address.slice(-8)}`;
-  };
-
-  const getWalletTypeLabel = () => {
-    switch (wallet.walletType) {
-      case 'paytaca':
-        return 'Paytaca';
-      case 'walletconnect':
-        return 'WalletConnect';
-      case 'cashonize':
-        return 'Cashonize';
-      case 'wizardconnect':
-        return 'WizardConnect';
-      case 'optn':
-        return 'OPTN Wallet';
-      default:
-        return 'Unknown';
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = menuItems(panelRef.current);
+    const index = items.findIndex((node) => node === document.activeElement);
+    const focusAt = (next: number) => items[(next + items.length) % items.length]?.focus();
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        focusAt(index + 1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        focusAt(index - 1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        focusAt(0);
+        break;
+      case 'End':
+        event.preventDefault();
+        focusAt(items.length - 1);
+        break;
+      case 'Escape':
+        event.preventDefault();
+        closeMenu(true);
+        break;
+      case 'Tab':
+        setIsOpen(false);
+        break;
     }
   };
 
-  const getExplorerUrl = () => {
-    if (!wallet.address) return null;
-    // Map testnet to chipnet for explorer
-    const network = wallet.network === 'testnet' ? 'chipnet' : wallet.network;
-    return getExplorerAddressUrl(wallet.address, network);
+  const onTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (isOpen || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return;
+    event.preventDefault();
+    setIsOpen(true);
   };
 
-  if (!wallet.isConnected) return null;
-
   return (
-    <div className="relative" ref={dropdownRef}>
-      {/* Trigger Button */}
+    <div ref={rootRef} className="relative inline-flex min-w-0">
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex max-w-[min(17rem,calc(100vw-5rem))] items-center gap-2 rounded-lg border border-border bg-white px-2.5 py-2 transition-colors hover:bg-surfaceAlt sm:max-w-[min(20rem,calc(100vw-6rem))] md:gap-3 md:px-4"
+        ref={triggerRef}
+        type="button"
+        data-wallet-trigger
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? menuId : undefined}
+        onClick={toggleMenu}
+        onKeyDown={onTriggerKeyDown}
+        className={cx(TRIGGER, fit.root)}
       >
-        {/* Balance */}
-        {wallet.balance !== null && (
-          <div className="hidden min-w-0 flex-col items-end sm:flex">
-            <span className="text-xs text-textMuted">Balance</span>
-            <span className="text-sm font-mono font-medium text-textPrimary">
-              {wallet.balance.bch.toFixed(4)} BCH
-            </span>
-          </div>
-        )}
-
-        {/* Wallet Icon & Address */}
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="p-2 bg-primary/10 rounded-full">
-            <Wallet className="w-4 h-4 text-primary" />
-          </div>
-          <span className="hidden truncate font-mono text-sm text-textPrimary md:inline">
-            {formatAddress(wallet.address)}
-          </span>
-        </div>
-
-        {/* Chevron */}
-        <ChevronDown
-          className={`w-4 h-4 text-textMuted transition-transform ${
-            isOpen ? 'rotate-180' : ''
-          }`}
-        />
+        <span className="inline-flex shrink-0 text-ink-secondary">
+          <Icon icon={Wallet} size={20} />
+        </span>
+        <span className="sr-only">{`${LABELS.walletMenu}, `}</span>
+        <span className={cx('min-w-0 truncate', fit.address)}>
+          <Address value={address} copy={false} />
+        </span>
+        <span className={cx('whitespace-nowrap text-caption text-ink-muted', fit.balance)}>{chipBalance}</span>
+        <span aria-hidden="true" className={cx('inline-flex shrink-0 text-ink-muted', fit.chevron)}>
+          <Icon icon={ChevronDown} size={16} />
+        </span>
       </button>
 
-      {/* Dropdown Menu */}
-      {isOpen && (
-        <div className="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-white shadow-xl md:w-80">
-          {/* Header */}
-          <div className="px-4 py-3 bg-surfaceAlt border-b border-border">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-primary/10 rounded-full">
-                  <Wallet className="w-4 h-4 text-primary" />
-                </div>
-                <div>
-                  <p className="text-xs text-textMuted">Connected with</p>
-                  <p className="text-sm font-medium text-textPrimary">{getWalletTypeLabel()}</p>
-                </div>
+      {isOpen ? (
+        <div
+          ref={panelRef}
+          id={menuId}
+          role="menu"
+          aria-label={LABELS.walletMenu}
+          onKeyDown={onMenuKeyDown}
+          className="on-surface absolute right-0 top-full z-(--z-menu) mt-2 flex w-popover flex-col rounded-card bg-surface p-1.5 shadow-overlay"
+        >
+          <div role="presentation" className="flex flex-col gap-3 px-3 pb-3 pt-2">
+            <div className="flex flex-col gap-1">
+              <span className="text-small text-ink-muted">{LABELS.walletBalance}</span>
+              {wallet.balance ? (
+                <Amount value={wallet.balance.bch} asset={BCH} size="lg" />
+              ) : (
+                <span className="text-body text-ink-secondary">{LABELS.balanceUnavailable}</span>
+              )}
+            </div>
+            <dl className="flex flex-col gap-1 text-small">
+              <div className="flex justify-between gap-4">
+                <dt className="text-ink-muted">{LABELS.connectedWith}</dt>
+                <dd className="text-ink">{walletName}</dd>
               </div>
-              <div className="flex items-center gap-1">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-xs text-textMuted">Active</span>
+              <div className="flex justify-between gap-4">
+                <dt className="text-ink-muted">{LABELS.network}</dt>
+                <dd className="text-ink">{NETWORK_LABEL[network]}</dd>
               </div>
-            </div>
+            </dl>
           </div>
 
-          {/* Balance */}
-          <div className="px-4 py-4 border-b border-border">
-            <p className="text-xs text-textMuted mb-1">Total Balance</p>
-            <p className="text-2xl font-bold text-textPrimary mb-1">
-              {wallet.balance ? wallet.balance.bch.toFixed(4) : '0.0000'} <span className="text-lg text-textSecondary">BCH</span>
+          <div role="separator" className="mx-1.5 mb-1.5 border-t border-line" />
+
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            onClick={() => void handleCopyAddress()}
+            className={cx(ITEM, ITEM_TONE.plain)}
+          >
+            <ItemIcon icon={Copy} />
+            {copied ? TOASTS.addressCopied : ACTIONS.copyAddress}
+          </button>
+          <span role="status" className="sr-only">
+            {copied ? TOASTS.addressCopied : ''}
+          </span>
+
+          <a
+            href={getExplorerAddressUrl(address, network)}
+            target="_blank"
+            rel="noopener noreferrer"
+            role="menuitem"
+            tabIndex={-1}
+            onClick={() => setIsOpen(false)}
+            className={cx(ITEM, ITEM_TONE.plain, 'justify-between')}
+          >
+            {viewOnExplorer(network)}
+            <span className="sr-only">{NEW_TAB}</span>
+            <ItemIcon icon={ArrowUpRight} />
+          </a>
+
+          <Link
+            to="/settings"
+            role="menuitem"
+            tabIndex={-1}
+            onClick={() => setIsOpen(false)}
+            className={cx(ITEM, ITEM_TONE.plain)}
+          >
+            <ItemIcon icon={Settings} />
+            {SETTINGS}
+          </Link>
+
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            aria-disabled={isDisconnecting || undefined}
+            onClick={() => void handleDisconnect()}
+            className={cx(ITEM, ITEM_TONE.danger, isDisconnecting && 'cursor-not-allowed text-ink-muted')}
+          >
+            <span aria-hidden="true" className="inline-flex">
+              <Icon icon={LogOut} size={16} />
+            </span>
+            {isDisconnecting ? BUSY.disconnecting : ACTIONS.disconnect}
+          </button>
+
+          {disconnectFailed ? (
+            <p role="alert" className="px-3 py-2 text-small text-danger-ink">
+              {MOMENTS.disconnectFailed}
             </p>
-            {wallet.balance && (
-              <p className="text-xs text-textMuted">
-                {wallet.balance.sat.toLocaleString()} satoshis
-              </p>
-            )}
-          </div>
-
-          {/* Address */}
-          <div className="px-4 py-3 border-b border-border">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-textMuted">Address</p>
-              <button
-                onClick={handleCopyAddress}
-                className="flex items-center gap-1 text-xs text-primary hover:text-primaryHover transition-colors"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-3 h-3" />
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3" />
-                    Copy
-                  </>
-                )}
-              </button>
-            </div>
-            <p className="text-sm font-mono text-textPrimary bg-surfaceAlt px-3 py-2 rounded break-all">
-              {wallet.address}
-            </p>
-          </div>
-
-          {/* Network */}
-          <div className="px-4 py-3 border-b border-border">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-textMuted">Network</p>
-              <span className="text-xs font-medium text-textPrimary capitalize px-2 py-1 bg-surfaceAlt rounded">
-                {wallet.network}
-              </span>
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="px-2 py-2">
-            {getExplorerUrl() && (
-              <a
-                href={getExplorerUrl()!}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-textSecondary hover:bg-surfaceAlt rounded-md transition-colors mb-1"
-              >
-                <ExternalLink className="w-4 h-4" />
-                View on Explorer
-              </a>
-            )}
-            <Link
-              to="/settings"
-              onClick={() => setIsOpen(false)}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-textSecondary hover:bg-surfaceAlt rounded-md transition-colors mb-1"
-            >
-              <Settings className="w-4 h-4" />
-              Settings
-            </Link>
-            <button
-              onClick={handleDisconnect}
-              disabled={isDisconnecting}
-              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <LogOut className="w-4 h-4" />
-              {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
-            </button>
-          </div>
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
-};
+}
+
+export const WalletDropdown = WalletChip;
+
+function menuItems(panel: HTMLElement | null): HTMLElement[] {
+  if (!panel) return [];
+  return Array.from(panel.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+}

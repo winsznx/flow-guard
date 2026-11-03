@@ -23,12 +23,13 @@
  *   https://raw.githubusercontent.com/BCH-CashMint/cashmint-sdk/main/src/signer.ts
  */
 
-import { DappConnectionManager } from '@wizardconnect/dapp';
+import { DappConnectionManager, type StoredSession } from '@wizardconnect/dapp';
 import {
   initiateDappRelay,
   PATH_RECEIVE,
   childIndexOfPathName,
   type DappRelayResult,
+  type PathXpub,
   type RelayUpdatePayload,
 } from '@wizardconnect/core';
 import {
@@ -41,8 +42,6 @@ import {
   encodeTransaction,
   type TransactionCommon,
 } from '@bitauth/libauth';
-import QRCode from 'qrcode';
-
 import type {
   IWalletConnector,
   WalletType,
@@ -54,6 +53,9 @@ import type {
   CashScriptSignResponse,
   SourceOutput,
 } from '../types/wallet';
+import { flowFailure, walletRequestFailure } from '../copy/errors';
+import { PAIRING, WALLET_PROMPTS } from '../copy/wallets';
+import { showPairingDialog } from './pairingDialog';
 
 // Connect-time timeout: wallet must complete handshake within this window.
 const CONNECT_TIMEOUT_MS = 120_000;
@@ -124,16 +126,18 @@ function toRelaySourceOutput(
 export class WizardConnectConnector implements IWalletConnector {
   type: WalletType = 'wizardconnect' as WalletType;
 
+  /** hdwalletv1 has no sign_message action; login uses the proof transaction. */
+  supportsMessageSigning = false;
+
   private dappMgr: DappConnectionManager | null = null;
   private relay: DappRelayResult | null = null;
   private currentAddress: string | null = null;
   private network: 'mainnet' | 'testnet' | 'chipnet';
 
-  private qrModal: HTMLDivElement | null = null;
-  // Set while waiting for the wallet to scan the QR; lets the close button /
-  // Escape reject the pairing promise so connect() unwinds cleanly.
+  private hidePairing: (() => void) | null = null;
+  // Set while waiting for the wallet to scan the QR; lets closing the pairing
+  // dialog reject the wait so connect() unwinds cleanly.
   private cancelPairing: ((err: Error) => void) | null = null;
-  private qrEscapeHandler: ((e: KeyboardEvent) => void) | null = null;
   private eventListeners: Map<string, ((data?: unknown) => void)[]> = new Map();
 
   constructor() {
@@ -161,59 +165,23 @@ export class WizardConnectConnector implements IWalletConnector {
    */
   async connect(): Promise<WalletInfo> {
     if (typeof window === 'undefined') {
-      throw new Error('WizardConnect requires a browser environment');
+      throw flowFailure('WALLET_UNSUPPORTED', { details: 'WizardConnect needs a browser.' });
     }
 
     console.log('[WizardConnect] Initiating relay...');
 
-    const dappName = 'FlowGuard';
-    const dappIcon = `${window.location.origin}/favicon.svg`;
+    this.dappMgr = this.createDappManager();
 
-    this.dappMgr = new DappConnectionManager(dappName, dappIcon);
-
-    // Try to rehydrate a previous session (set by attachRelay + the protocol
-    // layer). If present we reuse the same key material and pass it into
-    // initiateDappRelay via existingCredentials so the wallet recognises us.
-    //
-    // walletPublicKey is only populated after the first successful key-exchange,
-    // so we can only short-circuit the QR step when ALL three fields are present.
     const storedSession = this.dappMgr.loadStoredSession();
-    const existingCredentials =
-      storedSession?.walletPublicKey
-        ? {
-            privateKey: storedSession.privateKey,
-            secret: storedSession.secret,
-            walletPublicKey: storedSession.walletPublicKey,
-          }
-        : undefined;
-
-    const statusCallback = (payload: RelayUpdatePayload) => {
-      this.dappMgr?.updateConnection(payload.client, payload.status);
-    };
-
-    this.relay = initiateDappRelay(statusCallback, {
-      explicitRelayUrls: RELAY_URLS,
-      existingCredentials,
-    });
-
-    this.dappMgr.attachRelay(this.relay);
+    const relay = this.openRelay(this.dappMgr, storedSession);
 
     if (storedSession?.paths?.length) {
       // Skip the QR step when we already have an authenticated session.
-      this.dappMgr.restoreSessionPaths(storedSession.paths);
-      this.currentAddress = this.deriveReceiveAddress();
-      console.log(
-        '[WizardConnect] Restored session - address:',
-        this.currentAddress,
-      );
-      // Restored sessions must also bridge a wallet-side disconnect to
-      // useWallet, otherwise a reload leaves a stale "connected" UI.
-      this.bindProtocolEvents();
-      return this.buildWalletInfo();
+      return this.resumeStoredSession(storedSession.paths);
     }
 
     try {
-      await this.showQrModal(this.relay.uri, this.relay.qrUri);
+      await this.showPairingDialog(relay.uri, relay.qrUri);
 
       await this.waitForWalletReady();
 
@@ -231,14 +199,91 @@ export class WizardConnectConnector implements IWalletConnector {
     } catch (error) {
       this.hideQrModal();
       await this.cleanupRelay();
+      throw walletRequestFailure(error, 'transaction');
+    }
+  }
+
+  /**
+   * Resume a stored, fully paired session without prompting. Returns null and
+   * clears the half-finished pairing when there is nothing to resume, so a page
+   * load never opens a relay QR.
+   */
+  async restore(): Promise<WalletInfo | null> {
+    if (typeof window === 'undefined') return null;
+
+    const dappMgr = this.createDappManager();
+    const storedSession = dappMgr.loadStoredSession();
+    if (!storedSession?.walletPublicKey || !storedSession.paths?.length) {
+      dappMgr.clearStoredSession();
+      dappMgr.destroy();
+      return null;
+    }
+
+    this.dappMgr = dappMgr;
+    this.openRelay(dappMgr, storedSession);
+
+    try {
+      return await this.resumeStoredSession(storedSession.paths);
+    } catch (error) {
+      await this.cleanupRelay();
+      dappMgr.destroy();
+      this.dappMgr = null;
+      this.currentAddress = null;
       throw error;
     }
+  }
+
+  private createDappManager(): DappConnectionManager {
+    return new DappConnectionManager('FlowGuard', `${window.location.origin}/favicon.svg`);
+  }
+
+  /**
+   * Open the relay, reusing stored key material when the wallet already
+   * completed a key exchange so it recognises us. walletPublicKey is only
+   * populated after the first successful key-exchange.
+   */
+  private openRelay(dappMgr: DappConnectionManager, storedSession: StoredSession | null): DappRelayResult {
+    const existingCredentials =
+      storedSession?.walletPublicKey
+        ? {
+            privateKey: storedSession.privateKey,
+            secret: storedSession.secret,
+            walletPublicKey: storedSession.walletPublicKey,
+          }
+        : undefined;
+
+    const statusCallback = (payload: RelayUpdatePayload) => {
+      this.dappMgr?.updateConnection(payload.client, payload.status);
+    };
+
+    const relay = initiateDappRelay(statusCallback, {
+      explicitRelayUrls: RELAY_URLS,
+      existingCredentials,
+    });
+    this.relay = relay;
+    dappMgr.attachRelay(relay);
+    return relay;
+  }
+
+  private async resumeStoredSession(paths: PathXpub[]): Promise<WalletInfo> {
+    if (!this.dappMgr) throw flowFailure('UNKNOWN', { details: 'WizardConnect manager is not set up.' });
+
+    this.dappMgr.restoreSessionPaths(paths);
+    this.currentAddress = this.deriveReceiveAddress();
+    console.log(
+      '[WizardConnect] Restored session - address:',
+      this.currentAddress,
+    );
+    // Restored sessions must also bridge a wallet-side disconnect to
+    // useWallet, otherwise a reload leaves a stale "connected" UI.
+    this.bindProtocolEvents();
+    return this.buildWalletInfo();
   }
 
   async disconnect(): Promise<void> {
     if (this.dappMgr) {
       try {
-        await this.dappMgr.sendDisconnect('User disconnected from FlowGuard');
+        await this.dappMgr.sendDisconnect(WALLET_PROMPTS.disconnected);
       } catch (error) {
         console.warn('[WizardConnect] sendDisconnect failed:', error);
       }
@@ -258,7 +303,7 @@ export class WizardConnectConnector implements IWalletConnector {
 
   async getAddress(): Promise<string> {
     if (this.currentAddress) return this.currentAddress;
-    if (!this.dappMgr) throw new Error('WizardConnect not connected');
+    if (!this.dappMgr) throw flowFailure('WALLET_SESSION_ENDED');
 
     this.currentAddress = this.deriveReceiveAddress();
     return this.currentAddress;
@@ -269,18 +314,16 @@ export class WizardConnectConnector implements IWalletConnector {
    * locally for any address index. Default path: receive/0.
    */
   async getPublicKey(): Promise<string> {
-    if (!this.dappMgr) throw new Error('WizardConnect not connected');
+    if (!this.dappMgr) throw flowFailure('WALLET_SESSION_ENDED');
 
     const childIndex = childIndexOfPathName(PATH_RECEIVE);
     if (childIndex === undefined) {
-      throw new Error('WizardConnect: receive path is not registered');
+      throw flowFailure('WALLET_SESSION_ENDED', { details: 'WizardConnect receive path is not registered.' });
     }
 
     const pubkey = this.dappMgr.getPubkey(childIndex, 0n);
     if (!pubkey) {
-      throw new Error(
-        'WizardConnect: pubkey unavailable - wallet has not sent walletready yet',
-      );
+      throw flowFailure('WALLET_SESSION_ENDED', { details: 'WizardConnect wallet has not sent walletready yet.' });
     }
     return binToHex(pubkey);
   }
@@ -289,19 +332,19 @@ export class WizardConnectConnector implements IWalletConnector {
    * Balance is not exposed over the WizardConnect wire - fetch via the same
    * backend indexer Cashonize uses.
    */
-  async getBalance(): Promise<WalletBalance> {
-    if (!this.currentAddress) return { bch: 0, sat: 0 };
+  async getBalance(): Promise<WalletBalance | null> {
+    if (!this.currentAddress) return null;
 
     try {
       const response = await fetch(
         `/api/wallet/balance/${encodeURIComponent(this.currentAddress)}`,
       );
-      if (!response.ok) return { bch: 0, sat: 0 };
+      if (!response.ok) return null;
       const data = (await response.json()) as { bch?: number; sat?: number };
       return { bch: data.bch ?? 0, sat: data.sat ?? 0 };
     } catch (error) {
       console.error('[WizardConnect] balance fetch failed:', error);
-      return { bch: 0, sat: 0 };
+      return null;
     }
   }
 
@@ -311,10 +354,7 @@ export class WizardConnectConnector implements IWalletConnector {
    * signCashScriptTransaction(). Mirrors PaytacaNativeConnector behaviour.
    */
   async signTransaction(_tx: Transaction): Promise<SignedTransaction> {
-    throw new Error(
-      'WizardConnect requires fully constructed transactions. ' +
-        'Use signCashScriptTransaction() with sourceOutputs.',
-    );
+    throw flowFailure('WALLET_UNSUPPORTED', { details: 'WizardConnect only signs fully built transactions.' });
   }
 
   /**
@@ -328,7 +368,7 @@ export class WizardConnectConnector implements IWalletConnector {
   async signCashScriptTransaction(
     options: CashScriptSignOptions,
   ): Promise<CashScriptSignResponse> {
-    if (!this.dappMgr) throw new Error('WizardConnect not connected');
+    if (!this.dappMgr) throw flowFailure('WALLET_SESSION_ENDED');
 
     // hdwalletv1 signs listed inputs as standard P2PKH: it derives the key at the
     // given path and REPLACES the input's unlocking script with <sig><pubkey>.
@@ -367,7 +407,7 @@ export class WizardConnectConnector implements IWalletConnector {
         toRelaySourceOutput(so, txInputs[i]),
       ),
       broadcast: options.broadcast ?? true,
-      userPrompt: options.userPrompt,
+      userPrompt: options.userPrompt || WALLET_PROMPTS.transaction,
     };
 
     const abortController = new AbortController();
@@ -391,7 +431,7 @@ export class WizardConnectConnector implements IWalletConnector {
       );
 
       if (response.error) {
-        throw new Error(`Wallet rejected sign: ${response.error}`);
+        throw walletRequestFailure(response.error, 'transaction');
       }
 
       const signedTransaction = response.signedTransaction;
@@ -404,12 +444,13 @@ export class WizardConnectConnector implements IWalletConnector {
         signedHead: typeof signedTransaction === 'string' ? signedTransaction.slice(0, 80) : signedTransaction,
       });
       if (typeof signedTransaction !== 'string' || !/^[0-9a-fA-F]+$/.test(signedTransaction) || signedTransaction.length < 20) {
-        throw new Error(
-          `WizardConnect: wallet returned an unusable signed transaction ` +
-          `(type=${typeof signedTransaction}, len=${typeof signedTransaction === 'string' ? signedTransaction.length : 'n/a'}, ` +
-          `head="${typeof signedTransaction === 'string' ? signedTransaction.slice(0, 40) : String(signedTransaction)}", ` +
-          `keys=[${Object.keys(response ?? {}).join(',')}])`,
-        );
+        throw flowFailure('WALLET_INCOMPLETE_SIGNATURE', {
+          details:
+            `WizardConnect returned an unusable signed transaction ` +
+            `(type=${typeof signedTransaction}, len=${typeof signedTransaction === 'string' ? signedTransaction.length : 'n/a'}, ` +
+            `head="${typeof signedTransaction === 'string' ? signedTransaction.slice(0, 40) : String(signedTransaction)}", ` +
+            `keys=[${Object.keys(response ?? {}).join(',')}])`,
+        });
       }
 
       // hdwalletv1 only sends back the signed hex - compute the txid locally.
@@ -422,17 +463,7 @@ export class WizardConnectConnector implements IWalletConnector {
 
       return { signedTransaction, signedTransactionHash };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (
-        message.includes('aborted') ||
-        message.includes('AbortError') ||
-        message.includes('timeout')
-      ) {
-        throw new Error(
-          'Transaction signing timed out - wallet did not respond',
-        );
-      }
-      throw error;
+      throw walletRequestFailure(error, 'transaction');
     } finally {
       window.clearTimeout(timer);
     }
@@ -451,11 +482,9 @@ export class WizardConnectConnector implements IWalletConnector {
    * abstraction surfaces this via /Users/mac/flow-guard/frontend/src/hooks/useWallet.ts).
    */
   async signMessage(_message: string, _userPrompt?: string): Promise<string> {
-    throw new Error(
-      'WizardConnect hdwalletv1 does not support sign_message yet. ' +
-        'Use Paytaca extension or Cashonize for SIWX authentication. ' +
-        'Tracking upstream: https://gitlab.com/riftenlabs/lib/wizardconnect',
-    );
+    throw flowFailure('SIGN_IN_FAILED', {
+      details: 'WizardConnect hdwalletv1 has no sign_message action. Sign-in uses the proof transaction.',
+    });
   }
 
   on(event: 'addressChanged' | 'disconnect', callback: (data?: unknown) => void): void {
@@ -488,7 +517,7 @@ export class WizardConnectConnector implements IWalletConnector {
    * Rejects on disconnect or after CONNECT_TIMEOUT_MS.
    */
   private async waitForWalletReady(): Promise<void> {
-    if (!this.dappMgr) throw new Error('Dapp manager not initialised');
+    if (!this.dappMgr) throw flowFailure('UNKNOWN', { details: 'WizardConnect manager is not set up.' });
     const mgr = this.dappMgr;
 
     return new Promise<void>((resolve, reject) => {
@@ -511,20 +540,12 @@ export class WizardConnectConnector implements IWalletConnector {
 
       const onDisconnect = (reason: unknown, message: string | undefined) => {
         cleanup();
-        reject(
-          new Error(
-            `WizardConnect rejected: ${message ?? String(reason ?? 'disconnect')}`,
-          ),
-        );
+        reject(flowFailure('WALLET_REJECTED', { details: message ?? String(reason ?? 'disconnect') }));
       };
 
       const timer = window.setTimeout(() => {
         cleanup();
-        reject(
-          new Error(
-            'WizardConnect connection timed out - wallet did not scan the QR',
-          ),
-        );
+        reject(flowFailure('PAIRING_TIMEOUT'));
       }, CONNECT_TIMEOUT_MS);
 
       mgr.on('walletready', onReady);
@@ -552,18 +573,16 @@ export class WizardConnectConnector implements IWalletConnector {
    * address derivation is local: pubkey -> hash160 -> cashaddr.
    */
   private deriveReceiveAddress(): string {
-    if (!this.dappMgr) throw new Error('Dapp manager not initialised');
+    if (!this.dappMgr) throw flowFailure('UNKNOWN', { details: 'WizardConnect manager is not set up.' });
 
     const childIndex = childIndexOfPathName(PATH_RECEIVE);
     if (childIndex === undefined) {
-      throw new Error('WizardConnect: receive path is not registered');
+      throw flowFailure('WALLET_SESSION_ENDED', { details: 'WizardConnect receive path is not registered.' });
     }
 
     const pubkey = this.dappMgr.getPubkey(childIndex, 0n);
     if (!pubkey) {
-      throw new Error(
-        'WizardConnect: pubkey unavailable - wallet has not delivered xpubs',
-      );
+      throw flowFailure('WALLET_SESSION_ENDED', { details: 'WizardConnect wallet has not delivered its keys.' });
     }
 
     const pubkeyHash = ripemd160.hash(sha256.hash(pubkey));
@@ -614,106 +633,24 @@ export class WizardConnectConnector implements IWalletConnector {
     }
   }
 
-  /**
-   * QR display. Mirrors the CashonizeConnector pattern (createElement +
-   * textContent, never innerHTML, never user-controlled HTML).
-   */
-  private async showQrModal(uri: string, qrUri: string): Promise<void> {
-    const qrDataUrl = await QRCode.toDataURL(qrUri, {
-      width: 300,
-      margin: 2,
-      color: { dark: '#1B1F1A', light: '#FFFFFF' },
+  private async showPairingDialog(uri: string, qrUri: string): Promise<void> {
+    const copy = PAIRING.wizardconnect;
+    this.hidePairing = showPairingDialog({
+      title: copy.title,
+      line: copy.line,
+      qrValue: qrUri,
+      qrCaption: copy.qrCaption,
+      link: uri,
+      beta: copy.beta,
+      onClose: () => {
+        if (this.cancelPairing) this.cancelPairing(flowFailure('PAIRING_CANCELLED'));
+        else this.hideQrModal();
+      },
     });
-
-    const overlay = document.createElement('div');
-    overlay.className =
-      'fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm';
-
-    const card = document.createElement('div');
-    card.className =
-      'bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 relative';
-
-    const header = document.createElement('div');
-    header.className = 'text-center mb-4';
-
-    const title = document.createElement('h3');
-    title.className = 'text-xl font-semibold text-gray-900 mb-1';
-    title.textContent = 'Connect with WizardConnect';
-    const subtitle = document.createElement('p');
-    subtitle.className = 'text-sm text-gray-600';
-    subtitle.textContent = 'Open Paytaca → Apps → WizardConnect and scan';
-    header.append(title, subtitle);
-
-    const qrWrap = document.createElement('div');
-    qrWrap.className =
-      'bg-white p-4 rounded-lg border-2 border-gray-200 mb-4 flex items-center justify-center';
-    const qrImg = document.createElement('img');
-    qrImg.src = qrDataUrl;
-    qrImg.alt = 'WizardConnect QR code';
-    qrImg.className = 'w-full max-w-[260px]';
-    qrWrap.appendChild(qrImg);
-
-    const uriRow = document.createElement('div');
-    uriRow.className = 'flex items-stretch gap-2 mb-4';
-    const uriField = document.createElement('input');
-    uriField.type = 'text';
-    uriField.readOnly = true;
-    uriField.value = uri;
-    uriField.className =
-      'flex-1 min-w-0 px-3 py-2 text-xs border border-gray-200 rounded-lg bg-gray-50 text-gray-700';
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className =
-      'px-3 py-2 text-sm font-semibold bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors';
-    copyBtn.textContent = 'Copy';
-    copyBtn.addEventListener('click', () => {
-      void navigator.clipboard?.writeText(uri).then(() => {
-        copyBtn.textContent = 'Copied';
-        window.setTimeout(() => {
-          copyBtn.textContent = 'Copy';
-        }, 1500);
-      });
-    });
-    uriRow.append(uriField, copyBtn);
-
-    const beta = document.createElement('div');
-    beta.className =
-      'mb-4 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800';
-    beta.textContent =
-      'Beta - currently supported by Paytaca mobile only. Protocol may change.';
-
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className =
-      'absolute top-3 right-3 text-gray-400 hover:text-gray-700 text-2xl leading-none px-2';
-    closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.textContent = '×';
-    const abort = () => {
-      // Reject the pairing wait so connect() runs its catch (hideQrModal +
-      // cleanupRelay), clearing isConnecting and re-showing the wallet picker.
-      // Fall back to just hiding the overlay if the wait already settled.
-      if (this.cancelPairing) this.cancelPairing(new Error('WizardConnect pairing cancelled'));
-      else this.hideQrModal();
-    };
-    closeBtn.addEventListener('click', abort);
-    this.qrEscapeHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') abort(); };
-    document.addEventListener('keydown', this.qrEscapeHandler);
-
-    card.append(closeBtn, header, qrWrap, uriRow, beta);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-
-    this.qrModal = overlay;
   }
 
   private hideQrModal(): void {
-    if (this.qrEscapeHandler) {
-      document.removeEventListener('keydown', this.qrEscapeHandler);
-      this.qrEscapeHandler = null;
-    }
-    if (this.qrModal?.parentNode) {
-      this.qrModal.parentNode.removeChild(this.qrModal);
-    }
-    this.qrModal = null;
+    this.hidePairing?.();
+    this.hidePairing = null;
   }
 }

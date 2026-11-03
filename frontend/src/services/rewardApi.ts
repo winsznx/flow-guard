@@ -6,6 +6,8 @@
  * inline `fetch` for `authFetch` in one place per function.
  */
 
+import { apiFailure, type ErrorCode } from '../copy/errors';
+
 const API_BASE_URL = '/api';
 
 export type RewardStatus = 'PENDING' | 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
@@ -30,8 +32,9 @@ export interface RewardRow {
   title: string;
   description?: string | null;
   reward_category: RewardCategory;
-  token_type: 'BCH' | 'CASHTOKENS';
+  token_type: RewardTokenType;
   token_category?: string | null;
+  token_decimals?: number | null;
   total_pool: number;
   max_reward_amount: number;
   distributed_total: number;
@@ -75,6 +78,7 @@ export interface CreateRewardInput {
   rewardCategory: RewardCategory;
   tokenType: RewardTokenType;
   tokenCategory?: string;
+  tokenDecimals?: number;
   totalPool: number;
   maxRewardAmount: number;
   startDate?: number;
@@ -120,7 +124,7 @@ function authHeaders(userAddress: string): HeadersInit {
   };
 }
 
-async function readJsonOrThrow<T>(response: Response, fallback: string): Promise<T> {
+async function readJsonOrThrow<T>(response: Response, fallback: ErrorCode): Promise<T> {
   let payload: unknown;
   try {
     payload = await response.json();
@@ -129,13 +133,7 @@ async function readJsonOrThrow<T>(response: Response, fallback: string): Promise
   }
 
   if (!response.ok) {
-    const obj = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-    const message = typeof obj.message === 'string'
-      ? obj.message
-      : typeof obj.error === 'string'
-        ? obj.error
-        : fallback;
-    throw new Error(message);
+    throw apiFailure(payload, response.status, response.status === 404 ? 'NOT_FOUND' : fallback);
   }
 
   return payload as T;
@@ -145,12 +143,23 @@ export async function fetchRewards(creator: string, showDeprecated = false): Pro
   const qs = new URLSearchParams({ creator });
   if (showDeprecated) qs.set('showDeprecated', 'true');
   const response = await fetch(`${API_BASE_URL}/rewards?${qs.toString()}`);
-  return readJsonOrThrow<RewardListResponse>(response, 'Failed to fetch rewards');
+  const payload = await readJsonOrThrow<RewardListResponse>(response, 'LOAD_FAILED');
+  return {
+    success: true,
+    campaigns: Array.isArray(payload?.campaigns) ? payload.campaigns : [],
+    total: typeof payload?.total === 'number' ? payload.total : 0,
+  };
 }
 
 export async function fetchReward(id: string): Promise<RewardDetailResponse> {
   const response = await fetch(`${API_BASE_URL}/rewards/${id}`);
-  return readJsonOrThrow<RewardDetailResponse>(response, 'Failed to fetch reward campaign');
+  const payload = await readJsonOrThrow<RewardDetailResponse>(response, 'LOAD_FAILED');
+  return {
+    success: true,
+    campaign: payload.campaign,
+    distributions: Array.isArray(payload?.distributions) ? payload.distributions : [],
+    events: Array.isArray(payload?.events) ? payload.events : [],
+  };
 }
 
 export async function createReward(
@@ -162,5 +171,5 @@ export async function createReward(
     headers: authHeaders(userAddress),
     body: JSON.stringify(input),
   });
-  return readJsonOrThrow<CreateRewardResponse>(response, 'Failed to create reward campaign');
+  return readJsonOrThrow<CreateRewardResponse>(response, 'UNKNOWN');
 }

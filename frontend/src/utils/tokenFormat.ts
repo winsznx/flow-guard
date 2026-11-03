@@ -1,71 +1,71 @@
 import { getCachedTokenMeta } from './tokenMeta';
+import type { Asset } from '../components/ui/types';
+import { LABELS } from '../copy/common';
+import { formatAmount, formatShortId, type AmountPrecision } from '../copy/format';
 
 export type TokenType = 'BCH' | 'CASHTOKENS' | 'FUNGIBLE_TOKEN' | string | null | undefined;
 
 export interface FormatTokenAmountOptions {
+  /** Most decimals to show. BCH at 4 or fewer uses the list form. A non-zero value never shows as 0. */
   decimals?: number;
   noSuffix?: boolean;
+  /** Kept for existing callers. Amounts always use en-US thousands separators. */
   separator?: boolean;
 }
 
+const LIST_DECIMALS = 4;
+const MAX_TOKEN_DECIMALS = 18;
+const TOKENS_UNIT = 'tokens';
+
+function isBchType(tokenType: TokenType): boolean {
+  return tokenType === 'BCH' || tokenType === undefined || tokenType === null || tokenType === '';
+}
+
+function isTokenType(tokenType: TokenType): boolean {
+  return tokenType === 'CASHTOKENS' || tokenType === 'FUNGIBLE_TOKEN';
+}
+
+function tokenAsset(tokenType: TokenType, tokenCategory: string | null | undefined, decimals: number | undefined): Asset {
+  const meta = isTokenType(tokenType) ? getCachedTokenMeta(tokenCategory) : null;
+  return {
+    kind: 'token',
+    tokenId: tokenCategory ?? '',
+    symbol: meta?.symbol,
+    decimals: decimals ?? meta?.decimals ?? MAX_TOKEN_DECIMALS,
+  };
+}
+
+/**
+ * String form of an amount for places that can't render the Amount component yet. Values are in
+ * display units and are cut, never rounded up, by copy/format.ts. Missing values read "Not set".
+ */
 export function formatTokenAmount(
   amount: number | string | null | undefined,
   tokenType: TokenType,
   tokenCategory?: string | null,
   options: FormatTokenAmountOptions = {},
 ): string {
-  const numeric = typeof amount === 'string' ? Number(amount) : amount;
-  if (numeric === null || numeric === undefined || Number.isNaN(numeric)) {
-    return '—';
+  const unit = !options.noSuffix;
+
+  if (isBchType(tokenType)) {
+    const precision: AmountPrecision =
+      options.decimals !== undefined && options.decimals <= LIST_DECIMALS ? 'list' : 'record';
+    return formatAmount(amount, { kind: 'bch' }, { precision, unit }) ?? LABELS.notSet;
   }
 
-  const isBch = tokenType === 'BCH' || tokenType === undefined || tokenType === null;
-  const isToken = tokenType === 'CASHTOKENS' || tokenType === 'FUNGIBLE_TOKEN';
-
-  if (isBch) {
-    const decimals = options.decimals ?? 4;
-    const value = options.separator ? formatWithSep(numeric, decimals) : numeric.toFixed(decimals);
-    return options.noSuffix ? value : `${value} BCH`;
-  }
-
-  if (isToken) {
-    const decimals = options.decimals ?? 0;
-    const value = options.separator ? formatWithSep(numeric, decimals) : numeric.toFixed(decimals);
-    const symbol = getCachedTokenMeta(tokenCategory)?.symbol;
-    const suffix = options.noSuffix
-      ? ''
-      : symbol
-        ? ` ${symbol}`
-        : tokenCategory
-          ? ` · CT ${shortenCategory(tokenCategory)}`
-          : ' tokens';
-    return `${value}${suffix}`;
-  }
-
-  // Unknown / unsupported token type. Surface visibly rather than defaulting to BCH.
-  const decimals = options.decimals ?? 4;
-  const value = options.separator ? formatWithSep(numeric, decimals) : numeric.toFixed(decimals);
-  return options.noSuffix ? value : `${value} ?`;
+  const asset = tokenAsset(tokenType, tokenCategory, options.decimals);
+  const text = formatAmount(amount, asset, { unit });
+  if (text === null) return LABELS.notSet;
+  if (!unit || asset.kind !== 'token' || asset.symbol || !tokenCategory) return text;
+  return `${text} (${shortenCategory(tokenCategory)})`;
 }
 
 export function tokenSymbol(tokenType: TokenType, tokenCategory?: string | null): string {
-  if (tokenType === 'BCH' || !tokenType) return 'BCH';
-  if (tokenType === 'CASHTOKENS' || tokenType === 'FUNGIBLE_TOKEN') {
-    const symbol = getCachedTokenMeta(tokenCategory)?.symbol;
-    if (symbol) return symbol;
-    return tokenCategory ? `CT ${shortenCategory(tokenCategory)}` : 'tokens';
-  }
-  return tokenType;
+  if (isBchType(tokenType)) return 'BCH';
+  if (isTokenType(tokenType)) return getCachedTokenMeta(tokenCategory)?.symbol?.trim() || TOKENS_UNIT;
+  return TOKENS_UNIT;
 }
 
 export function shortenCategory(category: string): string {
-  if (category.length <= 8) return category;
-  return `${category.slice(0, 4)}…${category.slice(-3)}`;
-}
-
-function formatWithSep(value: number, decimals: number): string {
-  const fixed = value.toFixed(decimals);
-  const [whole, frac] = fixed.split('.');
-  const sep = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return frac ? `${sep}.${frac}` : sep;
+  return formatShortId(category);
 }

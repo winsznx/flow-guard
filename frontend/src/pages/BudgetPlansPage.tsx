@@ -1,779 +1,730 @@
-/**
- * BudgetPlansPage - Professional Budget Plan Management
- * Sablier-quality with DataTable, circular progress, CSV import/export
- */
-
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Calendar, Clock, TrendingUp, Plus, Zap, Wallet, Download, Pause, X as CloseIcon, AlertCircle, ExternalLink } from 'lucide-react';
-import { fetchBudgetPlans } from '../utils/api';
-import { useWallet } from '../hooks/useWallet';
-import {
-  fundBudgetPlan,
-  releaseMilestone,
-  pauseBudgetPlanOnChain,
-  cancelBudgetPlanOnChain,
-  getExplorerTxUrl,
-} from '../utils/blockchain';
-import { useNetwork } from '../hooks/useNetwork';
-import { toUserFacingError } from '../utils/userError';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ListToolbar } from '../components/layout/ListToolbar';
+import { Stack } from '../components/layout/Stack';
+import { Address } from '../components/ui/Address';
+import { Amount } from '../components/ui/Amount';
 import { Button } from '../components/ui/Button';
-import { DataTable, Column } from '../components/shared/DataTable';
-import { StatsCard } from '../components/shared/StatsCard';
-import { SkeletonTable } from '../components/ui/Skeleton';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { DetailList } from '../components/ui/DetailList';
+import { Dialog } from '../components/ui/Dialog';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { FilterChips } from '../components/ui/FilterChips';
+import { CalendarClock, Plus } from '../components/ui/Icon';
+import { List, type Column, type ListState } from '../components/ui/List';
+import { NoResults } from '../components/ui/NoResults';
+import { Notice } from '../components/ui/Notice';
+import { PlanSentence } from '../components/ui/PlanSentence';
+import { ReleaseBar } from '../components/ui/ReleaseBar';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { StatRow } from '../components/ui/StatRow';
+import { StatTile } from '../components/ui/StatTile';
+import { StatusPill } from '../components/ui/StatusPill';
+import { TransactionReview, type ReviewSummary } from '../components/ui/TransactionReview';
+import type { Asset } from '../components/ui/types';
+import { BUDGET_CREATE, BUDGETS_TAB, PLAN_DIALOG, PLAN_REVIEWS } from '../copy/budgets';
+import { ACTIONS } from '../copy/common';
+import { asFlowError, errorMessage } from '../copy/errors';
+import { formatAddress, formatAmount, formatDate } from '../copy/format';
+import { glossaryHelp } from '../copy/glossary';
+import { STATUS, lifecycleStatus, type StatusKey } from '../copy/status';
+import { everyDays, reachedNetwork, sameAddress } from '../copy/vaults';
+import { useNetwork } from '../hooks/useNetwork';
+import { useWallet } from '../hooks/useWallet';
+import { fetchBudgetPlans, fetchVaults } from '../utils/api';
+import {
+  cancelBudgetPlanOnChain,
+  fundBudgetPlan,
+  setPausedOnChain,
+  releaseMilestone,
+} from '../utils/blockchain';
 
-type PlanStatus = 'PENDING' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
-type PlanType = 'RECURRING' | 'LINEAR_VESTING' | 'STEP_VESTING';
+type Segment = 'yours' | 'public';
+type StatusFilter = 'ACTIVE' | 'PENDING' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
+type Action = 'fund' | 'claim' | 'pause' | 'resume' | 'cancel';
 
-interface BudgetPlan {
+type BudgetPlan = {
   id: string;
   creator: string;
-  controllerAddress?: string | null;
-  treasuryId: string;
-  treasuryName: string;
-  type: PlanType;
+  controller: string;
+  vaultId: string;
+  vaultName: string | null;
   recipient: string;
-  recipientLabel?: string;
+  recipientName: string | null;
+  contractAddress: string | null;
+  perPayment: number;
   intervalSeconds: number;
-  amountPerInterval: number;
-  totalReleased: number;
   totalAmount: number;
-  nextUnlock?: Date;
-  cliffDate?: Date;
-  status: PlanStatus;
+  totalReleased: number;
+  status: string;
+  isBch: boolean;
+  asset: Asset;
+  startsAt: number | null;
+};
+
+const BCH: Asset = { kind: 'bch' };
+
+const SEGMENT_OPTIONS: { value: Segment; label: string }[] = [
+  { value: 'yours', label: BUDGETS_TAB.segments.yours },
+  { value: 'public', label: BUDGETS_TAB.segments.public },
+];
+
+const FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'ACTIVE', label: STATUS.active.word },
+  { value: 'PENDING', label: STATUS.notFunded.word },
+  { value: 'PAUSED', label: STATUS.paused.word },
+  { value: 'COMPLETED', label: STATUS.finished.word },
+  { value: 'CANCELLED', label: STATUS.cancelled.word },
+];
+
+function readStartTime(raw: unknown): number | null {
+  if (typeof raw !== 'string') return null;
+  try {
+    const params: unknown = JSON.parse(raw);
+    if (!Array.isArray(params)) return null;
+    const entry: unknown = params[4];
+    const value =
+      entry && typeof entry === 'object' && 'value' in entry ? Number(entry.value) : NaN;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
 }
 
-type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
-
-interface FeedbackState {
-  tone: FeedbackTone;
-  title: string;
-  description?: string;
-  details?: string;
-  txHash?: string;
+function toPlan(raw: Record<string, unknown>): BudgetPlan {
+  const tokenType = typeof raw.token_type === 'string' ? raw.token_type : 'BCH';
+  const tokenId = typeof raw.token_category === 'string' ? raw.token_category : '';
+  const isBch = tokenType === 'BCH' || !tokenId;
+  const creator = String(raw.creator ?? '');
+  return {
+    id: String(raw.id ?? ''),
+    creator,
+    controller:
+      typeof raw.controllerAddress === 'string' && raw.controllerAddress
+        ? raw.controllerAddress
+        : creator,
+    vaultId: String(raw.vaultId ?? raw.vault_id ?? ''),
+    vaultName: typeof raw.vaultName === 'string' ? raw.vaultName : null,
+    recipient: String(raw.recipient ?? ''),
+    recipientName:
+      typeof raw.recipientLabel === 'string' && raw.recipientLabel.trim()
+        ? raw.recipientLabel
+        : null,
+    contractAddress: typeof raw.contract_address === 'string' ? raw.contract_address : null,
+    perPayment: Number(raw.amountPerInterval) || 0,
+    intervalSeconds: Number(raw.intervalSeconds) || 0,
+    totalAmount: Number(raw.totalAmount) || 0,
+    totalReleased: Number(raw.totalReleased) || 0,
+    status: String(raw.status ?? ''),
+    isBch,
+    asset: isBch ? BCH : { kind: 'token', tokenId, decimals: 0 },
+    startsAt: readStartTime(raw.constructor_params),
+  };
 }
 
-export default function BudgetPlansPage() {
-  const navigate = useNavigate();
+function money(value: number, plan: BudgetPlan): string {
+  return formatAmount(value, plan.asset) ?? String(value);
+}
+
+/** Released payments not yet paid out, and when the next one comes, from the plan's own schedule. */
+function schedule(plan: BudgetPlan, now: number): { ready: number; nextAt: number | null } {
+  if (!plan.startsAt || plan.intervalSeconds <= 0 || plan.perPayment <= 0)
+    return { ready: 0, nextAt: null };
+  const totalSteps = Math.ceil(plan.totalAmount / plan.perPayment);
+  const paidSteps = Math.round(plan.totalReleased / plan.perPayment);
+  const dueSteps = Math.min(
+    totalSteps,
+    Math.max(0, Math.floor((now / 1000 - plan.startsAt) / plan.intervalSeconds))
+  );
+  const ready = Math.min(
+    plan.totalAmount - plan.totalReleased,
+    Math.max(0, dueSteps - paidSteps) * plan.perPayment
+  );
+  const nextAt =
+    dueSteps < totalSteps ? (plan.startsAt + (dueSteps + 1) * plan.intervalSeconds) * 1000 : null;
+  return { ready: Math.max(0, ready), nextAt };
+}
+
+function statusOf(plan: BudgetPlan): StatusKey | null {
+  return lifecycleStatus(plan.status);
+}
+
+function recipientLabel(plan: BudgetPlan): string {
+  return plan.recipientName ?? formatAddress(plan.recipient);
+}
+
+export default function BudgetPlansTab() {
   const wallet = useWallet();
   const network = useNetwork();
-  const [budgetPlans, setBudgetPlans] = useState<BudgetPlan[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
-  const [typeFilter, setTypeFilter] = useState<'all' | PlanType>('all');
+  const [segment, setSegment] = useState<Segment>('yours');
+  const [filter, setFilter] = useState<StatusFilter[]>([]);
+  const [plans, setPlans] = useState<BudgetPlan[] | null>(null);
+  const [vaultNames, setVaultNames] = useState<Map<string, string>>(new Map());
+  const [visibleVaults, setVisibleVaults] = useState<Set<string>>(new Set());
+  const [failure, setFailure] = useState<string | null>(null);
+  const [openPlanId, setOpenPlanId] = useState<string | null>(null);
+  const [review, setReview] = useState<{ action: Action; planId: string } | null>(null);
+  const now = Date.now();
 
-  // Action modal state
-  const [actionModal, setActionModal] = useState<{ open: boolean; plan: BudgetPlan | null }>({ open: false, plan: null });
-  const [actionLoading, setActionLoading] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
-
-  const buildErrorFeedback = (
-    title: string,
-    error: unknown,
-    fallback: string,
-  ): FeedbackState => {
-    const parsed = toUserFacingError(error, fallback);
-    return {
-      tone: 'error',
-      title,
-      description: parsed.message,
-      details: parsed.details,
-    };
-  };
-
-  const transformPlan = (plan: any): BudgetPlan => ({
-    id: plan.id,
-    creator: plan.creator,
-    controllerAddress: plan.controllerAddress || null,
-    treasuryId: plan.vaultId,
-    treasuryName: plan.vaultName || plan.vaultId,
-    type: plan.planType as PlanType,
-    recipient: plan.recipient,
-    recipientLabel: plan.recipientLabel,
-    intervalSeconds: plan.intervalSeconds,
-    amountPerInterval: plan.amountPerInterval,
-    totalReleased: plan.totalReleased,
-    totalAmount: plan.totalAmount,
-    nextUnlock: plan.nextUnlock ? new Date(plan.nextUnlock) : undefined,
-    cliffDate: plan.cliffDate ? new Date(plan.cliffDate) : undefined,
-    status: plan.status as PlanStatus,
-  });
-
-  const reloadPlans = async () => {
-    const plans = await fetchBudgetPlans();
-    setBudgetPlans(plans.map(transformPlan));
-  };
-
-  useEffect(() => {
-    const loadBudgetPlans = async () => {
-      try {
-        setLoading(true);
-        await reloadPlans();
-      } catch (err: any) {
-        console.error('Failed to load budget plans:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadBudgetPlans();
+  const load = useCallback(async () => {
+    setFailure(null);
+    try {
+      const rows = await fetchBudgetPlans();
+      setPlans(rows.map(toPlan));
+    } catch (error) {
+      setPlans(null);
+      setFailure(asFlowError(error).message);
+    }
   }, []);
 
-  // Calculate stats
-  const activePlans = budgetPlans.filter((p) => p.status === 'ACTIVE');
-  const totalScheduled = budgetPlans.reduce(
-    (sum, p) => sum + (p.totalAmount - p.totalReleased),
-    0
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchVaults(wallet.address || undefined)
+      .then((response) => {
+        if (cancelled) return;
+        const names = new Map<string, string>();
+        const visible = new Set<string>();
+        for (const vault of response.all) {
+          const keys = [vault.vaultId, vault.id].filter(Boolean).map(String);
+          for (const key of keys) {
+            visible.add(key);
+            if (typeof vault.name === 'string' && vault.name.trim()) names.set(key, vault.name);
+          }
+        }
+        setVaultNames(names);
+        setVisibleVaults(visible);
+      })
+      .catch((error: unknown) => {
+        console.warn('Vault names for budget plans did not load', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.address]);
+
+  const isMine = useCallback(
+    (plan: BudgetPlan) =>
+      sameAddress(plan.creator, wallet.address) || sameAddress(plan.recipient, wallet.address),
+    [wallet.address]
   );
-  const totalReleased = budgetPlans.reduce((sum, p) => sum + p.totalReleased, 0);
-  const nextUnlockingSoon = budgetPlans.filter(
-    (p) => p.nextUnlock && p.nextUnlock.getTime() - Date.now() < 7 * 86400000
-  ).length;
 
-  // Filter plans
-  const filteredPlans = budgetPlans.filter((plan) => {
-    if (statusFilter !== 'all' && plan.status !== statusFilter) return false;
-    if (typeFilter !== 'all' && plan.type !== typeFilter) return false;
-    return true;
-  });
+  const segmentRows = useMemo(
+    () =>
+      (plans ?? []).filter(
+        (plan) => isMine(plan) || (segment === 'public' && visibleVaults.has(plan.vaultId))
+      ),
+    [plans, segment, isMine, visibleVaults]
+  );
+  const rows = segmentRows.filter(
+    (plan) => filter.length === 0 || filter.includes(plan.status as StatusFilter)
+  );
+  const state: ListState = failure
+    ? 'error'
+    : !plans
+      ? 'loading'
+      : segmentRows.length === 0
+        ? 'empty'
+        : rows.length === 0
+          ? 'no-results'
+          : 'ready';
 
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case 'RECURRING':
-        return 'Recurring Release';
-      case 'LINEAR_VESTING':
-        return 'Linear Vesting';
-      case 'STEP_VESTING':
-        return 'Step Vesting';
-      default:
-        return type;
-    }
-  };
+  const bchRows = segmentRows.filter((plan) => plan.isBch);
+  const released = bchRows.reduce((sum, plan) => sum + plan.totalReleased, 0);
+  const toCome = bchRows
+    .filter((plan) => plan.status === 'ACTIVE' || plan.status === 'PAUSED')
+    .reduce((sum, plan) => sum + Math.max(0, plan.totalAmount - plan.totalReleased), 0);
+  const notFunded = bchRows
+    .filter((plan) => plan.status === 'PENDING')
+    .reduce((sum, plan) => sum + plan.totalAmount, 0);
+  const active = segmentRows.filter((plan) => plan.status === 'ACTIVE').length;
+  const hasTokens = bchRows.length < segmentRows.length;
 
-  const getIntervalLabel = (seconds: number) => {
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-    if (seconds < 2592000) return `${Math.round(seconds / 86400)}d`;
-    if (seconds < 31536000) return `${Math.round(seconds / 2592000)}mo`;
-    return `${Math.round(seconds / 31536000)}y`;
-  };
+  const vaultNameOf = (plan: BudgetPlan) => plan.vaultName ?? vaultNames.get(plan.vaultId) ?? null;
+  const openPlan = plans?.find((plan) => plan.id === openPlanId) ?? null;
+  const reviewPlan = plans?.find((plan) => plan.id === review?.planId) ?? null;
 
-  const formatDate = (date?: Date) => {
-    if (!date) return 'Not scheduled';
-    const now = Date.now();
-    const diff = date.getTime() - now;
-    const days = Math.round(diff / 86400000);
-
-    if (days < 0) return 'Overdue';
-    if (days === 0) return 'Today';
-    if (days === 1) return 'Tomorrow';
-    if (days < 7) return `in ${days}d`;
-    if (days < 30) return `in ${Math.round(days / 7)}w`;
-    return `in ${Math.round(days / 30)}mo`;
-  };
-
-  // Table columns
   const columns: Column<BudgetPlan>[] = [
     {
-      key: 'recipientLabel',
-      label: 'Plan Name',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-sans font-medium text-textPrimary">
-            {row.recipientLabel || 'Unnamed Plan'}
-          </p>
-          <p className="text-xs text-textMuted font-mono">{row.id}</p>
-        </div>
-      ),
+      key: 'recipient',
+      header: BUDGETS_TAB.columns.recipient,
+      primary: true,
+      cell: (plan) =>
+        plan.recipientName ? plan.recipientName : <Address value={plan.recipient} copy={false} />,
     },
     {
-      key: 'type',
-      label: 'Type',
-      sortable: true,
-      render: (row) => {
-        const typeColors = {
-          RECURRING: 'bg-primary/10 text-primary border-primary',
-          LINEAR_VESTING: 'bg-accent/10 text-accent border-accent',
-          STEP_VESTING: 'bg-secondary/10 text-secondary border-secondary',
-        };
-        return (
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-sans font-medium border ${
-              typeColors[row.type]
-            }`}
-          >
-            {getTypeLabel(row.type)}
+      key: 'vault',
+      header: BUDGETS_TAB.columns.vault,
+      mobile: 'hidden',
+      cell: (plan) =>
+        vaultNameOf(plan) ?? <span className="text-ink-muted">{BUDGETS_TAB.noVault}</span>,
+    },
+    {
+      key: 'schedule',
+      header: BUDGETS_TAB.columns.schedule,
+      mobile: 'bottom-start',
+      cell: (plan) =>
+        BUDGETS_TAB.scheduleValue(
+          money(plan.perPayment, plan),
+          everyDays(plan.intervalSeconds) ?? ''
+        ),
+    },
+    {
+      key: 'released',
+      header: BUDGETS_TAB.columns.released,
+      align: 'end',
+      mobile: 'bottom-end',
+      cell: (plan) => (
+        <span className="flex flex-col items-end gap-0.5">
+          <Amount value={plan.totalReleased} asset={plan.asset} precision="list" />
+          <span className="text-small text-ink-muted">
+            {BUDGETS_TAB.ofTotal(money(plan.totalAmount, plan))}
           </span>
-        );
-      },
-    },
-    {
-      key: 'treasuryName',
-      label: 'Treasury',
-      sortable: true,
-      render: (row) => (
-        <p className="font-mono text-sm text-textPrimary">{row.treasuryName}</p>
-      ),
-    },
-    {
-      key: 'amountPerInterval',
-      label: 'Per Release',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => (
-        <div className="text-right">
-          <p className="font-display font-bold text-primary">
-            {row.amountPerInterval.toFixed(4)} BCH
-          </p>
-          <p className="text-xs text-textMuted font-mono">
-            every {getIntervalLabel(row.intervalSeconds)}
-          </p>
-        </div>
-      ),
-    },
-    {
-      key: 'totalReleased',
-      label: 'Released',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => {
-        const progress = (row.totalReleased / row.totalAmount) * 100;
-        return (
-          <div className="text-right">
-            <p className="font-display font-bold text-accent">
-              {row.totalReleased.toFixed(4)} BCH
-            </p>
-            <div className="flex items-center justify-end gap-2 mt-1">
-              <div className="w-20 bg-surfaceAlt rounded-full h-1.5 overflow-hidden">
-                <div
-                  className="h-full bg-accent rounded-full transition-all"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              <span className="text-xs font-mono text-textMuted">
-                {progress.toFixed(0)}%
-              </span>
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      key: 'nextUnlock',
-      label: 'Next Unlock',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="text-sm font-sans text-textPrimary">
-            {formatDate(row.nextUnlock)}
-          </p>
-          {row.nextUnlock && (
-            <p className="text-xs text-textMuted font-mono">
-              {row.nextUnlock.toLocaleDateString()}
-            </p>
-          )}
-        </div>
+        </span>
       ),
     },
     {
       key: 'status',
-      label: 'Status',
-      sortable: true,
-      className: 'text-center',
-      render: (row) => {
-        const statusColors: Record<PlanStatus, string> = {
-          PENDING: 'bg-yellow-500/10 text-yellow-600 border-yellow-500',
-          ACTIVE: 'bg-accent/10 text-accent border-accent',
-          PAUSED: 'bg-secondary/10 text-secondary border-secondary',
-          COMPLETED: 'bg-primary/10 text-primary border-primary',
-          CANCELLED: 'bg-red-500/10 text-red-600 border-red-500',
-        };
-        return (
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-sans font-medium border ${
-              statusColors[row.status]
-            }`}
-          >
-            {row.status}
-          </span>
-        );
+      header: BUDGETS_TAB.columns.status,
+      mobile: 'top',
+      cell: (plan) => {
+        const status = statusOf(plan);
+        return status ? <StatusPill status={status} size="sm" /> : null;
       },
     },
   ];
 
-  const handleImport = (data: any[]) => {
-    console.log('Imported budget plans:', data);
-    navigate('/budgets/batch-create', { state: { importedData: data } });
-  };
+  const help = glossaryHelp('budgetPlan');
+  const empty =
+    segment === 'yours' ? (
+      <EmptyState
+        icon={CalendarClock}
+        title={BUDGETS_TAB.empty.yoursTitle}
+        description={BUDGETS_TAB.empty.yoursLine}
+        example={BUDGETS_TAB.empty.yoursExample}
+        action={
+          <ButtonLink to="/budgets/create" variant="primary" leadingIcon={Plus}>
+            {BUDGETS_TAB.create}
+          </ButtonLink>
+        }
+        learnMore={help ? { label: help.label, to: help.path } : undefined}
+      />
+    ) : (
+      <EmptyState
+        icon={CalendarClock}
+        title={BUDGETS_TAB.empty.publicTitle}
+        description={BUDGETS_TAB.empty.publicLine}
+      />
+    );
 
-  const handleFund = async () => {
-    if (!wallet.isConnected || !actionModal.plan) {
-      setFeedback({
-        tone: 'error',
-        title: 'Wallet not connected',
-        description: 'Connect your wallet before funding this budget plan.',
-      });
-      return;
-    }
-
-    setActionLoading(true);
-    setFeedback({
-      tone: 'info',
-      title: 'Signing funding transaction',
-      description: 'Approve the wallet request to fund this budget plan.',
-    });
-    try {
-      const txHash = await fundBudgetPlan(wallet, actionModal.plan.id);
-      setFeedback({
-        tone: 'success',
-        title: 'Budget plan funded',
-        description: 'Funding transaction was confirmed by backend processing.',
-        txHash,
-      });
-      await reloadPlans();
-    } catch (error: any) {
-      console.error('Failed to fund budget plan:', error);
-      setFeedback(buildErrorFeedback('Funding failed', error, 'Failed to fund budget plan.'));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleRelease = async () => {
-    if (!wallet.isConnected || !actionModal.plan) {
-      setFeedback({
-        tone: 'error',
-        title: 'Wallet not connected',
-        description: 'Connect your wallet before releasing this milestone.',
-      });
-      return;
-    }
-
-    setActionLoading(true);
-    setFeedback({
-      tone: 'info',
-      title: 'Signing release transaction',
-      description: 'Approve the wallet request to release this milestone.',
-    });
-    try {
-      const txHash = await releaseMilestone(wallet, actionModal.plan.id);
-      setFeedback({
-        tone: 'success',
-        title: 'Milestone released',
-        description: 'Release transaction was submitted on-chain.',
-        txHash,
-      });
-      await reloadPlans();
-    } catch (error: any) {
-      console.error('Failed to release milestone:', error);
-      setFeedback(buildErrorFeedback('Milestone release failed', error, 'Failed to release milestone.'));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handlePause = async () => {
-    if (!wallet.isConnected || !actionModal.plan) {
-      setFeedback({
-        tone: 'error',
-        title: 'Wallet not connected',
-        description: 'Connect your wallet before pausing this budget plan.',
-      });
-      return;
-    }
-
-    setActionLoading(true);
-    setFeedback({
-      tone: 'info',
-      title: 'Signing pause transaction',
-      description: 'Approve the wallet request to pause this budget plan.',
-    });
-    try {
-      const txHash = await pauseBudgetPlanOnChain(wallet, actionModal.plan.id);
-      setFeedback({
-        tone: 'success',
-        title: 'Budget plan paused',
-        description: 'Pause transaction was submitted on-chain.',
-        txHash,
-      });
-      await reloadPlans();
-    } catch (error: any) {
-      console.error('Failed to pause budget plan:', error);
-      setFeedback(buildErrorFeedback('Pause failed', error, 'Failed to pause budget plan.'));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!actionModal.plan) return;
-    if (!window.confirm('Are you sure you want to cancel this budget plan?')) {
-      return;
-    }
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'error',
-        title: 'Wallet not connected',
-        description: 'Connect your wallet before cancelling this budget plan.',
-      });
-      return;
-    }
-
-    setActionLoading(true);
-    setFeedback({
-      tone: 'info',
-      title: 'Signing cancel transaction',
-      description: 'Approve the wallet request to cancel this budget plan.',
-    });
-    try {
-      const txHash = await cancelBudgetPlanOnChain(wallet, actionModal.plan.id);
-      setFeedback({
-        tone: 'success',
-        title: 'Budget plan cancelled',
-        description: 'Cancel transaction was submitted on-chain.',
-        txHash,
-      });
-      await reloadPlans();
-    } catch (error: any) {
-      console.error('Failed to cancel budget plan:', error);
-      setFeedback(buildErrorFeedback('Cancel failed', error, 'Failed to cancel budget plan.'));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const openActionModal = (plan: BudgetPlan) => {
-    setFeedback(null);
-    setActionModal({ open: true, plan });
-  };
-
-  const feedbackToneClasses: Record<FeedbackTone, string> = {
-    success: 'border-success/40 bg-success/10 text-success',
-    warning: 'border-warning/40 bg-warning/10 text-warning',
-    error: 'border-error/40 bg-error/10 text-error',
-    info: 'border-primary/30 bg-primary/10 text-primary',
+  const startReview = (action: Action, plan: BudgetPlan) => {
+    setOpenPlanId(null);
+    setReview({ action, planId: plan.id });
   };
 
   return (
-    <div className="min-h-screen pb-20 bg-background">
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-        {/* Header */}
-        <div className="mb-6 md:mb-8">
-          <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-6 mb-8">
-            <div>
-              <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-4">
-                Budget Plans
-              </h1>
-              <p className="font-sans text-textMuted max-w-2xl text-sm leading-relaxed">
-                Automated recurring releases and vesting schedules. Funds unlock on schedule,
-                enforced by covenants.
-              </p>
-            </div>
-            <Button
-              size="lg"
-              onClick={() => navigate('/budgets/create')}
-              className="shadow-lg"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Create Budget Plan
-            </Button>
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <StatsCard
-              label="Active Plans"
-              value={activePlans.length}
-              subtitle={`${budgetPlans.length} total`}
-              icon={Calendar}
-              color="primary"
+    <Stack>
+      <ListToolbar
+        segments={
+          <div className="flex flex-col items-start gap-2">
+            <SegmentedControl
+              label={BUDGETS_TAB.segmentLabel}
+              options={SEGMENT_OPTIONS}
+              value={segment}
+              onChange={setSegment}
             />
-            <StatsCard
-              label="Total Released"
-              value={`${totalReleased.toFixed(4)} BCH`}
-              subtitle="All time"
-              icon={TrendingUp}
-              color="accent"
-              progress={{
-                percentage:
-                  totalReleased + totalScheduled > 0
-                    ? (totalReleased / (totalReleased + totalScheduled)) * 100
-                    : 0,
-                label: 'Released',
-              }}
-            />
-            <StatsCard
-              label="Scheduled"
-              value={`${totalScheduled.toFixed(4)} BCH`}
-              subtitle="Remaining to unlock"
-              icon={Clock}
-              color="secondary"
-            />
-            <StatsCard
-              label="Unlocking Soon"
-              value={nextUnlockingSoon}
-              subtitle="Within 7 days"
-              icon={Zap}
-              color="muted"
-            />
+            {segment === 'public' ? (
+              <p className="text-small text-ink-secondary">{BUDGETS_TAB.publicLine}</p>
+            ) : null}
           </div>
-
-          {/* Type Filter */}
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-sm text-textMuted font-sans">Type:</span>
-            {(['all', 'RECURRING', 'LINEAR_VESTING', 'STEP_VESTING'] as const).map((type) => (
-              <button
-                key={type}
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 rounded-md text-xs font-sans font-medium transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'bg-surface text-textSecondary hover:bg-surfaceAlt border border-border'
-                }`}
-              >
-                {type === 'all' ? 'ALL' : getTypeLabel(type)}
-              </button>
-            ))}
-          </div>
-
-          {/* Status Filter */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-textMuted font-sans">Status:</span>
-            {(['all', 'ACTIVE', 'PAUSED', 'COMPLETED'] as const).map((status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                className={`px-3 py-1.5 rounded-md text-xs font-sans font-medium transition-colors ${
-                  statusFilter === status
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'bg-surface text-textSecondary hover:bg-surfaceAlt border border-border'
-                }`}
-              >
-                {status}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Data Table */}
-        {loading ? (
-          <SkeletonTable rows={6} columns={7} />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={filteredPlans}
-            onRowClick={(plan) => openActionModal(plan)}
-            enableSearch
-            enableExport
-            enableImport
-            onImport={handleImport}
-            emptyMessage="No budget plans found. Create your first budget plan to get started."
+        }
+        chips={
+          state === 'ready' || state === 'no-results' ? (
+            <FilterChips
+              label={BUDGETS_TAB.filterLabel}
+              options={FILTERS}
+              selected={filter}
+              onChange={setFilter}
+              showAll
+            />
+          ) : null
+        }
+        stats={
+          state === 'ready' || state === 'no-results' ? (
+            <StatRow>
+              <StatTile label={BUDGETS_TAB.stats.active} value={String(active)} />
+              <StatTile
+                label={BUDGETS_TAB.stats.released}
+                value={<Amount value={released} asset={BCH} size="lg" precision="list" />}
+                sub={hasTokens ? BUDGETS_TAB.stats.bchOnly : undefined}
+              />
+              <StatTile
+                label={BUDGETS_TAB.stats.toCome}
+                value={<Amount value={toCome} asset={BCH} size="lg" precision="list" />}
+                sub={hasTokens ? BUDGETS_TAB.stats.bchOnly : BUDGETS_TAB.stats.toComeSub}
+              />
+              <StatTile
+                label={BUDGETS_TAB.stats.notFunded}
+                value={<Amount value={notFunded} asset={BCH} size="lg" precision="list" />}
+                sub={hasTokens ? BUDGETS_TAB.stats.bchOnly : undefined}
+              />
+            </StatRow>
+          ) : null
+        }
+      />
+      <List
+        label={BUDGETS_TAB.listLabel}
+        columns={columns}
+        rows={rows}
+        rowKey={(plan) => plan.id}
+        onRowOpen={(plan) => setOpenPlanId(plan.id)}
+        state={state}
+        empty={empty}
+        noResults={<NoResults thing={BUDGETS_TAB.noResultsThing} onClear={() => setFilter([])} />}
+        error={
+          <ErrorState
+            title={BUDGETS_TAB.loadFailedTitle}
+            reason={failure ?? errorMessage('LOAD_FAILED', { things: 'Budget plans' })}
+            onRetry={load}
           />
-        )}
+        }
+      />
 
-        {/* Action Modal */}
-        {actionModal.open && actionModal.plan && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={() => setActionModal({ open: false, plan: null })}>
-            <div className="bg-surface rounded-lg border border-border max-w-2xl w-full p-6 md:p-8" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-start justify-between mb-6">
-                <div>
-                  <h2 className="text-2xl md:text-3xl font-display font-bold text-textPrimary mb-2">
-                    Budget Plan Actions
-                  </h2>
-                  <p className="text-sm font-sans text-textMuted">
-                    {actionModal.plan.recipientLabel || 'Unnamed Plan'}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setActionModal({ open: false, plan: null })}
-                  className="text-textMuted hover:text-textPrimary transition-colors"
-                >
-                  <CloseIcon className="w-6 h-6" />
-                </button>
-              </div>
+      {openPlan ? (
+        <PlanDialog
+          plan={openPlan}
+          vaultName={vaultNameOf(openPlan)}
+          viewer={wallet.address}
+          now={now}
+          onClose={() => setOpenPlanId(null)}
+          onAction={(action) => startReview(action, openPlan)}
+        />
+      ) : null}
 
-              {feedback && (
-                <div className={`mb-6 rounded-lg border p-4 ${feedbackToneClasses[feedback.tone]}`}>
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold">{feedback.title}</p>
-                      {feedback.description && (
-                        <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
-                      )}
-                      {feedback.details && (
-                        <details className="mt-3">
-                          <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
-                            Show technical details
-                          </summary>
-                          <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
-                            {feedback.details}
-                          </pre>
-                        </details>
-                      )}
-                      {feedback.txHash && (
-                        <a
-                          href={getExplorerTxUrl(feedback.txHash, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
-                        >
-                          View transaction
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
+      {reviewPlan && review ? (
+        <PlanReview
+          plan={reviewPlan}
+          action={review.action}
+          vaultName={vaultNameOf(reviewPlan)}
+          readyAmount={schedule(reviewPlan, now).ready}
+          network={network}
+          onClose={() => setReview(null)}
+          run={async () => {
+            let txid: string;
+            try {
+              txid = await runAction(review.action, reviewPlan.id);
+            } catch (error) {
+              if (reachedNetwork(error)) void load();
+              throw error;
+            }
+            void load();
+            return { txid };
+          }}
+        />
+      ) : null}
+    </Stack>
+  );
 
-              {/* Plan Details */}
-              <div className="bg-surfaceAlt rounded-lg p-4 mb-6">
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-textMuted font-sans">Recipient:</span>
-                    <p className="font-mono text-textPrimary break-all">
-                      {actionModal.plan.recipient.slice(0, 20)}...{actionModal.plan.recipient.slice(-10)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-textMuted font-sans">Status:</span>
-                    <p className="font-mono text-textPrimary">{actionModal.plan.status}</p>
-                  </div>
-                  <div>
-                    <span className="text-textMuted font-sans">Total Amount:</span>
-                    <p className="font-mono text-textPrimary">{actionModal.plan.totalAmount.toFixed(4)} BCH</p>
-                  </div>
-                  <div>
-                    <span className="text-textMuted font-sans">Released:</span>
-                    <p className="font-mono text-textPrimary">{actionModal.plan.totalReleased.toFixed(4)} BCH</p>
-                  </div>
-                  <div>
-                    <span className="text-textMuted font-sans">Per Release:</span>
-                    <p className="font-mono text-textPrimary">{actionModal.plan.amountPerInterval.toFixed(4)} BCH</p>
-                  </div>
-                  <div>
-                    <span className="text-textMuted font-sans">Next Unlock:</span>
-                    <p className="font-mono text-textPrimary">{formatDate(actionModal.plan.nextUnlock)}</p>
-                  </div>
-                </div>
-              </div>
+  function runAction(action: Action, planId: string): Promise<string> {
+    switch (action) {
+      case 'fund':
+        return fundBudgetPlan(wallet, planId);
+      case 'claim':
+        return releaseMilestone(wallet, planId);
+      case 'pause':
+      case 'resume':
+        return setPausedOnChain(wallet, 'budget-plans', planId, action);
+      case 'cancel':
+        return cancelBudgetPlanOnChain(wallet, planId);
+    }
+  }
+}
 
-              {/* Progress */}
-              <div className="bg-primary/5 border border-primary rounded-lg p-4 mb-6">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-sans font-medium text-primary">Release Progress</span>
-                  <span className="text-sm font-mono text-textPrimary">
-                    {((actionModal.plan.totalReleased / actionModal.plan.totalAmount) * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-surfaceAlt rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all"
-                    style={{ width: `${(actionModal.plan.totalReleased / actionModal.plan.totalAmount) * 100}%` }}
-                  />
-                </div>
-                <p className="text-xs font-mono text-textMuted mt-2">
-                  {(actionModal.plan.totalAmount - actionModal.plan.totalReleased).toFixed(4)} BCH remaining
-                </p>
-              </div>
+type PlanDialogProps = {
+  plan: BudgetPlan;
+  vaultName: string | null;
+  viewer: string | null;
+  now: number;
+  onClose: () => void;
+  onAction: (action: Action) => void;
+};
 
-              {/* Action Buttons */}
-              {(() => {
-                const controllerAddress = actionModal.plan?.controllerAddress || actionModal.plan?.creator;
-                const canControl = Boolean(
-                  wallet.isConnected &&
-                  wallet.address &&
-                  controllerAddress &&
-                  wallet.address.toLowerCase() === controllerAddress.toLowerCase(),
-                );
+function PlanDialog({ plan, vaultName, viewer, now, onClose, onAction }: PlanDialogProps) {
+  const status = statusOf(plan);
+  const isController = sameAddress(plan.controller, viewer);
+  const isSender = sameAddress(plan.creator, viewer);
+  const isRecipient = sameAddress(plan.recipient, viewer);
+  const { ready, nextAt } = schedule(plan, now);
+  const toCome = Math.max(0, plan.totalAmount - plan.totalReleased - ready);
+  const nextDate = nextAt ? formatDate(nextAt) : null;
 
-                return (
-                  <div className="flex gap-3">
-                    {actionModal.plan.status === 'PENDING' && wallet.isConnected && (
-                      <Button
-                        variant="primary"
-                        onClick={handleFund}
-                        disabled={actionLoading}
-                        className="flex-1 flex items-center justify-center gap-2"
-                      >
-                        <Wallet className="w-4 h-4" />
-                        {actionLoading ? 'Funding...' : 'Fund Budget Plan'}
-                      </Button>
-                    )}
+  const actions: ReactNode[] = [];
+  const canFund = plan.status === 'PENDING' && isSender && Boolean(plan.contractAddress);
+  if (canFund) {
+    actions.push(
+      <Button key="fund" variant="primary" onClick={() => onAction('fund')}>
+        {PLAN_DIALOG.fund(money(plan.totalAmount, plan))}
+      </Button>
+    );
+  }
+  if (plan.status === 'ACTIVE' && isRecipient && ready > 0) {
+    actions.push(
+      <Button key="claim" variant="primary" onClick={() => onAction('claim')}>
+        {PLAN_DIALOG.claim(money(ready, plan))}
+      </Button>
+    );
+  }
+  if (plan.status === 'ACTIVE' && isController) {
+    actions.push(
+      <Button key="pause" variant="secondary" onClick={() => onAction('pause')}>
+        {PLAN_DIALOG.pause}
+      </Button>
+    );
+  }
+  if (plan.status === 'PAUSED' && isController) {
+    actions.push(
+      <Button key="resume" variant="primary" onClick={() => onAction('resume')}>
+        {PLAN_DIALOG.resume}
+      </Button>
+    );
+  }
+  if ((plan.status === 'ACTIVE' || plan.status === 'PAUSED') && isController) {
+    actions.push(
+      <Button key="cancel" variant="danger-quiet" onClick={() => onAction('cancel')}>
+        {PLAN_DIALOG.cancel}
+      </Button>
+    );
+  }
 
-                    {actionModal.plan.status === 'ACTIVE' && canControl && (
-                      <Button
-                        variant="outline"
-                        onClick={handlePause}
-                        disabled={actionLoading}
-                        className="flex-1 flex items-center justify-center gap-2"
-                      >
-                        <Pause className="w-4 h-4" />
-                        {actionLoading ? 'Pausing...' : 'Pause'}
-                      </Button>
-                    )}
-
-                    {(actionModal.plan.status === 'ACTIVE' || actionModal.plan.status === 'PAUSED') && canControl && (
-                      <Button
-                        variant="outline"
-                        onClick={handleCancel}
-                        disabled={actionLoading}
-                        className="flex-1 flex items-center justify-center gap-2 text-error border-error hover:bg-error/5"
-                      >
-                        {actionLoading ? 'Cancelling...' : 'Cancel'}
-                      </Button>
-                    )}
-
-                    {actionModal.plan.status === 'ACTIVE' &&
-                     wallet.isConnected &&
-                     wallet.address === actionModal.plan.recipient &&
-                     actionModal.plan.nextUnlock &&
-                     actionModal.plan.nextUnlock.getTime() <= Date.now() && (
-                      <Button
-                        variant="primary"
-                        onClick={handleRelease}
-                        disabled={actionLoading}
-                        className="flex-1 flex items-center justify-center gap-2"
-                      >
-                        <Download className="w-4 h-4" />
-                        {actionLoading ? 'Releasing...' : 'Release Milestone'}
-                      </Button>
-                    )}
-
-                    <Button
-                      variant="outline"
-                      onClick={() => setActionModal({ open: false, plan: null })}
-                      disabled={actionLoading}
-                    >
-                      Close
-                    </Button>
-                  </div>
-                );
-              })()}
-
-              {/* Info Messages */}
-              {actionModal.plan.status === 'PENDING' && (
-                <div className="mt-4 p-3 bg-primary/5 border border-primary rounded-lg">
-                  <p className="text-sm font-sans text-textPrimary">
-                    This budget plan needs to be funded before milestones can be released.
-                  </p>
-                </div>
-              )}
-
-              {actionModal.plan.status === 'ACTIVE' &&
-               actionModal.plan.nextUnlock &&
-               actionModal.plan.nextUnlock.getTime() > Date.now() && (
-                <div className="mt-4 p-3 bg-surfaceAlt rounded-lg">
-                  <p className="text-sm font-sans text-textMuted">
-                    Next milestone unlocks {formatDate(actionModal.plan.nextUnlock)}
-                  </p>
-                </div>
-              )}
-            </div>
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={PLAN_DIALOG.title(recipientLabel(plan))}
+      size="lg"
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          {ACTIONS.close}
+        </Button>
+      }
+    >
+      <Stack gap={4}>
+        {status ? (
+          <div>
+            <StatusPill status={status} />
           </div>
-        )}
-      </div>
-    </div>
+        ) : null}
+        {plan.perPayment > 0 && plan.intervalSeconds > 0 ? (
+          <PlanSentence
+            recipient={{ address: plan.recipient, name: plan.recipientName ?? undefined }}
+            schedule={{
+              kind: 'period-release',
+              perPeriod: String(plan.perPayment),
+              everyDays: Math.round(plan.intervalSeconds / 86400),
+              periods: Math.max(1, Math.ceil(plan.totalAmount / plan.perPayment)),
+              asset: plan.asset,
+              vault: { id: plan.vaultId, name: vaultName ?? BUDGETS_TAB.noVault },
+            }}
+          />
+        ) : null}
+        {plan.status === 'PENDING' ? (
+          <Notice
+            tone="warning"
+            title={
+              isSender && !plan.contractAddress ? PLAN_DIALOG.notSetUp : PLAN_DIALOG.notFundedLine
+            }
+          />
+        ) : null}
+        {plan.status === 'PAUSED' && isRecipient ? (
+          <Notice tone="warning" title={PLAN_DIALOG.pausedRecipient} />
+        ) : null}
+        {plan.totalAmount > 0 ? (
+          <ReleaseBar
+            asset={plan.asset}
+            claimed={String(plan.totalReleased)}
+            ready={String(ready)}
+            later={String(toCome)}
+          />
+        ) : null}
+        <DetailList
+          items={[
+            {
+              label: PLAN_DIALOG.details.recipient,
+              value: <Address value={plan.recipient} name={plan.recipientName ?? undefined} />,
+            },
+            { label: PLAN_DIALOG.details.vault, value: vaultName },
+            {
+              label: PLAN_DIALOG.details.eachTime,
+              value: <Amount value={plan.perPayment} asset={plan.asset} />,
+            },
+            { label: PLAN_DIALOG.details.howOften, value: everyDays(plan.intervalSeconds) },
+            {
+              label: PLAN_DIALOG.details.total,
+              value: <Amount value={plan.totalAmount} asset={plan.asset} />,
+            },
+            {
+              label: PLAN_DIALOG.details.released,
+              value: <Amount value={plan.totalReleased} asset={plan.asset} />,
+            },
+            {
+              label: PLAN_DIALOG.details.next,
+              value:
+                plan.status === 'ACTIVE' && nextDate
+                  ? PLAN_DIALOG.nextOn(money(plan.perPayment, plan), nextDate)
+                  : null,
+            },
+          ]}
+        />
+        {isSender && vaultName ? (
+          <p className="text-small text-ink-secondary">{PLAN_DIALOG.fundingLine(vaultName)}</p>
+        ) : null}
+        <div className="flex flex-col gap-2 border-t border-line pt-4">
+          <p className="text-label text-ink-secondary">{PLAN_DIALOG.manage}</p>
+          {actions.length > 0 ? (
+            <div className="flex flex-wrap gap-2">{actions}</div>
+          ) : (
+            <p className="text-small text-ink-muted">{PLAN_DIALOG.noActions}</p>
+          )}
+        </div>
+      </Stack>
+    </Dialog>
+  );
+}
+
+type PlanReviewProps = {
+  plan: BudgetPlan;
+  action: Action;
+  vaultName: string | null;
+  readyAmount: number;
+  network: 'mainnet' | 'chipnet';
+  onClose: () => void;
+  run: () => Promise<{ txid?: string }>;
+};
+
+function PlanReview({
+  plan,
+  action,
+  vaultName,
+  readyAmount,
+  network,
+  onClose,
+  run,
+}: PlanReviewProps) {
+  const name = recipientLabel(plan);
+  const contract = plan.contractAddress;
+  const planSentence =
+    plan.perPayment > 0 && plan.intervalSeconds > 0 ? (
+      <PlanSentence
+        recipient={{ address: plan.recipient, name: plan.recipientName ?? undefined }}
+        schedule={{
+          kind: 'period-release',
+          perPeriod: String(plan.perPayment),
+          everyDays: Math.round(plan.intervalSeconds / 86400),
+          periods: Math.max(1, Math.ceil(plan.totalAmount / plan.perPayment)),
+          asset: plan.asset,
+          vault: { id: plan.vaultId, name: vaultName ?? BUDGETS_TAB.noVault },
+        }}
+      />
+    ) : undefined;
+
+  const shared = { open: true, onClose, run: () => run() };
+
+  if (action === 'fund') {
+    if (!contract) return null;
+    const summary: ReviewSummary = {
+      direction: 'out',
+      leavesWallet: { amount: String(plan.totalAmount), asset: plan.asset },
+      goesTo: { address: contract, name: BUDGET_CREATE.created.contractName },
+      network,
+    };
+    return (
+      <TransactionReview
+        {...shared}
+        plan={planSentence}
+        summary={summary}
+        next={<p>{PLAN_REVIEWS.fund.done}</p>}
+      />
+    );
+  }
+
+  if (action === 'claim') {
+    return (
+      <TransactionReview
+        {...shared}
+        summary={{
+          direction: 'in',
+          youReceive: { amount: String(readyAmount), asset: plan.asset },
+          from: contract
+            ? { address: contract, name: BUDGET_CREATE.created.contractName }
+            : undefined,
+          network,
+        }}
+        next={<p>{PLAN_REVIEWS.claim.done}</p>}
+      />
+    );
+  }
+
+  if (action === 'pause') {
+    return (
+      <TransactionReview
+        {...shared}
+        title={PLAN_REVIEWS.pause.title}
+        consequence={{ tone: 'warning', body: PLAN_REVIEWS.pause.consequence(name) }}
+        confirmLabel={PLAN_REVIEWS.pause.confirm}
+        keepLabel={PLAN_REVIEWS.pause.keep}
+        summary={{ direction: 'fee-only', network }}
+        next={<p>{PLAN_REVIEWS.pause.done}</p>}
+      />
+    );
+  }
+
+  if (action === 'resume') {
+    return (
+      <TransactionReview
+        {...shared}
+        title={PLAN_REVIEWS.resume.title}
+        consequence={{ tone: 'info', body: PLAN_REVIEWS.resume.consequence(name) }}
+        confirmLabel={PLAN_REVIEWS.resume.confirm}
+        summary={{ direction: 'fee-only', network }}
+        next={<p>{PLAN_REVIEWS.resume.done}</p>}
+      />
+    );
+  }
+
+  const comesBack = Math.max(0, plan.totalAmount - plan.totalReleased - readyAmount);
+  const backLabel = money(comesBack, plan);
+  return (
+    <TransactionReview
+      {...shared}
+      title={PLAN_REVIEWS.cancel.title}
+      consequence={{
+        tone: 'danger',
+        body: (
+          <div className="flex flex-col gap-1">
+            <p>
+              {readyAmount > 0
+                ? PLAN_REVIEWS.cancel.consequence(name, money(readyAmount, plan), backLabel)
+                : PLAN_REVIEWS.cancel.consequenceNothingReady(name, backLabel)}
+            </p>
+            {plan.totalReleased > 0 ? (
+              <p>{PLAN_REVIEWS.cancel.alreadyClaimed(name, money(plan.totalReleased, plan))}</p>
+            ) : null}
+          </div>
+        ),
+      }}
+      confirmLabel={PLAN_REVIEWS.cancel.confirm}
+      keepLabel={PLAN_REVIEWS.cancel.keep}
+      summary={{
+        direction: 'returns',
+        comesBack: { amount: String(comesBack), asset: plan.asset },
+        recipientKeeps:
+          readyAmount > 0 ? { amount: String(readyAmount), asset: plan.asset } : undefined,
+        network,
+      }}
+      next={<p>{PLAN_REVIEWS.cancel.done}</p>}
+    />
   );
 }

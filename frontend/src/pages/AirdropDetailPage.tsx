@@ -1,845 +1,420 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Card } from '../components/ui/Card';
+import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { TwoColumn } from '../components/layout/TwoColumn';
+import { ActivityList } from '../components/ui/ActivityList';
+import { Address } from '../components/ui/Address';
+import { Amount } from '../components/ui/Amount';
 import { Button } from '../components/ui/Button';
-import { SkeletonStats, SkeletonCard } from '../components/ui/Skeleton';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Card } from '../components/ui/Card';
+import { Code } from '../components/ui/Code';
+import { CopyButton } from '../components/ui/CopyButton';
+import { CopyField } from '../components/ui/CopyField';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Heading } from '../components/ui/Heading';
+import { ManageActions } from '../components/ui/ManageActions';
+import { Notice } from '../components/ui/Notice';
+import { Panel } from '../components/ui/Panel';
+import { PlanSentence } from '../components/ui/PlanSentence';
+import { ProgressMeter } from '../components/ui/ProgressMeter';
+import { Skeleton } from '../components/ui/Skeleton';
+import { TransactionReview } from '../components/ui/TransactionReview';
+import { TxLink } from '../components/ui/TxLink';
+import type { Asset } from '../components/ui/types';
+import { useNetwork, type Network } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
-import { useNetwork } from '../hooks/useNetwork';
 import {
-  fundAirdropContract,
-  claimAirdropFunds,
-  pauseAirdropOnChain,
-  cancelAirdropOnChain,
-  getExplorerTxUrl,
-} from '../utils/blockchain';
-import { formatLogicalId } from '../utils/display';
-import { toUserFacingError } from '../utils/userError';
-import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
-import {
-  ChevronLeft,
-  Gift,
-  Users,
-  DollarSign,
-  Calendar,
-  Copy,
-  Check,
-  ExternalLink,
-  Pause,
-  X,
-  TrendingUp,
-  Wallet,
-  Download,
-  History,
-  AlertCircle,
-} from 'lucide-react';
+  AIRDROP_ACCESS,
+  AIRDROP_DETAIL,
+  CREATE_AIRDROP,
+  airdropPill,
+  airdropShareCount,
+  sharesClaimed,
+} from '../copy/airdrops';
+import { sameWallet } from '../utils/address';
+import { ACTIONS, LABELS, MOMENTS } from '../copy/common';
+import { errorMessage } from '../copy/errors';
+import { toEventKind, type ActivityEvent } from '../copy/events';
+import { assetDecimals, formatAddress, formatAmount, formatDate, formatShortId } from '../copy/format';
+import { cancelAirdropOnChain, fundAirdropContract, setPausedOnChain } from '../utils/blockchain';
+import { getCachedTokenMeta } from '../utils/tokenMeta';
+import { AirdropClaimAction, type AirdropClaim, type AirdropRecord } from './ClaimLinkPage';
 
-interface ActivityEvent {
+interface StoredEvent {
   id: string;
   event_type: string;
   actor: string | null;
   amount: number | null;
-  status: string | null;
   tx_hash: string | null;
   created_at: number;
-  details?: Record<string, unknown> | null;
 }
 
-type FeedbackTone = 'success' | 'warning' | 'error' | 'info';
+type Load =
+  | { kind: 'loading' }
+  | { kind: 'failed' }
+  | { kind: 'missing' }
+  | { kind: 'ready'; campaign: AirdropRecord; claims: AirdropClaim[]; events: StoredEvent[] };
 
-interface FeedbackState {
-  tone: FeedbackTone;
-  title: string;
-  description?: string;
-  details?: string;
-  txHash?: string;
+type Review = 'fund' | 'pause' | 'resume' | 'cancel' | null;
+
+const BCH: Asset = { kind: 'bch' };
+const POLL_ATTEMPTS = 8;
+const ACTIVITY_LIMIT = 8;
+const POLL_DELAY_MS = 1_500;
+/** Server defaults in backend fundingConfig.ts: 5,000 satoshis on top of a BCH contract, 20,000 satoshis of BCH in a token contract. */
+const BCH_CONTRACT_RESERVE = '0.00005';
+const TOKEN_CONTRACT_BCH = '0.0002';
+
+function airdropAsset(campaign: AirdropRecord): Asset {
+  if (campaign.token_type === 'BCH' || !campaign.token_category) return BCH;
+  const meta = getCachedTokenMeta(campaign.token_category);
+  return {
+    kind: 'token',
+    tokenId: campaign.token_category,
+    symbol: meta?.symbol,
+    decimals: campaign.token_decimals ?? meta?.decimals ?? 0,
+  };
+}
+
+function units(value: number, asset: Asset): string {
+  return Math.max(0, value).toFixed(assetDecimals(asset));
+}
+
+function toActivity(events: StoredEvent[], viewer: string | null | undefined, asset: Asset, network: Network): ActivityEvent[] {
+  return events.map((event) => ({
+    id: event.id,
+    kind: toEventKind(event.event_type),
+    object: { kind: 'airdrop' },
+    at: event.created_at * 1000,
+    actor: event.actor ? { address: event.actor, isYou: sameWallet(event.actor, viewer, network) } : undefined,
+    amount: event.amount !== null && event.amount !== undefined ? { value: event.amount, asset } : undefined,
+    txid: event.tx_hash ?? undefined,
+  }));
+}
+
+function TokenId({ id, symbol }: { id: string; symbol?: string }) {
+  return (
+    <span className="inline-flex flex-wrap items-center justify-end gap-1">
+      {symbol ? <span>{symbol}</span> : null}
+      <Code>{formatShortId(id)}</Code>
+      <CopyButton value={id} label={ACTIONS.copyId} />
+    </span>
+  );
+}
+
+async function fetchAirdrop(id: string): Promise<Load> {
+  const response = await fetch(`/api/airdrops/${encodeURIComponent(id)}`);
+  if (response.status === 404 || response.status === 400) return { kind: 'missing' };
+  if (!response.ok) throw new Error(`Airdrop request failed with ${response.status}`);
+  const data: { campaign?: AirdropRecord; claims?: AirdropClaim[]; events?: StoredEvent[] } = await response.json();
+  if (!data.campaign) return { kind: 'missing' };
+  return { kind: 'ready', campaign: data.campaign, claims: data.claims ?? [], events: data.events ?? [] };
 }
 
 export default function AirdropDetailPage() {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const { id = '' } = useParams();
   const wallet = useWallet();
   const network = useNetwork();
-  const routeState = location.state as { freshCreate?: boolean } | null;
-  const [campaign, setCampaign] = useState<any>(null);
-  const [claims, setClaims] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [userEligibility, setUserEligibility] = useState<{ eligible: boolean; amount: number; alreadyClaimed: boolean } | null>(null);
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [feedback, setFeedback] = useState<FeedbackState | null>(
-    routeState?.freshCreate
-      ? {
-          tone: 'info',
-          title: 'Campaign created. Funding is the next step.',
-          description: 'The campaign record is live now. Fund the contract from this page to activate claims.',
-        }
-      : null,
-  );
-  const [isFundingSyncing, setIsFundingSyncing] = useState(false);
+  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+  const [review, setReview] = useState<Review>(null);
+  const [syncing, setSyncing] = useState(false);
 
-  const buildErrorFeedback = (
-    title: string,
-    error: unknown,
-    fallback: string,
-  ): FeedbackState => {
-    const parsed = toUserFacingError(error, fallback);
-    return {
-      tone: 'error',
-      title,
-      description: parsed.message,
-      details: parsed.details,
-    };
-  };
-
-  const refreshCampaign = useCallback(async () => {
-    if (!id) return null;
-    const response = await fetch(`/api/airdrops/${id}`);
-    const data = await response.json();
-    setCampaign(data.campaign);
-    setClaims(data.claims || []);
-    setEvents(data.events || []);
-    return data.campaign;
+  const refresh = useCallback(async (): Promise<AirdropRecord | null> => {
+    try {
+      const next = await fetchAirdrop(id);
+      setLoad(next);
+      return next.kind === 'ready' ? next.campaign : null;
+    } catch (error) {
+      console.error('Airdrop did not load', error);
+      setLoad((current) => (current.kind === 'ready' ? current : { kind: 'failed' }));
+      return null;
+    }
   }, [id]);
 
-  const pollForCampaignStatus = useCallback(
-    async (targetStatuses: string[], attempts = 8, delayMs = 1500) => {
-      setIsFundingSyncing(true);
-      try {
-        for (let attempt = 1; attempt <= attempts; attempt += 1) {
-          const latestCampaign = await refreshCampaign();
-          if (latestCampaign && targetStatuses.includes(latestCampaign.status)) {
-            return latestCampaign;
-          }
+  const retry = useCallback(async () => {
+    setLoad({ kind: 'loading' });
+    await refresh();
+  }, [refresh]);
 
-          if (attempt < attempts) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-        }
+  useEffect(() => {
+    void retry();
+  }, [retry]);
 
-        return null;
-      } finally {
-        setIsFundingSyncing(false);
+  const waitForFunding = useCallback(async () => {
+    setSyncing(true);
+    try {
+      for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
+        const latest = await refresh();
+        if (latest && latest.status !== 'PENDING') return;
+        await new Promise((resolve) => window.setTimeout(resolve, POLL_DELAY_MS));
       }
-    },
-    [refreshCampaign],
+    } finally {
+      setSyncing(false);
+    }
+  }, [refresh]);
+
+  const closeReview = () => {
+    setReview(null);
+    void refresh();
+  };
+
+  if (load.kind === 'loading') {
+    return (
+      <PageContainer>
+        <div className="flex flex-col gap-6" aria-busy="true" aria-label={AIRDROP_DETAIL.loading}>
+          <Skeleton kind="text" lines={3} />
+          <Skeleton kind="tile" />
+          <Skeleton kind="row" lines={4} />
+        </div>
+      </PageContainer>
+    );
+  }
+
+  if (load.kind === 'failed' || load.kind === 'missing') {
+    const copy = load.kind === 'failed' ? AIRDROP_DETAIL.loadFailed : AIRDROP_DETAIL.notFound;
+    return (
+      <PageContainer>
+        <Panel>
+          <ErrorState
+            title={copy.title}
+            reason={copy.reason}
+            onRetry={load.kind === 'failed' ? retry : undefined}
+            action={
+              load.kind === 'missing' ? (
+                <ButtonLink variant="secondary" to="/airdrops">
+                  {AIRDROP_DETAIL.backToList}
+                </ButtonLink>
+              ) : undefined
+            }
+          />
+        </Panel>
+      </PageContainer>
+    );
+  }
+
+  const { campaign, claims, events } = load;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const asset = airdropAsset(campaign);
+  const isSender = sameWallet(wallet.address, campaign.creator, network);
+  const status = airdropPill(campaign, nowSeconds);
+  const total = airdropShareCount(campaign);
+  const claimedCount = Number(campaign.claimed_count || 0);
+  const share = Number(campaign.amount_per_claim || 0);
+  const pool = Number(campaign.total_amount || 0);
+  const left = Math.max(0, pool - claimedCount * share);
+  const shareText = formatAmount(units(share, asset), asset);
+  const poolText = formatAmount(units(pool, asset), asset);
+  const leftText = formatAmount(units(left, asset), asset);
+  const senderShort = formatAddress(campaign.creator);
+  const closes = formatDate(campaign.end_date);
+  const live = campaign.status === 'ACTIVE' || campaign.status === 'PAUSED';
+  const funded = campaign.status !== 'PENDING';
+
+  const plan = (
+    <PlanSentence
+      schedule={{
+        kind: 'per-claim',
+        perClaim: units(share, asset),
+        maxClaims: total > 0 ? total : null,
+        asset,
+        closesAt: campaign.end_date ? campaign.end_date * 1000 : undefined,
+      }}
+    />
   );
 
-  useEffect(() => {
-    const fetchCampaign = async () => {
-      try {
-        setLoading(true);
-        await refreshCampaign();
-      } catch (error) {
-        console.error('Failed to fetch campaign:', error);
-        setFeedback(buildErrorFeedback('Failed to load campaign details.', error, 'Try refreshing the page.'));
-      } finally {
-        setLoading(false);
-      }
-    };
+  const description = isSender
+    ? AIRDROP_DETAIL.description.sender
+    : shareText
+      ? AIRDROP_DETAIL.description.viewer(senderShort, shareText)
+      : AIRDROP_DETAIL.description.viewerNoShare(senderShort);
 
-    if (id) fetchCampaign();
-  }, [id, refreshCampaign]);
-
-  // Check if user is eligible to claim
-  useEffect(() => {
-    const checkEligibility = async () => {
-      if (!wallet.address || !campaign || campaign.status !== 'ACTIVE') {
-        setUserEligibility(null);
-        return;
-      }
-
-      try {
-        // Check if address has reached its per-address claim limit
-        const maxClaimsPerAddress = Math.max(1, Number(campaign.max_claims_per_address ?? 1));
-        const claimsByAddress = claims.filter((c) => c.claimer === wallet.address).length;
-
-        if (claimsByAddress >= maxClaimsPerAddress) {
-          setUserEligibility({ eligible: false, amount: 0, alreadyClaimed: true });
-          return;
-        }
-
-        // Try to get proof - if it exists, user is eligible
-        const response = await fetch(`/api/airdrops/${id}/proof/${wallet.address}`);
-
-        if (response.ok) {
-          const data = await response.json();
-          setUserEligibility({ eligible: true, amount: data.amount, alreadyClaimed: false });
-        } else {
-          setUserEligibility({ eligible: false, amount: 0, alreadyClaimed: false });
-        }
-      } catch (error) {
-        console.error('Failed to check eligibility:', error);
-        setUserEligibility({ eligible: false, amount: 0, alreadyClaimed: false });
-      }
-    };
-
-    checkEligibility();
-  }, [wallet.address, campaign, claims, id]);
-
-  const copyClaimLink = () => {
-    if (campaign?.claim_link) {
-      navigator.clipboard.writeText(campaign.claim_link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  const senderAction = (() => {
+    if (status === 'notFunded' && !campaign.contract_address) {
+      return <Notice tone="danger" title={errorMessage('MISCONFIGURED')} />;
     }
-  };
-
-  const handlePause = async () => {
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can pause this campaign.',
-      });
-      return;
-    }
-    setActionLoading('pause');
-    try {
-      const txHash = await pauseAirdropOnChain(wallet, id!);
-      await refreshCampaign();
-      setFeedback({
-        tone: 'success',
-        title: 'Campaign paused on-chain.',
-        description: 'Claims are now paused until the campaign is resumed.',
-        txHash,
-      });
-    } catch (error: any) {
-      console.error('Failed to pause campaign:', error);
-      setFeedback(buildErrorFeedback('Failed to pause campaign.', error, 'Unable to pause campaign'));
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!confirm('Are you sure you want to cancel this campaign? Remaining funds will be refunded.')) {
-      return;
-    }
-
-    setActionLoading('cancel');
-    try {
-      if (!wallet.isConnected) {
-        throw new Error('Please connect your wallet first');
-      }
-      const txHash = await cancelAirdropOnChain(wallet, id!);
-      setFeedback({
-        tone: 'success',
-        title: 'Campaign cancelled on-chain.',
-        description: 'Remaining funds were returned according to the cancellation flow.',
-        txHash,
-      });
-      navigate('/airdrops');
-    } catch (error: any) {
-      console.error('Failed to cancel campaign:', error);
-      setFeedback(buildErrorFeedback('Failed to cancel campaign.', error, 'Unable to cancel campaign'));
-      setActionLoading(null);
-    }
-  };
-
-  const handleFund = async () => {
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can fund this campaign.',
-      });
-      return;
-    }
-
-    setActionLoading('fund');
-    try {
-      const result = await fundAirdropContract(wallet, id!);
-      await refreshCampaign();
-
-      if (result.confirmation === 'confirmed') {
-        setFeedback({
-          tone: 'success',
-          title: 'Airdrop funded successfully.',
-          description: 'The contract output is confirmed and the campaign is ready for claims.',
-          txHash: result.txHash,
-        });
-      } else {
-        setFeedback({
-          tone: 'warning',
-          title: 'Funding transaction broadcast. Waiting for backend confirmation.',
-          description:
-            result.detail ||
-            'The contract transaction is on-chain, but the backend has not marked the campaign active yet. This page will keep checking.',
-          txHash: result.txHash,
-        });
-      }
-
-      const activatedCampaign =
-        result.confirmation === 'confirmed'
-          ? await refreshCampaign()
-          : await pollForCampaignStatus(['ACTIVE', 'PAUSED', 'CANCELLED']);
-
-      if (activatedCampaign?.status === 'ACTIVE') {
-        setFeedback({
-          tone: 'success',
-          title: 'Airdrop is now active.',
-          description: 'The funding output has been indexed and claims can begin.',
-          txHash: result.txHash,
-        });
-      }
-    } catch (error: any) {
-      console.error('Failed to fund airdrop:', error);
-      setFeedback(buildErrorFeedback('Failed to fund airdrop.', error, 'Unable to fund airdrop'));
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleClaim = async () => {
-    if (!wallet.isConnected) {
-      setFeedback({
-        tone: 'info',
-        title: 'Connect your wallet first.',
-        description: 'Wallet access is required before you can claim.',
-      });
-      return;
-    }
-
-    if (!userEligibility?.eligible) {
-      setFeedback({
-        tone: 'warning',
-        title: 'This wallet is not eligible to claim.',
-        description: 'Check the eligibility list or use the wallet that received the campaign allocation.',
-      });
-      return;
-    }
-
-    setActionLoading('claim');
-    try {
-      const txHash = await claimAirdropFunds(wallet, id!);
-      await refreshCampaign();
-      setFeedback({
-        tone: 'success',
-        title: `Claimed ${formatTokenAmount(userEligibility.amount, campaign?.token_type, campaign?.token_category)} successfully.`,
-        description: 'The claim transaction was submitted and your campaign history has been refreshed.',
-        txHash,
-      });
-    } catch (error: any) {
-      console.error('Failed to claim airdrop:', error);
-      setFeedback(buildErrorFeedback('Failed to claim airdrop.', error, 'Unable to claim airdrop'));
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen pb-20 bg-background">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-8">
-          <div className="mb-6">
-            <div className="h-8 w-1/3 animate-pulse rounded bg-surfaceAlt border border-border/40 mb-3" />
-            <div className="h-4 w-1/2 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-          </div>
-          <SkeletonStats count={4} className="mb-6" />
-          <SkeletonCard lines={3} className="mb-4" />
-          <SkeletonCard lines={3} />
-        </div>
-      </div>
-    );
-  }
-
-  if (!campaign) {
-    return (
-      <div className="p-8">
-        <Card padding="xl" className="text-center">
-          <h2 className="text-lg md:text-xl lg:text-2xl font-display font-bold text-textPrimary mb-2">Campaign not found</h2>
-          <p className="text-textMuted font-mono mb-6">This campaign does not exist or you don't have access.</p>
-          <Button onClick={() => navigate('/airdrops')}>Back to Airdrops</Button>
-        </Card>
-      </div>
-    );
-  }
-
-  const isCreator = String(wallet.address || '').toLowerCase() === String(campaign.creator || '').toLowerCase();
-  const claimProgress = (campaign.claimed_count / campaign.total_recipients) * 100;
-  const feedbackToneClasses: Record<FeedbackTone, string> = {
-    success: 'border-primary/30 bg-primary/5 text-primary',
-    warning: 'border-secondary/30 bg-secondary/5 text-secondary',
-    error: 'border-error/30 bg-error/5 text-error',
-    info: 'border-border bg-surfaceAlt text-textPrimary',
-  };
-
-  return (
-    <div className="px-4 py-6 md:px-8 md:py-8">
-      <div className="max-w-5xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <button
-            onClick={() => navigate('/airdrops')}
-            className="inline-flex items-center gap-2 text-primary hover:text-primaryHover font-mono mb-4 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Airdrops
-          </button>
-
-          <div className="flex items-start justify-between">
+    if (status === 'notFunded') {
+      return (
+        <>
+          <Notice tone="warning" title={AIRDROP_DETAIL.notFundedNotice.title}>
+            {AIRDROP_DETAIL.notFundedNotice.sender}
+          </Notice>
+          <div className="flex flex-col gap-2">
             <div>
-              <div className="flex items-center gap-3 mb-2">
-                <h1 className="text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-display font-bold text-textPrimary">{campaign.title}</h1>
-                <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold uppercase ${
-                  campaign.campaign_type === 'AIRDROP' ? 'bg-primary/20 text-primary' :
-                  campaign.campaign_type === 'BOUNTY' ? 'bg-accent/30 text-primary' :
-                  campaign.campaign_type === 'REWARD' ? 'bg-primarySoft text-primary' :
-                  'bg-surfaceAlt text-textPrimary border border-border'
-                }`}>
-                  {campaign.campaign_type}
-                </span>
-              </div>
-              {campaign.description && (
-                <p className="text-textMuted font-mono mb-2">{campaign.description}</p>
-              )}
-              <p className="text-sm text-textMuted font-mono">{formatLogicalId(campaign.campaign_id)}</p>
+              <Button variant="primary" size="lg" onClick={() => setReview('fund')}>
+                {poolText ? AIRDROP_DETAIL.fund(poolText) : AIRDROP_DETAIL.fundGeneric}
+              </Button>
             </div>
-
-            <div className="flex gap-3">
-              {/* Fund button for creator when PENDING */}
-              {isCreator && campaign.status === 'PENDING' && (
-                <Button
-                  variant="primary"
-                  onClick={handleFund}
-                  disabled={actionLoading === 'fund'}
-                  className="flex items-center gap-2"
-                >
-                  <Wallet className="w-4 h-4" />
-                  {actionLoading === 'fund' ? 'Funding...' : 'Fund Airdrop'}
-                </Button>
-              )}
-
-              {/* Claim button for eligible users */}
-              {!isCreator && userEligibility?.eligible && campaign.status === 'ACTIVE' && (
-                <Button
-                  variant="primary"
-                  onClick={handleClaim}
-                  disabled={actionLoading === 'claim'}
-                  className="flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  {actionLoading === 'claim' ? 'Claiming...' : `Claim ${formatTokenAmount(userEligibility.amount, campaign?.token_type, campaign?.token_category)}`}
-                </Button>
-              )}
-
-              {/* Pause/Cancel for creator */}
-              {isCreator && (
-                <>
-                  {campaign.status === 'ACTIVE' && (
-                    <Button
-                      variant="outline"
-                      onClick={handlePause}
-                      disabled={actionLoading === 'pause'}
-                      className="flex items-center gap-2"
-                    >
-                      <Pause className="w-4 h-4" />
-                      {actionLoading === 'pause' ? 'Pausing...' : 'Pause'}
-                    </Button>
-                  )}
-
-                  {campaign.status !== 'CANCELLED' && (
-                    <Button
-                      variant="outline"
-                      onClick={handleCancel}
-                      disabled={!!actionLoading}
-                      className="flex items-center gap-2 text-error border-error hover:bg-error/5"
-                    >
-                      <X className="w-4 h-4" />
-                      Cancel
-                    </Button>
-                  )}
-                </>
-              )}
-            </div>
+            <p className="text-small text-ink-secondary">
+              {poolText ? CREATE_AIRDROP.next(poolText) : CREATE_AIRDROP.nextUnknown}
+            </p>
           </div>
+        </>
+      );
+    }
+    if (status === 'openForClaims' || status === 'scheduled') {
+      return campaign.claim_link ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-small text-ink-secondary">{AIRDROP_ACCESS}</p>
+          <CopyField label={AIRDROP_DETAIL.shareField} value={campaign.claim_link} />
         </div>
+      ) : null;
+    }
+    if (status === 'paused') return <Notice tone="warning" title={isSender ? AIRDROP_DETAIL.pausedSender : AIRDROP_DETAIL.paused} />;
+    return null;
+  })();
 
-        {feedback && (
-          <Card
-            padding="lg"
-            className={`mb-6 border ${feedbackToneClasses[feedback.tone]}`}
-          >
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold">{feedback.title}</p>
-                {feedback.description && (
-                  <p className="mt-1 text-sm leading-6 text-textSecondary whitespace-pre-wrap break-words">{feedback.description}</p>
-                )}
-                {feedback.details && (
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-xs font-mono uppercase tracking-[0.14em] text-textMuted">
-                      Show technical details
-                    </summary>
-                    <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surfaceAlt p-3 text-xs text-textSecondary">
-                      {feedback.details}
-                    </pre>
-                  </details>
-                )}
-                {feedback.txHash && (
-                  <a
-                    href={getExplorerTxUrl(feedback.txHash, network)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primaryHover"
-                  >
-                    View transaction
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                )}
-                {actionLoading === 'fund' || isFundingSyncing ? (
-                  <p className="mt-3 text-xs font-mono uppercase tracking-[0.18em] text-textMuted">
-                    Syncing campaign status…
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          </Card>
-        )}
-
-        {/* Eligibility Banner */}
-        {wallet.isConnected && !isCreator && campaign.status === 'ACTIVE' && (
-          <Card
-            padding="lg"
-            className={`mb-6 ${
-              userEligibility?.eligible
-                ? 'bg-primary/5 border-primary'
-                : userEligibility?.alreadyClaimed
-                  ? 'bg-success/5 border-success'
-                  : 'bg-surfaceAlt border-border'
-            }`}
-          >
-            {userEligibility?.eligible ? (
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-mono text-textMuted uppercase mb-1">You're Eligible!</p>
-                  <p className="text-2xl md:text-3xl font-display font-bold text-primary">
-                    {formatTokenAmount(userEligibility.amount, campaign?.token_type, campaign?.token_category)}
-                  </p>
-                  <p className="text-sm font-mono text-textMuted mt-1">Click to claim your allocation</p>
-                </div>
-                <Button
-                  variant="primary"
-                  onClick={handleClaim}
-                  disabled={actionLoading === 'claim'}
-                  className="flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  {actionLoading === 'claim' ? 'Claiming...' : 'Claim Now'}
-                </Button>
-              </div>
-            ) : userEligibility?.alreadyClaimed ? (
-              <div className="text-center">
-                <Check className="w-12 h-12 text-success mx-auto mb-2" />
-                <p className="text-lg font-display font-bold text-textPrimary">Claim Limit Reached</p>
-                <p className="text-sm font-mono text-textMuted">
-                  You have used all {Math.max(1, Number(campaign?.max_claims_per_address ?? 1))} claim{Number(campaign?.max_claims_per_address ?? 1) !== 1 ? 's' : ''} for this airdrop
-                </p>
-              </div>
-            ) : (
-              <div className="text-center">
-                <p className="text-lg font-display font-bold text-textPrimary">Not Eligible</p>
-                <p className="text-sm font-mono text-textMuted">Your address is not in the recipient list for this airdrop</p>
-              </div>
-            )}
-          </Card>
-        )}
-
-        {/* Progress Card */}
-        <Card padding="lg" className="mb-8">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-display font-bold text-textPrimary">Claim Progress</h3>
-            <span className="text-lg md:text-xl lg:text-2xl font-display font-bold text-primary">{claimProgress.toFixed(1)}%</span>
+  const main = (
+    <>
+      <Panel>
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-1">
+            <span className="text-label text-ink-secondary">
+              {isSender ? AIRDROP_DETAIL.pool : AIRDROP_DETAIL.yourShare}
+            </span>
+            <Amount value={units(isSender ? pool : share, asset)} asset={asset} size="xl" />
           </div>
-          <div className="w-full h-4 bg-surfaceAlt rounded-full overflow-hidden mb-4">
-            <div
-              className="h-full bg-primary transition-all duration-500"
-              style={{ width: `${claimProgress}%` }}
+          <ProgressMeter label={sharesClaimed(claimedCount, total)} value={claimedCount} max={total} />
+          {syncing ? <Notice tone="info" title={MOMENTS.sentPending} live="polite" /> : null}
+          {isSender ? (
+            senderAction
+          ) : (
+            <AirdropClaimAction campaign={campaign} claims={claims} onClaimed={() => void refresh()} />
+          )}
+        </div>
+      </Panel>
+      <Panel title={AIRDROP_DETAIL.activity}>
+        <ActivityList events={toActivity(events.slice(0, ACTIVITY_LIMIT), wallet.address, asset, network)}
+          state="ready"
+          network={network}
+          seeAllHref={events.length > ACTIVITY_LIMIT ? '/explorer' : undefined}
+        />
+      </Panel>
+    </>
+  );
+
+  const details = [
+    { label: AIRDROP_DETAIL.detailLabels.from, value: <Address value={campaign.creator} isYou={isSender} /> },
+    { label: AIRDROP_DETAIL.detailLabels.token, value: asset.kind === 'bch' ? 'BCH' : <TokenId id={asset.tokenId} symbol={asset.symbol} /> },
+    { label: AIRDROP_DETAIL.detailLabels.share, value: shareText },
+    { label: AIRDROP_DETAIL.detailLabels.pool, value: poolText },
+    { label: AIRDROP_DETAIL.detailLabels.claimed, value: sharesClaimed(claimedCount, total) },
+    { label: AIRDROP_DETAIL.detailLabels.opens, value: formatDate(campaign.start_date) },
+    { label: AIRDROP_DETAIL.detailLabels.closes, value: closes },
+    {
+      label: AIRDROP_DETAIL.detailLabels.contract,
+      value: campaign.contract_address ? <Address value={campaign.contract_address} /> : null,
+    },
+    {
+      label: AIRDROP_DETAIL.detailLabels.funding,
+      value: funded && campaign.tx_hash ? <TxLink txid={campaign.tx_hash} network={network} /> : null,
+    },
+  ];
+
+  const side = (
+    <>
+      <Panel title={AIRDROP_DETAIL.details}>
+        <DetailList items={details} />
+      </Panel>
+      <Card>
+        <div className="flex flex-col gap-2">
+          <Heading level="item" as="h2">
+            {LABELS.whoCanMoveTheMoney}
+          </Heading>
+          <p className="text-small text-ink-secondary">{AIRDROP_DETAIL.whoCanMove(isSender)}</p>
+        </div>
+      </Card>
+      {isSender && live ? (
+        <Card>
+          <div className="flex flex-col gap-3">
+            <Heading level="item" as="h2">
+              {AIRDROP_DETAIL.manage}
+            </Heading>
+            <ManageActions
+              actions={[
+                campaign.status === 'PAUSED'
+                  ? { key: 'resume', label: AIRDROP_DETAIL.resume, onClick: () => setReview('resume') }
+                  : { key: 'pause', label: AIRDROP_DETAIL.pause, onClick: () => setReview('pause') },
+                { key: 'cancel', label: AIRDROP_DETAIL.cancel, danger: true, onClick: () => setReview('cancel') },
+              ]}
             />
           </div>
-          <div className="flex justify-between text-sm font-mono text-textMuted">
-            <span>{campaign.claimed_count} claimed</span>
-            <span>{campaign.remaining_claims} remaining</span>
-          </div>
         </Card>
-
-        {/* Stats Grid */}
-        <div className="grid md:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Total Pool</span>
-              <DollarSign className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatTokenAmount(campaign.total_amount, campaign.token_type, campaign.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
-            </p>
-          </Card>
-
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Per Claim</span>
-              <Gift className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatTokenAmount(campaign.amount_per_claim, campaign.token_type, campaign.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
-            </p>
-          </Card>
-
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Total Distributed</span>
-              <TrendingUp className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">
-              {formatTokenAmount(campaign.claimed_count * campaign.amount_per_claim, campaign.token_type, campaign.token_category, { noSuffix: true })} <span className="text-lg text-textMuted">{tokenSymbol(campaign.token_type, campaign.token_category)}</span>
-            </p>
-          </Card>
-
-          <Card padding="lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-mono text-textMuted uppercase tracking-wide">Recipients</span>
-              <Users className="w-5 h-5 text-textMuted" />
-            </div>
-            <p className="text-xl md:text-2xl lg:text-3xl font-display font-bold text-textPrimary">{campaign.total_recipients}</p>
-          </Card>
-        </div>
-
-        {/* Claim Link (for creators) */}
-        {isCreator && campaign.status === 'ACTIVE' && (
-          <Card padding="lg" className="mb-8">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4">Claim Link</h3>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 bg-surfaceAlt rounded-lg px-4 py-3 font-mono text-sm text-textPrimary border border-border">
-                {campaign.claim_link}
-              </div>
-              <Button
-                variant="outline"
-                onClick={copyClaimLink}
-                className="flex items-center gap-2"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-4 h-4" />
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    Copy
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => window.open(campaign.claim_link, '_blank')}
-                className="flex items-center gap-2"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Open
-              </Button>
-            </div>
-          </Card>
-        )}
-
-        {/* Campaign Details */}
-        <div className="grid md:grid-cols-2 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4">Campaign Details</h3>
-            <div className="space-y-3">
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Creator</span>
-                <p className="text-sm font-mono text-textPrimary break-all">{campaign.creator}</p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Token Type</span>
-                <p className="text-sm font-mono text-textPrimary">{campaign.token_type}</p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Status</span>
-                <p className="text-sm font-mono text-textPrimary">{campaign.status}</p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Max Claims per Address</span>
-                <p className="text-sm font-mono text-textPrimary">{campaign.max_claims_per_address}</p>
-              </div>
-            </div>
-          </Card>
-
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4">Schedule</h3>
-            <div className="space-y-3">
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Start Date</span>
-                <p className="text-sm font-mono text-textPrimary">
-                  {new Date(campaign.start_date * 1000).toLocaleDateString()}
-                </p>
-              </div>
-              {campaign.end_date && (
-                <div>
-                  <span className="block text-xs font-mono text-textMuted uppercase mb-1">End Date</span>
-                  <p className="text-sm font-mono text-textPrimary">
-                    {new Date(campaign.end_date * 1000).toLocaleDateString()}
-                  </p>
-                </div>
-              )}
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Require KYC</span>
-                <p className="text-sm font-mono text-textPrimary">{campaign.require_kyc ? 'Yes' : 'No'}</p>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4">On-Chain Links</h3>
-            <div className="space-y-3">
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Contract</span>
-                <p className="text-sm font-mono text-textPrimary break-all">{campaign.contract_address || '-'}</p>
-              </div>
-              <div>
-                <span className="block text-xs font-mono text-textMuted uppercase mb-1">Funding Transaction</span>
-                {campaign.tx_hash ? (
-                  <a
-                    href={getExplorerTxUrl(campaign.tx_hash, network)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:text-primaryHover font-mono text-sm transition-colors"
-                  >
-                    {campaign.tx_hash.slice(0, 12)}...{campaign.tx_hash.slice(-10)}
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                ) : (
-                  <p className="text-sm font-mono text-textMuted">Not funded yet</p>
-                )}
-              </div>
-            </div>
-          </Card>
-
-          <Card padding="lg">
-            <h3 className="text-xl font-display font-bold text-textPrimary mb-4 flex items-center gap-2">
-              <History className="w-5 h-5" />
-              Activity Timeline
-            </h3>
-            {events.length === 0 ? (
-              <p className="text-sm font-mono text-textMuted">No activity events recorded yet.</p>
-            ) : (
-              <div className="space-y-3 max-h-[18rem] overflow-y-auto pr-1">
-                {events.map((event) => (
-                  <div key={event.id} className="rounded-lg border border-border bg-surfaceAlt p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-display font-bold text-textPrimary">
-                          {formatAirdropEventLabel(event.event_type)}
-                        </p>
-                        <p className="text-xs font-mono text-textMuted">
-                          {new Date(event.created_at * 1000).toLocaleString()}
-                        </p>
-                        {event.actor && (
-                          <p className="text-xs font-mono text-textMuted mt-1 break-all">
-                            actor: {event.actor}
-                          </p>
-                        )}
-                        {typeof event.amount === 'number' && (
-                          <p className="text-xs font-mono text-textMuted mt-1">
-                            amount: {formatTokenAmount(event.amount, campaign?.token_type, campaign?.token_category)}
-                          </p>
-                        )}
-                      </div>
-                      {event.tx_hash && (
-                        <a
-                          href={getExplorerTxUrl(event.tx_hash, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-primary hover:text-primaryHover font-mono text-xs transition-colors"
-                        >
-                          tx
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
-
-        {/* Claim History */}
-        <Card padding="lg">
-          <h3 className="text-xl font-display font-bold text-textPrimary mb-4">Claim History</h3>
-
-          {claims.length === 0 ? (
-            <div className="text-center py-8">
-              <Gift className="w-12 h-12 text-textMuted mx-auto mb-3" />
-              <p className="text-textMuted font-mono">No claims yet</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">Date</th>
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">Claimer</th>
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">Amount</th>
-                    <th className="text-left py-3 px-4 text-xs font-mono text-textMuted uppercase">Transaction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {claims.map((claim) => (
-                    <tr key={claim.id} className="border-b border-border/40 hover:bg-surfaceAlt transition-colors">
-                      <td className="py-3 px-4 font-mono text-sm text-textPrimary">
-                        {new Date(claim.claimed_at * 1000).toLocaleDateString()}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-sm text-textPrimary">
-                        {claim.claimer.slice(0, 10)}...{claim.claimer.slice(-8)}
-                      </td>
-                      <td className="py-3 px-4 font-display font-bold text-sm text-textPrimary">
-                        {formatTokenAmount(claim.amount, campaign?.token_type, campaign?.token_category)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <a
-                          href={getExplorerTxUrl(claim.tx_hash, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-primary hover:text-primaryHover font-mono text-sm transition-colors"
-                        >
-                          {claim.tx_hash.slice(0, 10)}...{claim.tx_hash.slice(-8)}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      </div>
-    </div>
+      ) : null}
+    </>
   );
-}
 
-function formatAirdropEventLabel(eventType: string): string {
-  switch (eventType) {
-    case 'created':
-      return 'Campaign Created';
-    case 'funded':
-      return 'Campaign Funded';
-    case 'claim':
-      return 'Claim Executed';
-    case 'paused':
-      return 'Campaign Paused';
-    case 'cancelled':
-      return 'Campaign Cancelled';
-    default:
-      return eventType
-        .split('_')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
-  }
+  const reserveText = formatAmount(asset.kind === 'bch' ? BCH_CONTRACT_RESERVE : TOKEN_CONTRACT_BCH, BCH);
+
+  return (
+    <PageContainer>
+      <PageHeader
+        title={campaign.title}
+        description={description}
+        breadcrumbs={[{ label: AIRDROP_DETAIL.back, to: '/airdrops' }, { label: campaign.title }]}
+        status={status}
+        role={isSender ? 'sender' : 'viewer'}
+        plan={isSender ? plan : undefined}
+        stateLine={AIRDROP_DETAIL.stateLine(claimedCount, total, closes)}
+      />
+      <TwoColumn main={main} side={side} />
+
+      {campaign.contract_address ? (
+        <TransactionReview
+          open={review === 'fund'}
+          onClose={closeReview}
+          plan={plan}
+          steps={asset.kind === 'token' ? 2 : 1}
+          summary={{
+            direction: 'out',
+            leavesWallet: { amount: units(pool, asset), asset },
+            goesTo: { address: campaign.contract_address, name: AIRDROP_DETAIL.review.contractName },
+            feeEstimate: reserveText ? AIRDROP_DETAIL.review.reserveFee(reserveText) : null,
+            network,
+          }}
+          run={async (report) => {
+            const result = await fundAirdropContract(wallet, campaign.id);
+            if (result.confirmation === 'confirmed') report({ step: 'confirmed', status: 'done' });
+            else void waitForFunding();
+            return { txid: result.txHash };
+          }}
+          next={AIRDROP_DETAIL.review.fundedNext}
+        />
+      ) : null}
+      <TransactionReview
+        open={review === 'pause'}
+        onClose={closeReview}
+        title={AIRDROP_DETAIL.review.pauseTitle}
+        consequence={{ tone: 'warning', body: AIRDROP_DETAIL.review.pauseBody }}
+        confirmLabel={AIRDROP_DETAIL.pause}
+        keepLabel={AIRDROP_DETAIL.keep}
+        summary={{ direction: 'fee-only', network }}
+        run={async () => ({ txid: await setPausedOnChain(wallet, 'airdrops', campaign.id, 'pause') })}
+        next={AIRDROP_DETAIL.review.pausedNext}
+      />
+      <TransactionReview
+        open={review === 'resume'}
+        onClose={closeReview}
+        title={AIRDROP_DETAIL.review.resumeTitle}
+        consequence={{ tone: 'info', body: AIRDROP_DETAIL.review.resumeBody }}
+        confirmLabel={AIRDROP_DETAIL.resume}
+        summary={{ direction: 'fee-only', network }}
+        run={async () => ({ txid: await setPausedOnChain(wallet, 'airdrops', campaign.id, 'resume') })}
+        next={AIRDROP_DETAIL.review.resumedNext}
+      />
+      <TransactionReview
+        open={review === 'cancel'}
+        onClose={closeReview}
+        title={AIRDROP_DETAIL.review.cancelTitle}
+        consequence={{ tone: 'danger', body: AIRDROP_DETAIL.review.cancelBody(leftText) }}
+        confirmLabel={AIRDROP_DETAIL.cancel}
+        keepLabel={AIRDROP_DETAIL.keep}
+        summary={{ direction: 'returns', comesBack: { amount: units(left, asset), asset }, whoCanStop: AIRDROP_DETAIL.review.whoCanStop, network }}
+        run={async () => ({ txid: await cancelAirdropOnChain(wallet, campaign.id) })}
+        next={AIRDROP_DETAIL.review.cancelledNext}
+      />
+    </PageContainer>
+  );
 }

@@ -1,5 +1,9 @@
-import type { DaoWorkspaceRecipientRule } from '../stores/useDaoWorkspace';
+import { ORG_LAUNCH } from '../copy/organization';
 
+/**
+ * Carried from the Organization workspace into the stream builders. Only the source id
+ * identifies where a flow started; title and description are display copy from ORG_LAUNCH.
+ */
 export interface DaoLaunchContext {
   source: string;
   title: string;
@@ -7,73 +11,72 @@ export interface DaoLaunchContext {
   preferredLane?: string;
 }
 
+export const ORG_LAUNCH_SOURCE = 'organization-vault-streams';
+
 const DAO_STREAM_CONTEXT_KEY = 'flowguard-dao-stream-context';
 
-function tomorrowIsoDate() {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  return date.toISOString().slice(0, 10);
-}
-
-export function buildDaoPayrollImportedRows(
-  recipientRules: DaoWorkspaceRecipientRule[],
-  templateId = 'recurring-open-monthly',
-) {
-  const payrollRules = recipientRules.filter(
-    (rule) => rule.status !== 'Blocked' && (rule.category === 'Payroll' || rule.category === 'Vendor'),
-  );
-  const fallbackRules = recipientRules.filter((rule) => rule.status !== 'Blocked');
-  const selectedRules = (payrollRules.length ? payrollRules : fallbackRules).slice(0, 8);
-  const startDate = tomorrowIsoDate();
-
-  return selectedRules.map((rule) => ({
-    recipient: rule.address,
-    amount: '',
-    description: rule.name,
-    scheduleTemplate: templateId,
-    startDate,
-    durationDays: templateId.includes('weekly') ? '84' : '180',
-    intervalDays: templateId.includes('weekly') ? '7' : '30',
-    cliffDays: '',
-    trancheOffsetsDays: '',
-    tranchePercentages: '',
-  }));
-}
-
-export function buildDaoSingleStreamState(context: DaoLaunchContext) {
+export function buildDaoSingleStreamState(): { daoContext: DaoLaunchContext } {
   return {
-    daoContext: context,
+    daoContext: {
+      source: ORG_LAUNCH_SOURCE,
+      title: ORG_LAUNCH.title,
+      description: ORG_LAUNCH.stream,
+    },
   };
 }
 
-export function buildDaoBatchStreamState(
-  recipientRules: DaoWorkspaceRecipientRule[],
-  context: DaoLaunchContext,
-  templateId = 'recurring-open-monthly',
-) {
+/** Opens the batch builder empty: sample recipients never reach a real money flow. */
+export function buildDaoBatchStreamState(): { daoContext: DaoLaunchContext } {
   return {
-    daoContext: context,
-    preferredTemplateId: templateId,
-    importedData: buildDaoPayrollImportedRows(recipientRules, templateId),
+    daoContext: {
+      source: ORG_LAUNCH_SOURCE,
+      title: ORG_LAUNCH.title,
+      description: ORG_LAUNCH.batch,
+    },
   };
 }
 
-export function rememberDaoLaunchContext(context: DaoLaunchContext | null | undefined) {
-  if (typeof window === 'undefined') return;
-  if (!context) {
-    window.sessionStorage.removeItem(DAO_STREAM_CONTEXT_KEY);
-    return;
-  }
-  window.sessionStorage.setItem(DAO_STREAM_CONTEXT_KEY, JSON.stringify(context));
-}
-
-export function readDaoLaunchContext() {
+function sessionStore(): Storage | null {
   if (typeof window === 'undefined') return null;
-  const stored = window.sessionStorage.getItem(DAO_STREAM_CONTEXT_KEY);
-  if (!stored) return null;
   try {
-    return JSON.parse(stored) as DaoLaunchContext;
-  } catch {
+    return window.sessionStorage;
+  } catch (error) {
+    console.warn('Session storage is unavailable, so the Organization context is not kept.', error);
+    return null;
+  }
+}
+
+export function rememberDaoLaunchContext(context: DaoLaunchContext | null | undefined): void {
+  const store = sessionStore();
+  if (!store) return;
+  try {
+    if (context) store.setItem(DAO_STREAM_CONTEXT_KEY, JSON.stringify(context));
+    else store.removeItem(DAO_STREAM_CONTEXT_KEY);
+  } catch (error) {
+    console.warn('Could not update the Organization context in session storage.', error);
+  }
+}
+
+function isLaunchContext(value: unknown): value is DaoLaunchContext {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.source === 'string' &&
+    typeof record.title === 'string' &&
+    typeof record.description === 'string'
+  );
+}
+
+export function readDaoLaunchContext(): DaoLaunchContext | null {
+  const store = sessionStore();
+  if (!store) return null;
+  try {
+    const stored = store.getItem(DAO_STREAM_CONTEXT_KEY);
+    if (!stored) return null;
+    const parsed: unknown = JSON.parse(stored);
+    return isLaunchContext(parsed) ? parsed : null;
+  } catch (error) {
+    console.warn('Ignoring an unreadable Organization context in session storage.', error);
     return null;
   }
 }

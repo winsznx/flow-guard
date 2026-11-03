@@ -1,606 +1,322 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Clock, Repeat, Sparkles, Waves } from 'lucide-react';
+import { PageContainer } from '../../components/layout/PageContainer';
+import { Stack } from '../../components/layout/Stack';
+import { OrganizationHeader } from '../../components/dao/DaoSectionNav';
+import { Amount } from '../../components/ui/Amount';
 import { Button } from '../../components/ui/Button';
-import { Card } from '../../components/ui/Card';
-import { StatsCard } from '../../components/shared/StatsCard';
-import { DataTable, type Column } from '../../components/shared/DataTable';
-import { SkeletonTable, SkeletonCard } from '../../components/ui/Skeleton';
-import { DaoPreviewBanner } from '../../components/dao/DaoPreviewBanner';
-import { DaoSectionNav } from '../../components/dao/DaoSectionNav';
-import { getExplorerTxUrl } from '../../utils/blockchain';
-import { formatLogicalId } from '../../utils/display';
-import { getStreamScheduleTemplateLabel } from '../../utils/streamShapes';
-import { formatTokenAmount } from '../../utils/tokenFormat';
+import { ButtonLink } from '../../components/ui/ButtonLink';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { FilterChips } from '../../components/ui/FilterChips';
+import { Plus, Users, Waves } from '../../components/ui/Icon';
+import { List, type Column, type ListState } from '../../components/ui/List';
+import { NoResults } from '../../components/ui/NoResults';
+import { Pagination } from '../../components/ui/Pagination';
+import { StatRow } from '../../components/ui/StatRow';
+import { StatTile } from '../../components/ui/StatTile';
+import { StatusPill } from '../../components/ui/StatusPill';
+import type { Asset } from '../../components/ui/types';
+import { formatAddress, formatDate, formatRelative } from '../../copy/format';
+import { STREAM_SCHEDULE_WORD, VAULT_STREAMS } from '../../copy/organization';
+import { STATUS, lifecycleStatus } from '../../copy/status';
+import { useWallet } from '../../hooks/useWallet';
+import { authFetch, type WalletForAuth } from '../../utils/auth';
+import { getCachedTokenMeta } from '../../utils/tokenMeta';
+import { buildDaoBatchStreamState, buildDaoSingleStreamState } from '../../utils/daoStreamLaunch';
 
-type DateRangePreset = 'all' | '24h' | '7d' | '30d' | '90d';
-type EventTypeFilter = 'all' | 'created' | 'funded' | 'claim' | 'paused' | 'resumed' | 'refilled' | 'cancelled';
-type StreamStatusFilter = 'all' | 'ACTIVE' | 'PENDING' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
+const PAGE_SIZE = 16;
+const BCH: Asset = { kind: 'bch' };
 
-interface StreamLaunchContext {
-  source: string;
-  title?: string;
-  description?: string;
-  preferredLane?: string;
-}
+type StatusFilter = 'all' | 'ACTIVE' | 'PENDING' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
 
-interface TreasuryStream {
+const FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: VAULT_STREAMS.filterAll },
+  { value: 'ACTIVE', label: STATUS.active.word },
+  { value: 'PENDING', label: STATUS.notFunded.word },
+  { value: 'PAUSED', label: STATUS.paused.word },
+  { value: 'COMPLETED', label: STATUS.finished.word },
+  { value: 'CANCELLED', label: STATUS.cancelled.word },
+];
+
+interface VaultStream {
   id: string;
-  stream_id: string;
-  vault_id?: string | null;
-  sender: string;
   recipient: string;
   token_type: 'BCH' | 'CASHTOKENS';
   token_category?: string | null;
+  token_decimals?: number | null;
   total_amount: number;
-  withdrawn_amount: number;
-  vested_amount: number;
   claimable_amount: number;
-  progress_percentage: number;
   stream_type: string;
-  schedule_template?: string;
   status: string;
-  refillable?: boolean;
-  launch_context?: StreamLaunchContext;
-  latest_event?: {
-    event_type: string;
-    tx_hash?: string | null;
-    created_at: number;
-  } | null;
+  start_time?: number | null;
+  latest_event?: { event_type: string; created_at: number } | null;
 }
 
-interface StreamActivityEvent {
-  id: string;
-  entity_id: string;
-  event_type: string;
-  actor: string | null;
-  amount: number | null;
-  tx_hash: string | null;
-  created_at: number;
-  stream: {
-    stream_id: string;
-    vault_id?: string | null;
-    stream_type: string;
-    schedule_template?: string | null;
-    launch_context?: StreamLaunchContext | null;
+interface StreamPage {
+  streams: VaultStream[];
+  total: number;
+}
+
+function streamAsset(stream: VaultStream): Asset {
+  if (stream.token_type === 'BCH' || !stream.token_category) return BCH;
+  const meta = getCachedTokenMeta(stream.token_category);
+  return {
+    kind: 'token',
+    tokenId: stream.token_category,
+    symbol: meta?.symbol,
+    decimals: meta?.decimals ?? stream.token_decimals ?? 0,
   };
 }
 
-function formatAssetAmount(
-  amount: number,
-  tokenType: 'BCH' | 'CASHTOKENS',
-  tokenCategory?: string | null,
-) {
-  return formatTokenAmount(amount, tokenType, tokenCategory, {
-    decimals: tokenType === 'BCH' ? 8 : 0,
-    separator: true,
-  });
+function StreamAmount({ stream, value }: { stream: VaultStream; value: number }) {
+  return <Amount value={value} asset={streamAsset(stream)} precision="list" />;
 }
 
-function formatEventLabel(eventType: string) {
-  switch (eventType) {
-    case 'created':
-      return 'Created';
-    case 'funded':
-      return 'Funded';
-    case 'claim':
-      return 'Claimed';
-    case 'paused':
-      return 'Paused';
-    case 'resumed':
-      return 'Resumed';
-    case 'refilled':
-      return 'Refilled';
-    case 'cancelled':
-      return 'Cancelled';
-    default:
-      return eventType
-        .split('_')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
+async function fetchVaultStreams(
+  wallet: WalletForAuth,
+  page: number,
+  status: StatusFilter,
+  signal: AbortSignal
+): Promise<StreamPage> {
+  const params = new URLSearchParams({
+    treasury: 'true',
+    page: String(page),
+    limit: String(PAGE_SIZE),
+  });
+  if (status !== 'all') params.set('status', status);
+  const response = await authFetch(`/api/streams?${params.toString()}`, { wallet, signal });
+  if (!response.ok) throw new Error(`Vault streams request failed with ${response.status}`);
+  const data: { streams?: VaultStream[]; total?: number } = await response.json();
+  return { streams: data.streams ?? [], total: Number(data.total ?? 0) };
+}
+
+function lastActivity(stream: VaultStream, now: number): string {
+  const startsAt = stream.start_time ? stream.start_time * 1000 : null;
+  const eventAt = stream.latest_event ? stream.latest_event.created_at * 1000 : null;
+  if (eventAt !== null && eventAt <= now)
+    return formatRelative(eventAt, now) ?? VAULT_STREAMS.noActivity;
+  if (startsAt !== null && startsAt > now) {
+    const date = formatDate(startsAt, { dropSameYear: true, now });
+    if (date) return VAULT_STREAMS.starts(date);
   }
+  return VAULT_STREAMS.noActivity;
 }
 
-export const DaoStreamsPage: React.FC = () => {
-  const navigate = useNavigate();
-  const [streams, setStreams] = useState<TreasuryStream[]>([]);
-  const [events, setEvents] = useState<StreamActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<StreamStatusFilter>('all');
-  const [contextFilter, setContextFilter] = useState<string>('all');
-  const [eventType, setEventType] = useState<EventTypeFilter>('all');
-  const [dateRange, setDateRange] = useState<DateRangePreset>('30d');
-  const [streamPage, setStreamPage] = useState(1);
-  const [activityPage, setActivityPage] = useState(1);
-  const [streamTotal, setStreamTotal] = useState(0);
-  const [streamTotalPages, setStreamTotalPages] = useState(1);
-  const [activityTotal, setActivityTotal] = useState(0);
-  const [activityTotalPages, setActivityTotalPages] = useState(1);
-  const network = import.meta.env.VITE_BCH_NETWORK === 'mainnet' ? 'mainnet' : 'chipnet';
-
-  const contextOptions = useMemo(() => {
-    const uniqueSources = new Set<string>();
-    streams.forEach((stream) => {
-      if (stream.launch_context?.source) uniqueSources.add(stream.launch_context.source);
-    });
-    return ['all', ...Array.from(uniqueSources)];
-  }, [streams]);
-
-  useEffect(() => {
-    const fetchStreams = async () => {
-      try {
-        setLoading(true);
-        const streamParams = new URLSearchParams();
-        streamParams.set('treasury', 'true');
-        streamParams.set('page', String(streamPage));
-        streamParams.set('limit', '16');
-        if (statusFilter !== 'all') {
-          streamParams.set('status', statusFilter);
-        }
-        if (contextFilter !== 'all') {
-          streamParams.set('contextSource', contextFilter);
-        }
-
-        const streamResponse = await fetch(`/api/streams?${streamParams.toString()}`);
-        const streamData = await streamResponse.json();
-        setStreams(streamData.streams || []);
-        setStreamTotal(Number(streamData.total || 0));
-        setStreamTotalPages(Math.max(1, Number(streamData.totalPages || 1)));
-
-        const activityParams = new URLSearchParams();
-        activityParams.set('treasury', 'true');
-        activityParams.set('limit', '16');
-        activityParams.set('page', String(activityPage));
-        if (contextFilter !== 'all') {
-          activityParams.set('contextSource', contextFilter);
-        }
-        if (eventType !== 'all') {
-          activityParams.set('eventType', eventType);
-        }
-        if (dateRange !== 'all') {
-          const rangeSeconds = {
-            '24h': 24 * 60 * 60,
-            '7d': 7 * 24 * 60 * 60,
-            '30d': 30 * 24 * 60 * 60,
-            '90d': 90 * 24 * 60 * 60,
-          }[dateRange];
-          activityParams.set('dateFrom', String(Math.floor(Date.now() / 1000) - rangeSeconds));
-        }
-
-        const activityResponse = await fetch(`/api/streams/activity?${activityParams.toString()}`);
-        const activityData = await activityResponse.json();
-        setEvents(activityData.events || []);
-        setActivityTotal(Number(activityData.total || 0));
-        setActivityTotalPages(Math.max(1, Number(activityData.totalPages || 1)));
-      } catch (error) {
-        console.error('Failed to fetch DAO streams workspace:', error);
-        setStreams([]);
-        setEvents([]);
-        setStreamTotal(0);
-        setStreamTotalPages(1);
-        setActivityTotal(0);
-        setActivityTotalPages(1);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStreams();
-  }, [statusFilter, contextFilter, eventType, dateRange, streamPage, activityPage]);
-
-  useEffect(() => {
-    setStreamPage(1);
-    setActivityPage(1);
-  }, [statusFilter, contextFilter, eventType, dateRange]);
-
-  const totalClaimableBch = useMemo(
-    () => streams
-      .filter((stream) => stream.token_type === 'BCH')
-      .reduce((sum, stream) => sum + Number(stream.claimable_amount || 0), 0),
-    [streams],
-  );
-  const tokenStreamCount = useMemo(
-    () => streams.filter((stream) => stream.token_type !== 'BCH').length,
-    [streams],
-  );
-  const activeCount = useMemo(
-    () => streams.filter((stream) => stream.status === 'ACTIVE').length,
-    [streams],
-  );
-  const refillableCount = useMemo(
-    () => streams.filter((stream) => Boolean(stream.refillable)).length,
-    [streams],
-  );
-  const contextualCount = useMemo(
-    () => streams.filter((stream) => Boolean(stream.launch_context?.source)).length,
-    [streams],
-  );
-
-  const columns: Column<TreasuryStream>[] = [
-    {
-      key: 'stream_id',
-      label: 'Treasury Stream',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-sans font-medium text-textPrimary">{formatLogicalId(row.stream_id)}</p>
-          <p className="text-xs text-textSecondary font-mono mt-1">
-            {getStreamScheduleTemplateLabel(row.schedule_template || '') || row.stream_type}
-          </p>
-          {row.launch_context?.preferredLane && (
-            <p className="text-xs text-textMuted font-mono mt-1">
-              Lane • {row.launch_context.preferredLane}
-            </p>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'vault_id',
-      label: 'Treasury',
-      sortable: true,
-      render: (row) => (
-        <p className="font-mono text-sm text-textMuted">
-          {row.vault_id || 'No vault'}
-        </p>
-      ),
-    },
-    {
-      key: 'total_amount',
-      label: 'Total',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => (
-        <p className="font-display font-bold text-textPrimary">
-          {formatAssetAmount(row.total_amount, row.token_type, row.token_category)}
-        </p>
-      ),
-    },
-    {
-      key: 'claimable_amount',
-      label: 'Claimable',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => (
-        <p className="font-display font-bold text-primary">
-          {formatAssetAmount(row.claimable_amount, row.token_type, row.token_category)}
-        </p>
-      ),
-    },
-    {
-      key: 'status',
-      label: 'Status',
-      sortable: true,
-      render: (row) => (
-        <span className="rounded-full bg-surfaceAlt px-3 py-1 text-xs font-mono text-textPrimary">
-          {row.status}
+const COLUMNS: Column<VaultStream>[] = [
+  {
+    key: 'stream',
+    header: VAULT_STREAMS.columns.stream,
+    primary: true,
+    cell: (row) => (
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-title-item text-ink">
+          {VAULT_STREAMS.streamTo(formatAddress(row.recipient))}
         </span>
-      ),
+        <span className="text-small text-ink-muted">
+          {STREAM_SCHEDULE_WORD[row.stream_type.toUpperCase()] ?? VAULT_STREAMS.otherSchedule}
+        </span>
+      </div>
+    ),
+  },
+  {
+    key: 'status',
+    header: VAULT_STREAMS.columns.status,
+    mobile: 'top',
+    cell: (row) => {
+      const status = lifecycleStatus(row.status, {
+        startsAt: row.start_time ? row.start_time * 1000 : null,
+      });
+      return status ? <StatusPill status={status} /> : null;
     },
-    {
-      key: 'latest_event',
-      label: 'Latest Activity',
-      render: (row) => (
-        <div>
-          <p className="text-sm text-textPrimary">
-            {row.latest_event ? formatEventLabel(row.latest_event.event_type) : 'No events'}
-          </p>
-          {row.latest_event?.tx_hash && (
-            <a
-              href={getExplorerTxUrl(row.latest_event.tx_hash, network)}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => event.stopPropagation()}
-              className="inline-flex items-center gap-1 text-xs text-primary hover:text-primaryHover font-medium mt-1"
-            >
-              View Tx
-              <Sparkles className="w-3 h-3" />
-            </a>
-          )}
-        </div>
-      ),
-    },
-  ];
+  },
+  {
+    key: 'total',
+    header: VAULT_STREAMS.columns.total,
+    align: 'end',
+    mobile: 'bottom-start',
+    mobileLabel: VAULT_STREAMS.columns.total,
+    cell: (row) => <StreamAmount stream={row} value={row.total_amount} />,
+  },
+  {
+    key: 'ready',
+    header: VAULT_STREAMS.columns.ready,
+    align: 'end',
+    mobile: 'bottom-end',
+    mobileLabel: VAULT_STREAMS.columns.ready,
+    cell: (row) => <StreamAmount stream={row} value={row.claimable_amount} />,
+  },
+  {
+    key: 'last',
+    header: VAULT_STREAMS.columns.last,
+    mobile: 'hidden',
+    cell: (row) => lastActivity(row, Date.now()),
+  },
+];
 
-  const buildDaoContext = (source?: string | null, title?: string, description?: string, preferredLane?: string) => ({
-    source: source || 'dao-streams',
-    title: title || 'DAO Treasury Streams',
-    description: description || 'Organization-first treasury stream inventory and activity feed.',
-    preferredLane,
+interface LoadResult {
+  request: string;
+  data: StreamPage | null;
+}
+
+/** Keyed on the wallet, so a switch starts again from page one with nothing from the last wallet. */
+export function DaoStreamsPage() {
+  const viewer = useWallet().address;
+  return <VaultStreams key={viewer ?? ''} viewer={viewer} />;
+}
+
+function VaultStreams({ viewer }: { viewer: string | null }) {
+  const navigate = useNavigate();
+  const wallet = useWallet();
+  const walletRef = useRef<WalletForAuth>(wallet);
+  useEffect(() => {
+    walletRef.current = wallet;
   });
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [page, setPage] = useState(1);
+  const [attempt, setAttempt] = useState(0);
+  const [result, setResult] = useState<LoadResult | null>(null);
+  const request = `${page}|${status}|${attempt}`;
+
+  useEffect(() => {
+    if (!viewer) return;
+    const controller = new AbortController();
+    fetchVaultStreams(walletRef.current, page, status, controller.signal).then(
+      (loaded) => {
+        if (!controller.signal.aborted) setResult({ request, data: loaded });
+      },
+      (error: unknown) => {
+        if (controller.signal.aborted) return;
+        console.error('Vault streams did not load', error);
+        setResult({ request, data: null });
+      }
+    );
+    return () => controller.abort();
+  }, [viewer, page, status, request]);
+
+  const current = result?.request === request ? result : null;
+  const data = current?.data ?? null;
+  const failed = current !== null && current.data === null;
+
+  const changeStatus = (next: StatusFilter[]) => {
+    setStatus(next[0] ?? 'all');
+    setPage(1);
+  };
+
+  const streams = data?.streams ?? [];
+  const bchStreams = streams.filter((stream) => stream.token_type === 'BCH');
+  const tokenCount = streams.length - bchStreams.length;
+  const readyBch = bchStreams.reduce(
+    (sum, stream) => sum + Number(stream.claimable_amount || 0),
+    0
+  );
+  const activeCount = streams.filter((stream) => stream.status.toUpperCase() === 'ACTIVE').length;
+
+  const state: ListState = failed
+    ? 'error'
+    : data === null
+      ? 'loading'
+      : streams.length > 0
+        ? 'ready'
+        : status === 'all'
+          ? 'empty'
+          : 'no-results';
+  const showStats = state === 'ready' || (state === 'loading' && status === 'all');
+  const tileState = data === null ? 'loading' : 'ready';
+
+  const createStream = () => navigate('/streams/create', { state: buildDaoSingleStreamState() });
+  const payMany = () => navigate('/streams/batch-create', { state: buildDaoBatchStreamState() });
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 pb-28 md:px-6 md:pb-8">
-      <div className="mb-6">
-        <p className="text-xs font-mono uppercase tracking-[0.24em] text-primary">DAO Treasury Streams</p>
-        <h1 className="mt-2 font-display text-3xl text-textPrimary sm:text-4xl">Treasury stream inventory and execution feed.</h1>
-        <p className="mt-4 max-w-3xl text-base leading-7 text-textSecondary">
-          Review every treasury-backed vesting schedule, recurring payout runway, milestone unlock, and stream activity event from one organization-first workspace.
-        </p>
-      </div>
-
-      <DaoSectionNav />
-      <DaoPreviewBanner
-        title="A dedicated treasury stream surface for DAO operators."
-        description="This workspace combines treasury-linked stream inventory with filtered activity so operators can audit organization workflow instead of jumping between generic user pages."
+    <PageContainer>
+      <OrganizationHeader
+        page="streams"
+        sample={false}
+        primaryAction={
+          <Button variant="primary" leadingIcon={Plus} onClick={createStream}>
+            {VAULT_STREAMS.create}
+          </Button>
+        }
+        secondaryAction={
+          <Button key="pay-many" variant="secondary" leadingIcon={Users} onClick={payMany}>
+            {VAULT_STREAMS.payMany}
+          </Button>
+        }
       />
-
-      <div className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:flex xl:flex-wrap">
-        <Button
-          onClick={() => navigate('/streams/create?template=linear-cliff', {
-            state: { daoContext: buildDaoContext('dao-streams', 'DAO Treasury Streams', 'Launch a treasury-backed vesting schedule from the dedicated DAO streams workspace.', 'Finance lane') },
-          })}
-          className="w-full justify-center xl:w-auto"
-        >
-          Create treasury stream
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => navigate('/streams/batch-create', {
-            state: { daoContext: buildDaoContext('dao-streams', 'DAO Treasury Streams', 'Launch a treasury payroll run from the dedicated DAO streams workspace.', 'Payroll lane') },
-          })}
-          className="w-full justify-center xl:w-auto"
-        >
-          Batch payroll run
-        </Button>
-        <Button variant="outline" onClick={() => navigate('/app/dao/stream-batches')} className="w-full justify-center xl:w-auto">
-          Batch history
-        </Button>
-        <Button variant="outline" onClick={() => navigate('/app/dao/stream-activity')} className="w-full justify-center xl:w-auto">
-          Open full activity feed
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 mb-8 sm:grid-cols-2 xl:grid-cols-4">
-        <StatsCard
-          label="Treasury streams"
-          value={`${streamTotal}`}
-          subtitle={`${activeCount} active right now`}
-          icon={Waves}
-          color="primary"
+      <Stack>
+        <FilterChips
+          label={VAULT_STREAMS.filterLabel}
+          options={FILTERS}
+          selected={[status]}
+          onChange={changeStatus}
         />
-        <StatsCard
-          label="Claimable balance"
-          value={formatTokenAmount(totalClaimableBch, 'BCH', null, { decimals: 4 })}
-          subtitle={
-            tokenStreamCount > 0
-              ? `BCH only • ${tokenStreamCount} CashToken stream${tokenStreamCount === 1 ? '' : 's'} excluded`
-              : 'Sum of currently claimable treasury streams'
-          }
-          icon={Sparkles}
-          color="accent"
-        />
-        <StatsCard
-          label="Refillable runways"
-          value={`${refillableCount}`}
-          subtitle="Recurring streams that can be extended"
-          icon={Repeat}
-          color="secondary"
-        />
-        <StatsCard
-          label="Context-tagged"
-          value={`${contextualCount}`}
-          subtitle={`${contextOptions.length - 1} launch source${contextOptions.length === 2 ? '' : 's'} in use`}
-          icon={Activity}
-          color="secondary"
-        />
-      </div>
 
-      <Card className="mb-8 p-5 md:p-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-primary font-mono mb-2">Treasury filters</p>
-            <h2 className="font-display text-2xl text-textPrimary">Focus the stream workspace</h2>
-            <p className="text-sm text-textSecondary mt-1">
-              Filter treasury inventory and activity by launch source, stream status, event type, and date range.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-          <div>
-            <label className="block text-sm font-medium text-textPrimary mb-2">Launch source</label>
-            <select
-              value={contextFilter}
-              onChange={(event) => setContextFilter(event.target.value)}
-              className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-base text-textPrimary focus:outline-none focus:ring-2 focus:ring-focusRing md:py-2 md:text-sm"
-            >
-              {contextOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option === 'all' ? 'All launch sources' : option}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-textPrimary mb-2">Stream status</label>
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as StreamStatusFilter)}
-              className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-base text-textPrimary focus:outline-none focus:ring-2 focus:ring-focusRing md:py-2 md:text-sm"
-            >
-              <option value="all">All statuses</option>
-              <option value="ACTIVE">Active</option>
-              <option value="PENDING">Pending</option>
-              <option value="PAUSED">Paused</option>
-              <option value="COMPLETED">Completed</option>
-              <option value="CANCELLED">Cancelled</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-textPrimary mb-2">Activity type</label>
-            <select
-              value={eventType}
-              onChange={(event) => setEventType(event.target.value as EventTypeFilter)}
-              className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-base text-textPrimary focus:outline-none focus:ring-2 focus:ring-focusRing md:py-2 md:text-sm"
-            >
-              <option value="all">All events</option>
-              <option value="created">Created</option>
-              <option value="funded">Funded</option>
-              <option value="claim">Claims</option>
-              <option value="paused">Paused</option>
-              <option value="resumed">Resumed</option>
-              <option value="refilled">Refilled</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-textPrimary mb-2">Date range</label>
-            <select
-              value={dateRange}
-              onChange={(event) => setDateRange(event.target.value as DateRangePreset)}
-              className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-base text-textPrimary focus:outline-none focus:ring-2 focus:ring-focusRing md:py-2 md:text-sm"
-            >
-              <option value="all">All time</option>
-              <option value="24h">Last 24 hours</option>
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-              <option value="90d">Last 90 days</option>
-            </select>
-          </div>
-        </div>
-      </Card>
-
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <Card className="p-5 md:p-6">
-          <div className="mb-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-primary font-mono mb-2">Treasury inventory</p>
-            <h2 className="font-display text-2xl text-textPrimary">Live treasury streams</h2>
-          </div>
-
-          {loading ? (
-            <SkeletonTable rows={6} columns={6} />
-        ) : (
-            <div className="space-y-4">
-              <DataTable
-                columns={columns}
-                data={streams}
-                onRowClick={(stream) => navigate(`/streams/${stream.id}`, {
-                  state: { daoContext: buildDaoContext(
-                    stream.launch_context?.source,
-                    stream.launch_context?.title || 'DAO Treasury Streams',
-                    stream.launch_context?.description || 'Organization-first treasury stream inventory and activity feed.',
-                    stream.launch_context?.preferredLane,
-                  ) },
-                })}
-                enableSearch
-                enableExport
-                emptyMessage="No treasury streams found for the selected filters."
+        {showStats ? (
+          <StatRow>
+            <StatTile
+              label={VAULT_STREAMS.stats.total}
+              value={data?.total ?? 0}
+              state={tileState}
+            />
+            <StatTile
+              label={VAULT_STREAMS.stats.active}
+              value={activeCount}
+              state={tileState}
+              pageOnly
+            />
+            <div className="col-span-2 grid lg:col-span-1">
+              <StatTile
+                label={VAULT_STREAMS.stats.ready}
+                value={<Amount value={readyBch} asset={BCH} size="lg" precision="list" />}
+                sub={tokenCount > 0 ? VAULT_STREAMS.tokenNote(tokenCount) : undefined}
+                state={tileState}
+                pageOnly
               />
-              <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surfaceAlt px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-textSecondary">
-                  Page {streamPage} of {streamTotalPages} • {streamTotal} total treasury stream{streamTotal === 1 ? '' : 's'}
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setStreamPage((current) => Math.max(1, current - 1))}
-                    disabled={streamPage <= 1}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => setStreamPage((current) => Math.min(streamTotalPages, current + 1))}
-                    disabled={streamPage >= streamTotalPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
             </div>
-          )}
-        </Card>
+          </StatRow>
+        ) : null}
 
-        <Card className="p-5 md:p-6">
-          <div className="mb-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-primary font-mono mb-2">Recent execution</p>
-            <h2 className="font-display text-2xl text-textPrimary">Filtered activity</h2>
-          </div>
+        <List
+          label={VAULT_STREAMS.listLabel}
+          columns={COLUMNS}
+          rows={streams}
+          rowKey={(row) => row.id}
+          rowHref={(row) => `/streams/${row.id}`}
+          state={state}
+          empty={
+            <EmptyState
+              icon={Waves}
+              title={VAULT_STREAMS.empty.title}
+              description={VAULT_STREAMS.empty.description}
+              action={
+                <Button variant="primary" leadingIcon={Plus} onClick={createStream}>
+                  {VAULT_STREAMS.create}
+                </Button>
+              }
+            />
+          }
+          noResults={
+            <NoResults thing={VAULT_STREAMS.noResultsThing} onClear={() => changeStatus(['all'])} />
+          }
+          error={
+            <ErrorState
+              title={VAULT_STREAMS.error.title}
+              reason={VAULT_STREAMS.error.reason}
+              onRetry={() => setAttempt((count) => count + 1)}
+            />
+          }
+        />
 
-          {loading ? (
-            <SkeletonCard lines={4} />
-          ) : events.length === 0 ? (
-            <div className="rounded-2xl border border-border bg-surfaceAlt p-6 text-center">
-              <p className="text-textMuted font-sans">No treasury stream activity for the selected filters.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="space-y-3">
-                {events.map((event) => (
-                  <button
-                    key={event.id}
-                    type="button"
-                    onClick={() => navigate(`/streams/${event.entity_id}`, {
-                      state: {
-                        daoContext: buildDaoContext(
-                          event.stream.launch_context?.source,
-                          event.stream.launch_context?.title || 'DAO Treasury Streams',
-                          event.stream.launch_context?.description || 'Organization-first treasury stream inventory and activity feed.',
-                          event.stream.launch_context?.preferredLane,
-                        ),
-                      },
-                    })}
-                    className="w-full rounded-2xl border border-border bg-surfaceAlt p-4 text-left transition hover:border-primary/40 hover:bg-surface"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-textPrimary">
-                          {formatEventLabel(event.event_type)} • {formatLogicalId(event.stream.stream_id)}
-                        </p>
-                        <p className="text-xs text-textSecondary mt-1">
-                          {getStreamScheduleTemplateLabel(event.stream.schedule_template || '') || event.stream.stream_type}
-                        </p>
-                        {event.stream.launch_context?.preferredLane && (
-                          <p className="text-xs text-textMuted font-mono mt-1">
-                            Lane • {event.stream.launch_context.preferredLane}
-                          </p>
-                        )}
-                        <p className="text-xs text-textMuted font-mono mt-2">
-                          {new Date(event.created_at * 1000).toLocaleString()}
-                        </p>
-                      </div>
-                      {event.tx_hash && (
-                        <a
-                          href={getExplorerTxUrl(event.tx_hash, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(eventClick) => eventClick.stopPropagation()}
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:text-primaryHover"
-                        >
-                          tx
-                          <Sparkles className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surfaceAlt px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-textSecondary">
-                  Page {activityPage} of {activityTotalPages} • {activityTotal} total event{activityTotal === 1 ? '' : 's'}
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setActivityPage((current) => Math.max(1, current - 1))}
-                    disabled={activityPage <= 1}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => setActivityPage((current) => Math.min(activityTotalPages, current + 1))}
-                    disabled={activityPage >= activityTotalPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </Card>
-      </div>
-    </div>
+        {data && data.total > 0 ? (
+          <Pagination page={page} pageSize={PAGE_SIZE} total={data.total} onPage={setPage} />
+        ) : null}
+
+        <div>
+          <ButtonLink variant="link" to="/app/dao/stream-batches">
+            {VAULT_STREAMS.batches}
+          </ButtonLink>
+        </div>
+      </Stack>
+    </PageContainer>
   );
-};
+}

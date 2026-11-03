@@ -1,47 +1,46 @@
 import React from 'react';
+import { cx } from './cx';
 
-interface CardProps {
+export type CardProps = {
+  as?: 'div' | 'section' | 'article' | 'li';
+  padding?: 'none' | 'md';
+  /** Outlines the card, for the item a link points at. */
+  highlighted?: boolean;
   children: React.ReactNode;
   className?: string;
+  id?: string;
+};
+
+type LegacyCardProps = {
   padding?: 'none' | 'sm' | 'md' | 'lg' | 'xl';
   hover?: boolean;
-}
+  children: React.ReactNode;
+  className?: string;
+};
 
-/**
- * Card component following FlowGuard Sage palette design system
- *
- * DESIGN RULES:
- * - Uses ONLY Sage palette via Tailwind tokens
- * - Background: surface (brand50 #F1F3E0)
- * - Border: border (brand300 #A1BC98)
- * - Hover: shadow increase + border darkens to borderHover (brand700 #778873)
- * - NO hardcoded colors, NO card-base class (deleted with design-system.css)
- */
-export const Card: React.FC<CardProps> = ({
-  children,
-  className = '',
-  padding = 'md',
-  hover = false,
-}) => {
-  const baseStyles =
-    'bg-surface border border-border rounded-lg shadow-sm ' +
-    'transition-all duration-200';
+export const CARD_SURFACE = 'bg-surface border border-line rounded-card';
 
-  const paddings = {
-    none: 'p-0',
-    sm: 'p-3 md:p-4',
-    md: 'p-4 md:p-6',
-    lg: 'p-5 md:p-8',
-    xl: 'p-6 md:p-10',
-  };
+export const CARD_PADDING = 'p-4 sm:p-5';
 
-  const hoverStyles = hover
-    ? 'hover:shadow-md hover:border-borderHover hover:-translate-y-0.5'
-    : '';
+export function Card(props: CardProps | LegacyCardProps) {
+  const { padding = 'md', children, className } = props;
+  const Element = 'as' in props && props.as ? props.as : 'div';
+  const id = 'id' in props ? props.id : undefined;
+  const hover = 'hover' in props && props.hover;
+  const highlighted = 'highlighted' in props && props.highlighted;
 
   return (
-    <div className={`${baseStyles} ${paddings[padding]} ${hoverStyles} ${className}`}>
+    <Element
+      id={id}
+      className={cx(
+        CARD_SURFACE,
+        padding !== 'none' && CARD_PADDING,
+        hover && 'transition-colors duration-(--duration-fast) hover:border-line-strong',
+        highlighted && 'outline-2 outline-offset-2 outline-focus outline-solid',
+        className,
+      )}
+    >
       {children}
-    </div>
+    </Element>
   );
-};
+}

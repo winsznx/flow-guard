@@ -1,21 +1,11 @@
 /**
- * Cashonize Wallet Connector
- *
- * Cashonize is a CashScript-aware BCH wallet that supports covenant transactions.
- * It uses WalletConnect v2 protocol but provides enhanced CashScript signing capabilities.
- *
- * Features:
- * - Native CashScript transaction signing
- * - Covenant unlock script support
- * - CashTokens support (fungible & NFTs)
- * - Mobile wallet via WalletConnect v2
- *
- * Installation: https://cashonize.com
+ * Cashonize connector. Cashonize is a web and phone BCH wallet that signs
+ * contract transactions (sourceOutputs) over WalletConnect v2.
+ * https://cashonize.com
  */
 
-import SignClient from '@walletconnect/sign-client';
+import type SignClient from '@walletconnect/sign-client';
 import type { SessionTypes } from '@walletconnect/types';
-import QRCode from 'qrcode';
 import type {
   IWalletConnector,
   WalletType,
@@ -27,6 +17,13 @@ import type {
   CashScriptSignResponse,
 } from '../types/wallet';
 import { normalizeSignatureResponse } from '../utils/signature';
+import { flowFailure, walletRequestFailure } from '../copy/errors';
+import { PAIRING, WALLETS, WALLET_PROMPTS } from '../copy/wallets';
+import { abandonPairing, getSignClient, isAbandonedPairing } from './signClient';
+import { showPairingDialog } from './pairingDialog';
+
+const PAIRING_TIMEOUT_MS = 120_000;
+const CASHONIZE_WEB_URL = 'https://cashonize.com';
 
 // WalletConnect Project ID - sourced exclusively from env. No hardcoded fallback.
 const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined;
@@ -36,7 +33,8 @@ export class CashonizeConnector implements IWalletConnector {
   private client: SignClient | null = null;
   private session: SessionTypes.Struct | null = null;
   private currentAddress: string | null = null;
-  private qrModal: HTMLDivElement | null = null;
+  private hidePairing: (() => void) | null = null;
+  private cancelPairing: (() => void) | null = null;
 
   /**
    * Check if Cashonize is available (via WalletConnect)
@@ -57,32 +55,11 @@ export class CashonizeConnector implements IWalletConnector {
    */
   async connect(): Promise<WalletInfo> {
     try {
-      console.log('[Cashonize] Initializing WalletConnect...');
+      this.client = await this.initClient();
 
-      if (!WALLETCONNECT_PROJECT_ID) {
-        throw new Error(
-          'WalletConnect requires a project ID. Get one free at https://cloud.walletconnect.com\n' +
-            'Then add to .env.local: VITE_WALLETCONNECT_PROJECT_ID=your-id'
-        );
-      }
-
-      // Initialize SignClient
-      this.client = await SignClient.init({
-        projectId: WALLETCONNECT_PROJECT_ID!,
-        metadata: {
-          name: 'FlowGuard',
-          description: 'BCH-native treasuries, streams, payments, and governance',
-          url: window.location.origin,
-          icons: [`${window.location.origin}/favicon.svg`],
-        },
-      });
-
-      // Check for existing sessions
-      const sessions = this.client.session.getAll();
-      if (sessions.length > 0) {
-        console.log('[Cashonize] Found existing session');
-        this.session = sessions[sessions.length - 1] as any;
-        return await this.getSessionInfo();
+      const existing = await this.reuseExistingSession();
+      if (existing) {
+        return existing;
       }
 
       // Create new connection
@@ -102,42 +79,76 @@ export class CashonizeConnector implements IWalletConnector {
       });
 
       if (!uri) {
-        throw new Error('Failed to generate WalletConnect URI');
+        throw flowFailure('RELAY_UNREACHABLE', { details: 'WalletConnect returned no pairing link.' });
       }
 
-      // Show Cashonize-specific QR code modal
-      await this.showCashonizeQRModal(uri);
-
-      // Wait for approval
-      const approvalTimeout = new Promise((_, reject) => {
-        setTimeout(
-          () => reject(new Error('Connection timeout - please scan QR code with Cashonize')),
-          120000
-        );
-      });
-
-      this.session = (await Promise.race([approval(), approvalTimeout])) as SessionTypes.Struct;
-      this.hideQRModal();
-
+      this.session = await this.waitForApproval(uri, approval());
       console.log('[Cashonize] Session established');
 
       return await this.getSessionInfo();
-    } catch (error: any) {
-      this.hideQRModal();
+    } catch (error) {
       console.error('[Cashonize] Connection error:', error);
-
-      if (error.message?.includes('timeout')) {
-        throw new Error(
-          'Connection timeout. Please:\n\n' +
-            '1. Open Cashonize app on your mobile device\n' +
-            '2. Tap the scan icon\n' +
-            '3. Scan the QR code\n\n' +
-            'Download: https://cashonize.com'
-        );
-      }
-
-      throw error;
+      throw walletRequestFailure(error, 'transaction');
+    } finally {
+      this.closePairing();
     }
+  }
+
+  /**
+   * Shows the pairing dialog and waits for Cashonize to approve. Closing the dialog
+   * rejects with PAIRING_CANCELLED, so the picker is free again at once.
+   */
+  private async waitForApproval(
+    uri: string,
+    approval: Promise<SessionTypes.Struct>,
+  ): Promise<SessionTypes.Struct> {
+    approval.catch((error: unknown) => console.debug('[Cashonize] Pairing proposal ended:', error));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopped = new Promise<never>((_, reject) => {
+      this.cancelPairing = () => reject(flowFailure('PAIRING_CANCELLED'));
+      timer = setTimeout(() => reject(flowFailure('PAIRING_TIMEOUT')), PAIRING_TIMEOUT_MS);
+    });
+
+    try {
+      await this.showPairingDialog(uri);
+      return await Promise.race([approval, stopped]);
+    } catch (error) {
+      if (this.client && isAbandonedPairing(error)) abandonPairing(this.client, uri, approval);
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.cancelPairing = null;
+    }
+  }
+
+  /**
+   * Resume a stored WalletConnect session without prompting. Returns null when
+   * none is stored, so a page load never opens the Cashonize QR.
+   */
+  async restore(): Promise<WalletInfo | null> {
+    this.client = await this.initClient();
+    return this.reuseExistingSession();
+  }
+
+  private async initClient(): Promise<SignClient> {
+    console.log('[Cashonize] Initializing WalletConnect...');
+
+    if (!WALLETCONNECT_PROJECT_ID) {
+      throw flowFailure('MISCONFIGURED', { details: 'No WalletConnect project ID in this build.' });
+    }
+
+    return getSignClient(WALLETCONNECT_PROJECT_ID);
+  }
+
+  private async reuseExistingSession(): Promise<WalletInfo | null> {
+    const sessions = this.client?.session.getAll() ?? [];
+    if (sessions.length === 0) {
+      return null;
+    }
+
+    console.log('[Cashonize] Found existing session');
+    this.session = sessions[sessions.length - 1];
+    return this.getSessionInfo();
   }
 
   /**
@@ -150,7 +161,7 @@ export class CashonizeConnector implements IWalletConnector {
           topic: this.session.topic,
           reason: {
             code: 6000,
-            message: 'User disconnected',
+            message: WALLET_PROMPTS.disconnected,
           },
         });
       } catch (error) {
@@ -170,7 +181,7 @@ export class CashonizeConnector implements IWalletConnector {
     if (this.currentAddress) return this.currentAddress;
 
     if (!this.session) {
-      throw new Error('Cashonize not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     const addresses = await this.getAddresses();
@@ -184,15 +195,15 @@ export class CashonizeConnector implements IWalletConnector {
   async getPublicKey(): Promise<string> {
     // Cashonize doesn't expose raw public key via WC2
     // For contract deployment, we'll use address derivation
-    throw new Error('Public key not available via WalletConnect');
+    throw flowFailure('WALLET_UNSUPPORTED', { details: 'Cashonize does not share a public key over WalletConnect.' });
   }
 
   /**
    * Get wallet balance via backend API
    */
-  async getBalance(): Promise<WalletBalance> {
+  async getBalance(): Promise<WalletBalance | null> {
     if (!this.currentAddress) {
-      return { bch: 0, sat: 0 };
+      return null;
     }
 
     try {
@@ -201,7 +212,7 @@ export class CashonizeConnector implements IWalletConnector {
       );
       if (!response.ok) {
         console.warn('[Cashonize] Balance API returned error:', response.status);
-        return { bch: 0, sat: 0 };
+        return null;
       }
       const data = await response.json();
       return {
@@ -210,7 +221,7 @@ export class CashonizeConnector implements IWalletConnector {
       };
     } catch (error) {
       console.error('[Cashonize] Failed to fetch balance:', error);
-      return { bch: 0, sat: 0 };
+      return null;
     }
   }
 
@@ -219,15 +230,15 @@ export class CashonizeConnector implements IWalletConnector {
    */
   async signTransaction(tx: Transaction): Promise<SignedTransaction> {
     if (!this.client || !this.session) {
-      throw new Error('Cashonize not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
-    const address = await this.getAddress();
+    await this.getAddress();
 
     try {
       // Build simple transaction request
       const request = {
-        userPrompt: 'Sign transaction to fund contract',
+        userPrompt: WALLET_PROMPTS.fund,
         broadcast: true,
         transaction: {
           outputs: [
@@ -252,9 +263,9 @@ export class CashonizeConnector implements IWalletConnector {
         txId: result.txid || result.signedTransactionHash,
         hex: result.signedTransaction || '',
       };
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Cashonize] Sign transaction error:', error);
-      throw new Error(`Failed to sign transaction: ${error.message}`);
+      throw walletRequestFailure(error, 'transaction');
     }
   }
 
@@ -265,7 +276,7 @@ export class CashonizeConnector implements IWalletConnector {
    */
   async signCashScriptTransaction(options: CashScriptSignOptions): Promise<CashScriptSignResponse> {
     if (!this.client || !this.session) {
-      throw new Error('Cashonize not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     try {
@@ -274,7 +285,7 @@ export class CashonizeConnector implements IWalletConnector {
       // Cashonize supports the bch_signTransaction method with sourceOutputs
       // for covenant transactions
       const request = {
-        userPrompt: options.userPrompt || 'Sign contract transaction',
+        userPrompt: options.userPrompt || WALLET_PROMPTS.transaction,
         broadcast: options.broadcast !== false,
         transaction: options.transaction,
         sourceOutputs: options.sourceOutputs,
@@ -295,9 +306,9 @@ export class CashonizeConnector implements IWalletConnector {
         signedTransaction: result.signedTransaction,
         signedTransactionHash: result.signedTransactionHash || result.txid,
       };
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Cashonize] CashScript sign error:', error);
-      throw new Error(`Failed to sign covenant transaction: ${error.message}`);
+      throw walletRequestFailure(error, 'transaction');
     }
   }
 
@@ -306,7 +317,7 @@ export class CashonizeConnector implements IWalletConnector {
    */
   async signMessage(message: string, userPrompt?: string): Promise<string> {
     if (!this.client || !this.session) {
-      throw new Error('Cashonize not connected');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     const address = await this.getAddress();
@@ -321,16 +332,16 @@ export class CashonizeConnector implements IWalletConnector {
             {
               address,
               message,
-              userPrompt: userPrompt || 'Sign message',
+              userPrompt: userPrompt || WALLET_PROMPTS.signInMessage,
             },
           ],
         },
       });
 
       return normalizeSignatureResponse(result);
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Cashonize] Sign message error:', error);
-      throw new Error(`Failed to sign message: ${error.message}`);
+      throw walletRequestFailure(error, 'signIn');
     }
   }
 
@@ -354,7 +365,7 @@ export class CashonizeConnector implements IWalletConnector {
    */
   private async getAddresses(): Promise<string[]> {
     if (!this.session) {
-      throw new Error('No session');
+      throw flowFailure('WALLET_SESSION_ENDED');
     }
 
     // Extract addresses from session namespaces
@@ -371,127 +382,39 @@ export class CashonizeConnector implements IWalletConnector {
   }
 
   /**
-   * Get network from chain ID
+   * The network the session's account is on, read from its CAIP-10 prefix
+   * (`bch:bitcoincash:` or `bch:bchtest:`). `chains` is optional in a session
+   * namespace, so it's only a fallback. A session that names neither was approved
+   * for the one chain this build requested.
    */
   private getNetworkFromChainId(): 'mainnet' | 'testnet' | 'chipnet' {
-    const chainId = this.session?.namespaces.bch?.chains?.[0];
-    if (chainId?.includes('bchtest')) return 'chipnet';
-    if (chainId?.includes('bitcoincash')) return 'mainnet';
-    return 'chipnet';
+    const namespace = this.session?.namespaces.bch;
+    const chainId = namespace?.accounts?.[0]?.split(':').slice(0, 2).join(':') || namespace?.chains?.[0];
+    if (chainId === 'bch:bchtest') return 'chipnet';
+    if (chainId === 'bch:bitcoincash') return 'mainnet';
+    return this.getChainId() === 'bch:bchtest' ? 'chipnet' : 'mainnet';
   }
 
-  /**
-   * Show Cashonize-branded QR code modal
-   */
-  private async showCashonizeQRModal(uri: string): Promise<void> {
-    // Create modal
-    this.qrModal = document.createElement('div');
-    this.qrModal.className =
-      'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm';
-
-    // Generate QR code
-    const qrDataUrl = await QRCode.toDataURL(uri, {
-      width: 300,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF',
-      },
+  private async showPairingDialog(uri: string): Promise<void> {
+    const copy = PAIRING.cashonize;
+    const cashonize = WALLETS.cashonize;
+    this.hidePairing = showPairingDialog({
+      title: copy.title,
+      line: copy.line,
+      qrValue: uri,
+      qrCaption: copy.qrCaption,
+      link: uri,
+      steps: copy.steps,
+      open: { label: copy.openLabel, href: `${CASHONIZE_WEB_URL}/?uri=${encodeURIComponent(uri)}` },
+      get: cashonize.getUrl && cashonize.getLabel
+        ? { prompt: copy.missing, label: cashonize.getLabel, href: cashonize.getUrl }
+        : undefined,
+      onClose: () => this.cancelPairing?.(),
     });
-
-    // Audit H-09: build the modal with createElement + textContent rather than
-    // innerHTML template strings. The qrDataUrl is currently library-derived
-    // and safe, but the previous shape would silently become an HTML-injection
-    // sink the moment any field flowed in from a remote signing service.
-    const modalRoot = document.createElement('div');
-    modalRoot.className = 'bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 relative';
-
-    const header = document.createElement('div');
-    header.className = 'text-center mb-4';
-    const title = document.createElement('h3');
-    title.className = 'text-xl font-semibold text-gray-900 mb-2';
-    title.textContent = 'Connect with Cashonize';
-    const subtitle = document.createElement('p');
-    subtitle.className = 'text-sm text-gray-600';
-    subtitle.textContent = 'Scan this QR code with your Cashonize mobile app';
-    header.append(title, subtitle);
-
-    const qrWrapper = document.createElement('div');
-    qrWrapper.className = 'bg-white p-4 rounded-lg border-2 border-gray-200 mb-4';
-    const qrImg = document.createElement('img');
-    qrImg.src = qrDataUrl;
-    qrImg.alt = 'QR Code';
-    qrImg.className = 'w-full';
-    qrWrapper.appendChild(qrImg);
-
-    const stepsWrapper = document.createElement('div');
-    stepsWrapper.className = 'space-y-3';
-    const steps = [
-      'Open Cashonize app on your phone',
-      'Tap the scan icon',
-      'Scan this QR code',
-    ];
-    steps.forEach((label, i) => {
-      const row = document.createElement('div');
-      row.className = 'flex items-center gap-2 text-sm text-gray-600';
-      const badge = document.createElement('div');
-      badge.className =
-        'w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold flex-shrink-0';
-      badge.textContent = String(i + 1);
-      const text = document.createElement('span');
-      text.textContent = label;
-      row.append(badge, text);
-      stepsWrapper.appendChild(row);
-    });
-
-    const footer = document.createElement('div');
-    footer.className = 'mt-6 pt-4 border-t border-gray-200';
-    const footerCopy = document.createElement('p');
-    footerCopy.className = 'text-xs text-gray-500 text-center';
-    footerCopy.append('Don\'t have Cashonize? ');
-    const downloadLink = document.createElement('a');
-    downloadLink.href = 'https://cashonize.com';
-    downloadLink.target = '_blank';
-    downloadLink.rel = 'noopener noreferrer';
-    downloadLink.className = 'text-blue-600 hover:underline';
-    downloadLink.textContent = 'Download here';
-    footerCopy.appendChild(downloadLink);
-    footer.appendChild(footerCopy);
-
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'absolute top-4 right-4 text-gray-400 hover:text-gray-600';
-    closeBtn.setAttribute('aria-label', 'Close');
-    const svgNs = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNs, 'svg');
-    svg.setAttribute('class', 'w-6 h-6');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    const path = document.createElementNS(svgNs, 'path');
-    path.setAttribute('stroke-linecap', 'round');
-    path.setAttribute('stroke-linejoin', 'round');
-    path.setAttribute('stroke-width', '2');
-    path.setAttribute('d', 'M6 18L18 6M6 6l12 12');
-    svg.appendChild(path);
-    closeBtn.appendChild(svg);
-    closeBtn.addEventListener('click', () => this.hideQRModal());
-
-    modalRoot.append(header, qrWrapper, stepsWrapper, footer, closeBtn);
-
-    // Replace any prior content atomically
-    while (this.qrModal.firstChild) this.qrModal.removeChild(this.qrModal.firstChild);
-    this.qrModal.appendChild(modalRoot);
-
-    document.body.appendChild(this.qrModal);
   }
 
-  /**
-   * Hide QR code modal
-   */
-  private hideQRModal(): void {
-    if (this.qrModal && this.qrModal.parentNode) {
-      this.qrModal.parentNode.removeChild(this.qrModal);
-      this.qrModal = null;
-    }
+  private closePairing(): void {
+    this.hidePairing?.();
+    this.hidePairing = null;
   }
 }

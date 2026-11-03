@@ -1,548 +1,496 @@
-import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Card } from '../components/ui/Card';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { AddressInput } from '../components/ui/AddressInput';
+import { Amount } from '../components/ui/Amount';
+import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Card } from '../components/ui/Card';
+import { DateInput } from '../components/ui/DateInput';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorState } from '../components/ui/ErrorState';
+import { ErrorSummary } from '../components/ui/ErrorSummary';
+import { Heading } from '../components/ui/Heading';
+import { Input } from '../components/ui/Input';
+import { Notice } from '../components/ui/Notice';
+import { PlanSentence } from '../components/ui/PlanSentence';
+import { Select } from '../components/ui/Select';
+import { Skeleton } from '../components/ui/Skeleton';
+import { Steps } from '../components/ui/Steps';
+import { TransactionReview } from '../components/ui/TransactionReview';
+import { TxLink } from '../components/ui/TxLink';
+import type { Asset } from '../components/ui/types';
+import { BUDGET_CREATE, PLAN_DIALOG } from '../copy/budgets';
+import { ACTIONS } from '../copy/common';
+import { asFlowError, errorMessage, type FlowError } from '../copy/errors';
+import { formatAmount, formatDate } from '../copy/format';
+import { addressErrors } from '../copy/network';
+import { reachedNetwork, vaultTitle } from '../copy/vaults';
+import { useNetwork } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
 import { createBudgetPlan, fetchVaults } from '../utils/api';
-import { ChevronRight, AlertCircle } from 'lucide-react';
+import { fundBudgetPlan } from '../utils/blockchain';
 
-/**
- * Create Budget Plan Page
- *
- * Multi-step form to create scheduled releases (ScheduleUTXO):
- * - Recurring releases
- * - Linear vesting
- * - Step vesting
- */
+const BCH: Asset = { kind: 'bch' };
+const MAX_PAYMENTS = 120;
 
-type PlanType = 'RECURRING' | 'LINEAR_VESTING' | 'STEP_VESTING';
+type StepKey = 'who' | 'when' | 'check';
+type Interval = (typeof BUDGET_CREATE.intervals)[number]['value'];
+type Field = 'vault' | 'recipient' | 'amount' | 'count';
+type Errors = Partial<Record<Field, string>>;
+type VaultOption = { value: string; label: string };
+type Created = { id: string; contractAddress: string };
+
+const STEPS: { key: StepKey; label: string }[] = [
+  { key: 'who', label: BUDGET_CREATE.steps.who },
+  { key: 'when', label: BUDGET_CREATE.steps.when },
+  { key: 'check', label: BUDGET_CREATE.steps.check },
+];
+
+const FIELD_IDS: Record<Field, string> = {
+  vault: 'plan-vault',
+  recipient: 'plan-recipient',
+  amount: 'plan-amount',
+  count: 'plan-count',
+};
+
+const FIELD_LABELS: Record<Field, string> = {
+  vault: BUDGET_CREATE.vault,
+  recipient: BUDGET_CREATE.recipient,
+  amount: BUDGET_CREATE.amount,
+  count: BUDGET_CREATE.count,
+};
+
+const FIELD_STEP: Record<Field, StepKey> = {
+  vault: 'who',
+  recipient: 'who',
+  amount: 'when',
+  count: 'when',
+};
+
+function planTotal(perPayment: string, count: number): string {
+  const per = Number.parseFloat(perPayment);
+  if (!Number.isFinite(per) || count <= 0) return '0';
+  return String(Math.round(per * count * 1e8) / 1e8);
+}
 
 export default function CreateBudgetPlanPage() {
-  const navigate = useNavigate();
   const wallet = useWallet();
-  const [step, setStep] = useState(1);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [vaults, setVaults] = useState<any[]>([]);
+  const network = useNetwork();
+  const [vaults, setVaults] = useState<VaultOption[] | null>(null);
+  const [vaultsError, setVaultsError] = useState<FlowError | null>(null);
+  const [step, setStep] = useState<StepKey>('who');
+  const [vaultId, setVaultId] = useState('');
+  const [recipient, setRecipient] = useState('');
+  const [recipientValid, setRecipientValid] = useState(false);
+  const [name, setName] = useState('');
+  const [perPayment, setPerPayment] = useState('');
+  const [count, setCount] = useState('');
+  const [interval, setHowOften] = useState<Interval>('2592000');
+  const [startDate, setStartDate] = useState('');
+  const [errors, setErrors] = useState<Errors>({});
+  const [submitError, setSubmitError] = useState<FlowError | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<Created | null>(null);
+  const [funding, setFunding] = useState(false);
+  const [funded, setFunded] = useState<'no' | 'yes' | 'syncing'>('no');
+  const [fundingTxid, setFundingTxid] = useState<string | null>(null);
 
-  const [formData, setFormData] = useState({
-    planName: '',
-    planType: 'RECURRING' as PlanType,
-    treasuryId: '',
-    recipient: '',
-    recipientLabel: '',
-    totalAmount: '',
-    intervalSeconds: '2592000', // 30 days default
-    amountPerInterval: '',
-    cliffSeconds: '',
-    startDate: '',
-  });
-
-  // Load vaults on mount
-  useEffect(() => {
-    const loadVaults = async () => {
-      try {
-        const data = await fetchVaults(wallet.address || undefined);
-        setVaults(data.all || []);
-      } catch (err) {
-        console.error('Failed to load vaults:', err);
-      }
-    };
-    loadVaults();
+  const loadVaults = useCallback(async () => {
+    setVaultsError(null);
+    try {
+      const response = await fetchVaults(wallet.address || undefined);
+      const own: Record<string, unknown>[] = [...response.created, ...response.signerIn];
+      setVaults(
+        own.map((vault) => ({
+          value: String(vault.vaultId ?? ''),
+          label: vaultTitle({
+            id: String(vault.id ?? ''),
+            name: typeof vault.name === 'string' ? vault.name : null,
+          }),
+        }))
+      );
+    } catch (error) {
+      setVaultsError(asFlowError(error));
+    }
   }, [wallet.address]);
 
-  const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
+  useEffect(() => {
+    void loadVaults();
+  }, [loadVaults]);
 
-  const handleNext = () => {
-    if (step < 4) setStep(step + 1);
-  };
+  const header = (
+    <PageHeader
+      title={BUDGET_CREATE.title}
+      description={BUDGET_CREATE.description}
+      back={{ to: '/budgets', label: BUDGET_CREATE.back }}
+    />
+  );
 
-  const handleBack = () => {
-    if (step > 1) setStep(step - 1);
-  };
+  if (vaultsError) {
+    return (
+      <PageContainer width="reading">
+        {header}
+        <ErrorState
+          title={BUDGET_CREATE.noVaultsTitle}
+          reason={BUDGET_CREATE.vaultsFailed}
+          onRetry={loadVaults}
+        />
+      </PageContainer>
+    );
+  }
 
-  const handleSubmit = async () => {
-    if (!wallet.address) {
-      setError('Please connect your wallet first');
-      return;
+  if (!vaults) {
+    return (
+      <PageContainer width="reading">
+        {header}
+        <Skeleton kind="row" lines={4} />
+      </PageContainer>
+    );
+  }
+
+  if (vaults.length === 0) {
+    return (
+      <PageContainer width="reading">
+        {header}
+        <Notice
+          tone="info"
+          title={BUDGET_CREATE.noVaultsTitle}
+          action={
+            <ButtonLink to="/vaults/create" variant="primary" size="sm">
+              {BUDGET_CREATE.createVault}
+            </ButtonLink>
+          }
+        >
+          {BUDGET_CREATE.noVaults}
+        </Notice>
+      </PageContainer>
+    );
+  }
+
+  const payments = Number(count);
+  const countOk = Number.isInteger(payments) && payments >= 1 && payments <= MAX_PAYMENTS;
+  const perValue = Number.parseFloat(perPayment);
+  const total = countOk ? planTotal(perPayment, payments) : '0';
+  const totalLabel = formatAmount(total, BCH) ?? '';
+  const vaultName = vaults.find((vault) => vault.value === vaultId)?.label ?? '';
+  const everyDays = Math.round(Number(interval) / 86400);
+
+  const validateStep = (key: StepKey): Errors => {
+    const next: Errors = {};
+    if (key === 'who' || key === 'check') {
+      if (!vaultId) next.vault = BUDGET_CREATE.vaultRequired;
+      if (!recipient.trim()) next.recipient = BUDGET_CREATE.recipientRequired;
+      else if (!recipientValid) next.recipient = addressErrors(network).notAnAddress;
     }
-
-    if (!formData.treasuryId) {
-      setError('Please select a treasury');
-      return;
+    if (key === 'when' || key === 'check') {
+      if (!Number.isFinite(perValue) || perValue <= 0) next.amount = BUDGET_CREATE.amountRequired;
+      if (!countOk) next.count = BUDGET_CREATE.countRequired;
     }
+    return next;
+  };
 
-    setIsSubmitting(true);
-    setError(null);
+  const goNext = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const next = validateStep(step);
+    setErrors(next);
+    if (Object.keys(next).length > 0) return;
+    if (step === 'who') setStep('when');
+    else if (step === 'when') setStep('check');
+    else void create();
+  };
 
+  const create = async () => {
+    if (creating || created) return;
+    setCreating(true);
+    setSubmitError(null);
     try {
-      const planData = {
-        planName: formData.planName || undefined,
-        planType: formData.planType,
-        recipient: formData.recipient,
-        recipientLabel: formData.recipientLabel || undefined,
-        recipientName: formData.recipientLabel || undefined,
-        totalAmount: parseFloat(formData.totalAmount),
-        intervalSeconds: parseInt(formData.intervalSeconds),
-        amountPerInterval: parseFloat(formData.amountPerInterval),
-        cliffSeconds: formData.cliffSeconds ? parseInt(formData.cliffSeconds) : 0,
-        startDate: formData.startDate
-          ? Math.floor(new Date(formData.startDate).getTime() / 1000)
-          : undefined,
-      };
-
-      // Validate
-      if (planData.totalAmount <= 0) {
-        throw new Error('Total amount must be greater than 0');
-      }
-      if (planData.amountPerInterval <= 0) {
-        throw new Error('Amount per interval must be greater than 0');
-      }
-      if (!planData.recipient || !planData.recipient.includes(':')) {
-        throw new Error('Please enter a valid BCH address (bitcoincash: or bchtest:)');
-      }
-
-      await createBudgetPlan(formData.treasuryId, planData, wallet);
-
-      navigate('/budgets');
-    } catch (err: any) {
-      setError(err.message || 'Failed to create budget plan');
-      setIsSubmitting(false);
+      const response = await createBudgetPlan(
+        vaultId,
+        {
+          recipient: recipient.trim(),
+          recipientLabel: name.trim() || undefined,
+          recipientName: name.trim() || undefined,
+          totalAmount: Number(total),
+          intervalSeconds: Number(interval),
+          amountPerInterval: perValue,
+          startDate: startDate ? Math.floor(new Date(startDate).getTime() / 1000) : undefined,
+        },
+        wallet
+      );
+      setCreated({
+        id: String(response.plan?.id ?? ''),
+        contractAddress: String(
+          response.deployment?.contractAddress ?? response.plan?.contract_address ?? ''
+        ),
+      });
+    } catch (error) {
+      setSubmitError(asFlowError(error));
+    } finally {
+      setCreating(false);
     }
   };
 
-  const getIntervalLabel = (seconds: string) => {
-    const s = parseInt(seconds);
-    if (s === 604800) return 'Weekly (7 days)';
-    if (s === 2592000) return 'Monthly (30 days)';
-    if (s === 7776000) return 'Quarterly (90 days)';
-    if (s === 31536000) return 'Yearly (365 days)';
-    return `Custom (${s / 86400} days)`;
+  const invalid = (Object.keys(errors) as Field[]).filter((key) => errors[key]);
+  const schedule = {
+    kind: 'period-release' as const,
+    perPeriod: perPayment || '0',
+    everyDays,
+    periods: countOk ? payments : 1,
+    asset: BCH,
+    vault: { id: vaultId, name: vaultName },
   };
+
+  if (created) {
+    const canFund = Boolean(created.contractAddress) && funded === 'no';
+    return (
+      <PageContainer width="reading">
+        {header}
+        <Card>
+          <div className="flex flex-col gap-4">
+            {created.contractAddress ? (
+              <Heading level="section" as="h2">
+                {BUDGET_CREATE.created.title}
+              </Heading>
+            ) : null}
+            <PlanSentence
+              recipient={{ address: recipient.trim(), name: name.trim() || undefined }}
+              schedule={schedule}
+            />
+            {!created.contractAddress ? (
+              <Notice tone="warning" title={PLAN_DIALOG.notSetUp} />
+            ) : funded === 'yes' ? (
+              <Notice tone="success" title={BUDGET_CREATE.created.done} />
+            ) : funded === 'syncing' ? (
+              <Notice tone="warning" title={errorMessage('SENT_NOT_SYNCED', { outcome: 'budgetFunded' })}>
+                {fundingTxid ? <TxLink txid={fundingTxid} network={network} /> : null}
+              </Notice>
+            ) : (
+              <p className="text-body text-ink-secondary">
+                {BUDGET_CREATE.created.line(totalLabel)}
+              </p>
+            )}
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <ButtonLink to="/budgets" variant={canFund ? 'secondary' : 'primary'}>
+                {BUDGET_CREATE.created.goToPlans}
+              </ButtonLink>
+              {canFund ? (
+                <Button variant="primary" onClick={() => setFunding(true)}>
+                  {BUDGET_CREATE.created.fund(totalLabel)}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </Card>
+        {created.contractAddress ? (
+          <TransactionReview
+            open={funding}
+            onClose={() => setFunding(false)}
+            plan={
+              <PlanSentence
+                recipient={{ address: recipient.trim(), name: name.trim() || undefined }}
+                schedule={schedule}
+              />
+            }
+            summary={{
+              direction: 'out',
+              leavesWallet: { amount: total, asset: BCH },
+              goesTo: {
+                address: created.contractAddress,
+                name: BUDGET_CREATE.created.contractName,
+              },
+              network,
+            }}
+            run={async () => {
+              let txid: string;
+              try {
+                txid = await fundBudgetPlan(wallet, created.id);
+              } catch (error) {
+                if (reachedNetwork(error)) {
+                  setFundingTxid(asFlowError(error).txid ?? null);
+                  setFunded('syncing');
+                }
+                throw error;
+              }
+              setFunded('yes');
+              return { txid };
+            }}
+            next={<p>{BUDGET_CREATE.created.done}</p>}
+          />
+        ) : null}
+      </PageContainer>
+    );
+  }
 
   return (
-    <div className="py-8">
-      <div className="max-w-3xl mx-auto px-6">
-        {/* Back Button */}
-        <div className="mb-8">
-          <Link to="/budgets" className="text-sm font-mono text-textMuted hover:text-textPrimary transition-colors">
-            ← Back to Budget Plans
-          </Link>
-        </div>
+    <PageContainer width="reading">
+      {header}
+      <Stack>
+        <Steps
+          steps={STEPS}
+          current={step}
+          onBack={(key) => {
+            setErrors({});
+            setStep(key as StepKey);
+          }}
+        />
+        <form noValidate onSubmit={goNext} className="flex flex-col gap-6">
+          {step === 'who' ? (
+            <>
+              <Select<string>
+                id={FIELD_IDS.vault}
+                label={BUDGET_CREATE.vault}
+                helper={BUDGET_CREATE.vaultHelper}
+                value={vaultId}
+                onValueChange={setVaultId}
+                options={[{ value: '', label: BUDGET_CREATE.vaultPlaceholder }, ...vaults]}
+                error={errors.vault}
+              />
+              <AddressInput
+                id={FIELD_IDS.recipient}
+                label={BUDGET_CREATE.recipient}
+                helper={BUDGET_CREATE.recipientHelper}
+                value={recipient}
+                onChange={setRecipient}
+                onValidChange={setRecipientValid}
+                network={network}
+                error={errors.recipient}
+              />
+              <Input
+                label={BUDGET_CREATE.name}
+                optional
+                helper={BUDGET_CREATE.nameHelper}
+                placeholder={BUDGET_CREATE.namePlaceholder}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </>
+          ) : null}
 
-        {/* Header */}
-        <h1 className="text-4xl md:text-5xl font-display mb-8 tracking-tight text-textPrimary">
-          Create Budget Plan
-        </h1>
+          {step === 'when' ? (
+            <>
+              <AmountInput
+                id={FIELD_IDS.amount}
+                label={BUDGET_CREATE.amount}
+                helper={BUDGET_CREATE.amountHelper}
+                asset={BCH}
+                value={perPayment}
+                onChange={setPerPayment}
+                error={errors.amount}
+              />
+              <Select<Interval>
+                label={BUDGET_CREATE.howOften}
+                value={interval}
+                onValueChange={setHowOften}
+                options={[...BUDGET_CREATE.intervals]}
+              />
+              <Input
+                id={FIELD_IDS.count}
+                label={BUDGET_CREATE.count}
+                helper={BUDGET_CREATE.countHelper}
+                inputMode="numeric"
+                value={count}
+                onChange={(event) => setCount(event.target.value.replace(/[^\d]/g, ''))}
+                error={errors.count}
+              />
+              <DateInput
+                label={BUDGET_CREATE.start}
+                helper={BUDGET_CREATE.startHelper}
+                value={startDate}
+                onChange={setStartDate}
+              />
+            </>
+          ) : null}
 
-        {error && (
-          <div className="mb-8 p-4 bg-error/10 border border-error/30 rounded-lg flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-error flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-mono text-sm text-error">{error}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Progress Steps */}
-        <div className="mb-12">
-          <div className="flex justify-between items-center relative">
-            {/* Connecting Line */}
-            <div className="absolute left-0 top-1/2 w-full h-[1px] bg-border/30 -z-10" />
-
-            {[1, 2, 3, 4].map((s) => (
-              <div key={s} className="bg-background px-2">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-xs border transition-colors duration-300 ${
-                    s <= step
-                      ? 'bg-primary text-white border-primary'
-                      : 'bg-white text-textMuted border-border'
-                  }`}
-                >
-                  {s}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-between mt-3 text-center">
-            <span className="text-[10px] uppercase tracking-widest text-textMuted">Type</span>
-            <span className="text-[10px] uppercase tracking-widest text-textMuted">Details</span>
-            <span className="text-[10px] uppercase tracking-widest text-textMuted">Schedule</span>
-            <span className="text-[10px] uppercase tracking-widest text-textMuted">Review</span>
-          </div>
-        </div>
-
-        <Card padding="xl" className="border-border/40 shadow-sm">
-          {/* Step 1: Plan Type */}
-          {step === 1 && (
-            <div className="space-y-8">
-              <h2 className="text-2xl font-display text-textPrimary">Select Plan Type</h2>
-
-              <div className="space-y-4">
-                {/* Recurring Release */}
-                <label
-                  className={`block p-6 border-2 rounded-xl cursor-pointer transition-all hover:border-accent/50 ${
-                    formData.planType === 'RECURRING'
-                      ? 'border-accent bg-accent/5'
-                      : 'border-border/40 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="planType"
-                    value="RECURRING"
-                    checked={formData.planType === 'RECURRING'}
-                    onChange={(e) => handleInputChange('planType', e.target.value)}
-                    className="sr-only"
-                  />
-                  <div className="flex items-start gap-4">
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mt-1 ${
-                      formData.planType === 'RECURRING'
-                        ? 'border-accent'
-                        : 'border-border'
-                    }`}>
-                      {formData.planType === 'RECURRING' && (
-                        <div className="w-3 h-3 rounded-full bg-accent" />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-display text-xl text-textPrimary font-semibold mb-2">
-                        Recurring Release
-                      </h3>
-                      <p className="text-sm font-mono text-textMuted leading-relaxed">
-                        Regular payments on a fixed schedule (e.g., monthly salaries, operational costs)
-                      </p>
-                    </div>
-                  </div>
-                </label>
-
-                {/* Linear Vesting */}
-                <label
-                  className={`block p-6 border-2 rounded-xl cursor-pointer transition-all hover:border-accent/50 ${
-                    formData.planType === 'LINEAR_VESTING'
-                      ? 'border-accent bg-accent/5'
-                      : 'border-border/40 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="planType"
-                    value="LINEAR_VESTING"
-                    checked={formData.planType === 'LINEAR_VESTING'}
-                    onChange={(e) => handleInputChange('planType', e.target.value)}
-                    className="sr-only"
-                  />
-                  <div className="flex items-start gap-4">
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mt-1 ${
-                      formData.planType === 'LINEAR_VESTING'
-                        ? 'border-accent'
-                        : 'border-border'
-                    }`}>
-                      {formData.planType === 'LINEAR_VESTING' && (
-                        <div className="w-3 h-3 rounded-full bg-accent" />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-display text-xl text-textPrimary font-semibold mb-2">
-                        Linear Vesting
-                      </h3>
-                      <p className="text-sm font-mono text-textMuted leading-relaxed">
-                        Gradual unlock over time with optional cliff period (e.g., team tokens, grants)
-                      </p>
-                    </div>
-                  </div>
-                </label>
-
-                {/* Step Vesting */}
-                <label
-                  className={`block p-6 border-2 rounded-xl cursor-pointer transition-all hover:border-accent/50 ${
-                    formData.planType === 'STEP_VESTING'
-                      ? 'border-accent bg-accent/5'
-                      : 'border-border/40 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="planType"
-                    value="STEP_VESTING"
-                    checked={formData.planType === 'STEP_VESTING'}
-                    onChange={(e) => handleInputChange('planType', e.target.value)}
-                    className="sr-only"
-                  />
-                  <div className="flex items-start gap-4">
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mt-1 ${
-                      formData.planType === 'STEP_VESTING'
-                        ? 'border-accent'
-                        : 'border-border'
-                    }`}>
-                      {formData.planType === 'STEP_VESTING' && (
-                        <div className="w-3 h-3 rounded-full bg-accent" />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-display text-xl text-textPrimary font-semibold mb-2">
-                        Step Vesting
-                      </h3>
-                      <p className="text-sm font-mono text-textMuted leading-relaxed">
-                        Large chunks unlocked at milestone intervals (e.g., quarterly releases)
-                      </p>
-                    </div>
-                  </div>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* Step 2: Plan Details */}
-          {step === 2 && (
-            <div className="space-y-8">
-              <h2 className="text-2xl font-display text-textPrimary">Plan Details</h2>
-
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Plan Name
-                </label>
-                <input
-                  type="text"
-                  value={formData.planName}
-                  onChange={(e) => handleInputChange('planName', e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
-                  placeholder="e.g., Core Dev Salary"
+          {step === 'check' ? (
+            <Card>
+              <div className="flex flex-col gap-4">
+                <Heading level="item" as="h2">
+                  {BUDGET_CREATE.check.title}
+                </Heading>
+                <PlanSentence
+                  recipient={{ address: recipient.trim(), name: name.trim() || undefined }}
+                  schedule={schedule}
                 />
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Source Treasury
-                </label>
-                <select
-                  value={formData.treasuryId}
-                  onChange={(e) => handleInputChange('treasuryId', e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm appearance-none"
-                >
-                  <option value="">Select a treasury...</option>
-                  {vaults.map((vault) => (
-                    <option key={vault.id} value={vault.vaultId}>
-                      {vault.name || vault.vaultId} - {vault.balance ? (vault.balance / 100000000).toFixed(4) : '0.00'} BCH
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-2 text-xs text-textMuted font-mono">
-                  Funds will be released from this treasury
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Recipient Address
-                </label>
-                <input
-                  type="text"
-                  value={formData.recipient}
-                  onChange={(e) => handleInputChange('recipient', e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
-                  placeholder="bitcoincash:..."
+                <DetailList
+                  items={[
+                    { label: BUDGET_CREATE.check.recipient, value: recipient.trim() },
+                    { label: BUDGET_CREATE.check.vault, value: vaultName },
+                    {
+                      label: BUDGET_CREATE.amount,
+                      value: <Amount value={perPayment} asset={BCH} />,
+                    },
+                    {
+                      label: BUDGET_CREATE.howOften,
+                      value: BUDGET_CREATE.intervals.find((i) => i.value === interval)?.label,
+                    },
+                    { label: BUDGET_CREATE.count, value: count },
+                    {
+                      label: BUDGET_CREATE.check.total,
+                      value: <Amount value={total} asset={BCH} />,
+                    },
+                    {
+                      label: BUDGET_CREATE.check.starts,
+                      value: startDate
+                        ? formatDate(`${startDate}T00:00:00`)
+                        : BUDGET_CREATE.check.today,
+                    },
+                  ]}
                 />
+                <p className="text-small text-ink-secondary">{BUDGET_CREATE.check.cantChange}</p>
+                <p className="text-small text-ink-secondary">{BUDGET_CREATE.check.createNote}</p>
               </div>
+            </Card>
+          ) : null}
 
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Recipient Label (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={formData.recipientLabel}
-                  onChange={(e) => handleInputChange('recipientLabel', e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
-                  placeholder="e.g., Operations Team"
-                />
-              </div>
-            </div>
-          )}
+          {invalid.length > 0 ? (
+            <ErrorSummary
+              title={BUDGET_CREATE.check.errorTitle}
+              message={BUDGET_CREATE.check.fixFields}
+              fields={invalid
+                .filter((key) => FIELD_STEP[key] === step || step === 'check')
+                .map((key) => ({ label: FIELD_LABELS[key], id: FIELD_IDS[key] }))}
+            />
+          ) : null}
+          {submitError ? (
+            <ErrorSummary title={BUDGET_CREATE.check.errorTitle} message={submitError.message} />
+          ) : null}
 
-          {/* Step 3: Schedule Configuration */}
-          {step === 3 && (
-            <div className="space-y-8">
-              <h2 className="text-2xl font-display text-textPrimary">Schedule Configuration</h2>
-
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Total Amount
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={formData.totalAmount}
-                    onChange={(e) => handleInputChange('totalAmount', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
-                    placeholder="0.00"
-                    step="0.01"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">
-                    BCH
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Release Interval
-                </label>
-                <select
-                  value={formData.intervalSeconds}
-                  onChange={(e) => handleInputChange('intervalSeconds', e.target.value)}
-                  className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm appearance-none"
-                >
-                  <option value="604800">Weekly (7 days)</option>
-                  <option value="2592000">Monthly (30 days)</option>
-                  <option value="7776000">Quarterly (90 days)</option>
-                  <option value="31536000">Yearly (365 days)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                  Amount per Release
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={formData.amountPerInterval}
-                    onChange={(e) => handleInputChange('amountPerInterval', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
-                    placeholder="0.00"
-                    step="0.01"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">
-                    BCH
-                  </span>
-                </div>
-              </div>
-
-              {formData.planType === 'LINEAR_VESTING' && (
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3 text-textPrimary">
-                    Cliff Period (Optional)
-                  </label>
-                  <select
-                    value={formData.cliffSeconds}
-                    onChange={(e) => handleInputChange('cliffSeconds', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm appearance-none"
-                  >
-                    <option value="">No cliff</option>
-                    <option value="2592000">1 month</option>
-                    <option value="7776000">3 months</option>
-                    <option value="15552000">6 months</option>
-                    <option value="31536000">1 year</option>
-                  </select>
-                  <p className="mt-2 text-xs text-textMuted font-mono">
-                    No funds unlock until cliff period ends
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Step 4: Review & Submit */}
-          {step === 4 && (
-            <div className="space-y-8">
-              <h2 className="text-2xl font-display text-textPrimary">Review Budget Plan</h2>
-
-              <div className="bg-surfaceAlt rounded-lg p-6 border border-border/40 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="text-xs uppercase tracking-wider font-mono text-textMuted mb-1">
-                      Plan Type
-                    </div>
-                    <div className="text-sm font-semibold text-textPrimary">
-                      {formData.planType === 'RECURRING' && 'Recurring Release'}
-                      {formData.planType === 'LINEAR_VESTING' && 'Linear Vesting'}
-                      {formData.planType === 'STEP_VESTING' && 'Step Vesting'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wider font-mono text-textMuted mb-1">
-                      Plan Name
-                    </div>
-                    <div className="text-sm font-semibold text-textPrimary">
-                      {formData.planName || 'Unnamed Plan'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wider font-mono text-textMuted mb-1">
-                      Total Amount
-                    </div>
-                    <div className="text-sm font-semibold text-textPrimary">
-                      {formData.totalAmount || '0'} BCH
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wider font-mono text-textMuted mb-1">
-                      Interval
-                    </div>
-                    <div className="text-sm font-semibold text-textPrimary">
-                      {getIntervalLabel(formData.intervalSeconds)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wider font-mono text-textMuted mb-1">
-                      Per Release
-                    </div>
-                    <div className="text-sm font-semibold text-textPrimary">
-                      {formData.amountPerInterval || '0'} BCH
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wider font-mono text-textMuted mb-1">
-                      Recipient
-                    </div>
-                    <div className="text-sm font-semibold text-textPrimary truncate font-mono">
-                      {formData.recipient || 'Not set'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-accent/5 border border-accent/30 rounded-lg p-4">
-                <p className="text-xs font-mono text-textMuted leading-relaxed">
-                  <strong className="text-textPrimary">Note:</strong> Budget plans are enforced by smart contracts.
-                  Once created, the schedule cannot be modified. Make sure all details are correct.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Navigation Buttons */}
-          <div className="flex justify-between mt-12 pt-8 border-t border-border/40">
-            <Button
-              variant="outline"
-              onClick={handleBack}
-              disabled={step === 1}
-            >
-              Back
-            </Button>
-
-            {step < 4 ? (
-              <Button
-                onClick={handleNext}
-                className="gap-2"
-              >
-                Continue
-                <ChevronRight className="w-4 h-4" />
-              </Button>
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+            {step === 'who' ? (
+              <ButtonLink to="/budgets" variant="ghost">
+                {BUDGET_CREATE.back}
+              </ButtonLink>
             ) : (
               <Button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
+                variant="ghost"
+                onClick={() => {
+                  setErrors({});
+                  setStep(step === 'check' ? 'when' : 'who');
+                }}
               >
-                {isSubmitting ? 'Creating...' : 'Create Budget Plan'}
+                {ACTIONS.back}
+              </Button>
+            )}
+            {step === 'check' ? (
+              <Button
+                type="submit"
+                variant="primary"
+                busy={creating}
+                busyLabel={BUDGET_CREATE.check.creating}
+              >
+                {BUDGET_CREATE.check.create}
+              </Button>
+            ) : (
+              <Button type="submit" variant="primary">
+                {ACTIONS.continue}
               </Button>
             )}
           </div>
-        </Card>
-      </div>
-    </div>
+        </form>
+      </Stack>
+    </PageContainer>
   );
 }

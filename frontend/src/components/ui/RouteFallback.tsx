@@ -1,102 +1,149 @@
 import { useLocation } from 'react-router-dom';
-import { SkeletonStats, SkeletonTable, SkeletonCard, SkeletonText } from './Skeleton';
+import { SkeletonCard, SkeletonStats, SkeletonTable, SkeletonText } from './Skeleton';
+import { cx } from './cx';
+import { DashboardLayout } from '../layout/DashboardLayout';
+import { MarketingNav } from '../layout/MarketingNav';
+import { PageContainer } from '../layout/PageContainer';
+import { appPageKind, findActiveAppItem, isAppFramePath, isHomePath, type AppPageKind } from '../layout/chromeRoutes';
+import { SITE_NAME, routeTitle, CHROME } from '../../copy/nav';
+import { useWallet } from '../../hooks/useWallet';
 
-export function RouteFallback() {
-  const { pathname } = useLocation();
-  return <div className="mx-auto max-w-7xl px-4 py-6 md:px-6">{pickSkeleton(pathname)}</div>;
+const BLOCK = 'block rounded-inline bg-sunken animate-pulse';
+
+function loadingLabel(title: string | null | undefined): string {
+  return title ? `${CHROME.loading} ${title}` : CHROME.loading;
 }
 
-function pickSkeleton(pathname: string) {
-  if (looksLikeDetail(pathname)) {
-    return (
-      <>
-        <div className="mb-6 h-10 w-2/3 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-        <SkeletonStats count={4} className="mb-6" />
-        <SkeletonCard className="mb-4" lines={4} />
-        <SkeletonCard lines={3} />
-      </>
-    );
-  }
-
-  if (pathname.includes('/create')) {
-    return (
-      <>
-        <div className="mb-6 h-10 w-1/2 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-        <div className="rounded-lg border border-border/40 bg-surface p-6 space-y-5">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="space-y-2">
-              <div className="h-3 w-32 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-              <div className="h-10 w-full animate-pulse rounded bg-surfaceAlt border border-border/40" />
-            </div>
-          ))}
-        </div>
-      </>
-    );
-  }
-
-  if (isListRoute(pathname)) {
-    return (
-      <>
-        <div className="mb-6 h-10 w-1/3 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-        <SkeletonStats count={4} className="mb-6" />
-        <SkeletonTable rows={6} columns={5} />
-      </>
-    );
-  }
-
-  if (isArticleRoute(pathname)) {
-    return (
-      <div className="max-w-3xl mx-auto">
-        <div className="mb-6 h-12 w-3/4 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-        <SkeletonText lines={5} className="mb-8" />
-        <SkeletonText lines={7} className="mb-8" />
-        <SkeletonText lines={6} />
-      </div>
-    );
-  }
-
-  if (pathname === '/app' || pathname === '/' || pathname === '/app/dao') {
-    return (
-      <>
-        <div className="mb-6 h-10 w-2/5 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-        <SkeletonStats count={4} className="mb-6" />
-        <div className="grid gap-4 md:grid-cols-2 mb-6">
-          <SkeletonCard lines={4} />
-          <SkeletonCard lines={4} />
-        </div>
-        <SkeletonTable rows={5} columns={4} />
-      </>
-    );
-  }
-
+function HeaderBlocks({ withTrail = false }: { withTrail?: boolean }) {
   return (
-    <div className="max-w-3xl mx-auto">
-      <div className="mb-6 h-10 w-1/2 animate-pulse rounded bg-surfaceAlt border border-border/40" />
-      <SkeletonCard lines={5} />
+    <div className="mb-8 flex flex-col gap-3">
+      {withTrail ? <span className={cx(BLOCK, 'h-4 w-1/4')} /> : null}
+      <span className={cx(BLOCK, 'h-9 w-1/3')} />
+      <span className={cx(BLOCK, 'h-4 w-1/2')} />
     </div>
   );
 }
 
-function looksLikeDetail(p: string): boolean {
-  const detailParents = ['/streams/', '/payments/', '/airdrops/', '/bounties/', '/rewards/', '/grants/', '/vaults/', '/proposals/', '/budgets/', '/updates/', '/requests/'];
-  return detailParents.some((parent) => p.startsWith(parent) && !p.endsWith(parent) && !p.includes('/create') && !p.includes('/batch'));
+function AppBlocks({ kind }: { kind: AppPageKind }) {
+  switch (kind) {
+    case 'home':
+      return (
+        <>
+          <HeaderBlocks />
+          <SkeletonCard lines={3} className="mb-6" />
+          <SkeletonStats count={4} className="mb-6" />
+          <SkeletonTable rows={5} />
+        </>
+      );
+    case 'list':
+      return (
+        <>
+          <HeaderBlocks />
+          <SkeletonStats count={4} className="mb-6" />
+          <SkeletonTable rows={6} />
+        </>
+      );
+    case 'detail':
+      return (
+        <>
+          <HeaderBlocks withTrail />
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="flex flex-col gap-6 lg:col-span-2">
+              <SkeletonCard lines={3} />
+              <SkeletonCard lines={4} />
+            </div>
+            <SkeletonCard lines={5} />
+          </div>
+        </>
+      );
+    case 'create':
+      return (
+        <div className="max-w-reading">
+          <HeaderBlocks withTrail />
+          <SkeletonCard lines={6} />
+        </div>
+      );
+    case 'other':
+      return (
+        <div className="max-w-reading">
+          <HeaderBlocks />
+          <SkeletonCard lines={4} />
+        </div>
+      );
+  }
 }
 
-function isListRoute(p: string): boolean {
-  return [
-    '/streams', '/streams/activity', '/streams/batches', '/streams/shapes',
-    '/payments', '/airdrops', '/bounties', '/rewards', '/grants',
-    '/proposals', '/budgets', '/governance', '/vaults',
-    '/explorer', '/app/dao/overview', '/app/dao/streams', '/app/dao/team',
-    '/app/dao/roles', '/app/dao/treasury-policy', '/app/dao/stream-batches',
-    '/app/dao/stream-activity', '/updates',
-  ].some((route) => p === route);
+export type AppPageSkeletonProps = { label: string };
+
+/** The content area of an app page while it loads, for use inside DashboardLayout. */
+export function AppPageSkeleton({ label }: AppPageSkeletonProps) {
+  const { pathname } = useLocation();
+
+  return (
+    <PageContainer>
+      <p role="status" className="sr-only">
+        {label}
+      </p>
+      <div aria-hidden="true">
+        <AppBlocks kind={appPageKind(pathname)} />
+      </div>
+    </PageContainer>
+  );
 }
 
-function isArticleRoute(p: string): boolean {
-  return [
-    '/faq', '/security', '/how-it-works', '/pricing', '/use-cases', '/demo',
-    '/help', '/settings', '/terms', '/privacy', '/disclaimer', '/changelog',
-    '/roadmap', '/status', '/grants-info',
-  ].some((route) => p === route || p.startsWith(`${route}/`));
+function MarketingBlocks({ label }: { label: string }) {
+  return (
+    <>
+      <MarketingNav />
+      <div className="mx-auto w-full max-w-page px-4 pt-16 pb-16 sm:px-6 lg:px-8 lg:pt-24">
+        <p role="status" className="sr-only">
+          {label}
+        </p>
+        <div aria-hidden="true" className="flex max-w-reading flex-col gap-4">
+          <span className={cx(BLOCK, 'h-4 w-24')} />
+          <span className={cx(BLOCK, 'h-12 w-full')} />
+          <span className={cx(BLOCK, 'h-12 w-3/4')} />
+          <SkeletonText lines={3} className="mt-4" />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function ConnectBlocks({ label }: { label: string }) {
+  return (
+    <PageContainer width="narrow" className="mt-10 lg:mt-16">
+      <p role="status" className="sr-only">
+        {label}
+      </p>
+      <div aria-hidden="true">
+        <SkeletonCard lines={5} />
+      </div>
+    </PageContainer>
+  );
+}
+
+export function RouteFallback() {
+  const { pathname } = useLocation();
+  const { isConnected } = useWallet();
+
+  if (isHomePath(pathname)) {
+    const label = loadingLabel(findActiveAppItem(pathname, false)?.label);
+    if (!isConnected) return <ConnectBlocks label={label} />;
+    return (
+      <DashboardLayout>
+        <AppPageSkeleton label={label} />
+      </DashboardLayout>
+    );
+  }
+
+  if (isAppFramePath(pathname)) {
+    return (
+      <DashboardLayout>
+        <AppPageSkeleton label={loadingLabel(findActiveAppItem(pathname, true)?.label)} />
+      </DashboardLayout>
+    );
+  }
+
+  return <MarketingBlocks label={loadingLabel(pathname === '/' ? SITE_NAME : routeTitle(pathname))} />;
 }

@@ -1,342 +1,266 @@
-/**
- * ProposalsPage - Professional Proposal Management
- * Sablier-quality with DataTable, circular progress, CSV import/export
- */
-
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FileText, CheckCircle, Clock, XCircle, TrendingUp, Users } from 'lucide-react';
-import { fetchVaults, fetchProposals } from '../utils/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { PageContainer } from '../components/layout/PageContainer';
+import { ListToolbar } from '../components/layout/ListToolbar';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { Address } from '../components/ui/Address';
+import { Amount } from '../components/ui/Amount';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { FilterChips } from '../components/ui/FilterChips';
+import { FileCheck, Plus } from '../components/ui/Icon';
+import { List, type Column, type ListState } from '../components/ui/List';
+import { NoResults } from '../components/ui/NoResults';
+import { Notice } from '../components/ui/Notice';
+import { StatRow } from '../components/ui/StatRow';
+import { StatTile } from '../components/ui/StatTile';
+import { StatusPill } from '../components/ui/StatusPill';
+import type { Asset } from '../components/ui/types';
+import { asFlowError, errorMessage } from '../copy/errors';
+import { formatDate } from '../copy/format';
+import { READY_TO_SEND, REQUESTS_PAGE, approvalsLine } from '../copy/requests';
+import { STATUS, spendingRequestStatus } from '../copy/status';
+import { sameAddress, vaultTitle } from '../copy/vaults';
 import { useWallet } from '../hooks/useWallet';
-import { useWalletModal } from '../hooks/useWalletModal';
-import { Button } from '../components/ui/Button';
-import { DataTable, Column } from '../components/shared/DataTable';
-import { StatsCard } from '../components/shared/StatsCard';
-import { SkeletonTable } from '../components/ui/Skeleton';
+import { fetchProposals, fetchVaults } from '../utils/api';
 
-type ProposalStatus = 'pending' | 'approved' | 'executed' | 'rejected';
+const BCH: Asset = { kind: 'bch' };
 
-interface Proposal {
+type RequestStatus = 'pending' | 'approved' | 'executed' | 'rejected';
+
+type RequestRow = {
   id: string;
   amount: number;
   recipient: string;
   reason: string;
-  status: ProposalStatus;
+  status: string;
+  approvals: string[];
   approvalCount: number;
-  approvalThreshold: number;
+  required: number;
   vaultId: string;
   vaultName: string;
-  createdAt: string;
+  createdAt: string | null;
+};
+
+type Loaded = { rows: RequestRow[]; vaultCount: number; failedVaults: number };
+
+const FILTERS: { value: RequestStatus; label: string }[] = [
+  { value: 'pending', label: STATUS.waitingForApproval.word },
+  { value: 'approved', label: STATUS.approved.word },
+  { value: 'executed', label: STATUS.paid.word },
+  { value: 'rejected', label: STATUS.rejected.word },
+];
+
+function toRow(raw: Record<string, unknown>, vault: Record<string, unknown>): RequestRow {
+  const approvals = Array.isArray(raw.approvals)
+    ? raw.approvals.filter((a): a is string => typeof a === 'string')
+    : [];
+  const vaultId = String(vault.id ?? '');
+  return {
+    id: String(raw.id ?? ''),
+    amount: Number(raw.amount) || 0,
+    recipient: typeof raw.recipient === 'string' ? raw.recipient : '',
+    reason: typeof raw.reason === 'string' ? raw.reason : '',
+    status: String(raw.status ?? '').toLowerCase(),
+    approvals,
+    approvalCount: Number(raw.approvalCount) || approvals.length,
+    required: Number(vault.approvalThreshold) || 0,
+    vaultId,
+    vaultName: vaultTitle({
+      id: vaultId,
+      name: typeof vault.name === 'string' ? vault.name : null,
+    }),
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : null,
+  };
 }
+
+const COLUMNS: Column<RequestRow>[] = [
+  {
+    key: 'request',
+    header: REQUESTS_PAGE.columns.request,
+    primary: true,
+    cell: (row) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="truncate">{row.reason || REQUESTS_PAGE.noReason}</span>
+        <span className="truncate text-small text-ink-muted">
+          {REQUESTS_PAGE.inVault(row.vaultName)}
+        </span>
+      </span>
+    ),
+  },
+  {
+    key: 'amount',
+    header: REQUESTS_PAGE.columns.amount,
+    align: 'end',
+    mobile: 'bottom-end',
+    cell: (row) => <Amount value={row.amount} asset={BCH} precision="list" />,
+  },
+  {
+    key: 'to',
+    header: REQUESTS_PAGE.columns.to,
+    mobile: 'hidden',
+    cell: (row) => <Address value={row.recipient} copy={false} />,
+  },
+  {
+    key: 'approvals',
+    header: REQUESTS_PAGE.columns.approvals,
+    mobile: 'bottom-start',
+    cell: (row) => approvalsLine(row.approvalCount, row.required),
+  },
+  {
+    key: 'status',
+    header: REQUESTS_PAGE.columns.status,
+    mobile: 'top',
+    cell: (row) => {
+      const status = spendingRequestStatus(row.status);
+      return status ? <StatusPill status={status} size="sm" /> : null;
+    },
+  },
+  {
+    key: 'created',
+    header: REQUESTS_PAGE.columns.created,
+    mobile: 'hidden',
+    cell: (row) => (row.createdAt ? formatDate(row.createdAt, { dropSameYear: true }) : null),
+  },
+];
 
 export default function ProposalsPage() {
   const wallet = useWallet();
-  const { openModal } = useWalletModal();
-  const navigate = useNavigate();
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | ProposalStatus>('all');
+  const [data, setData] = useState<Loaded | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [filter, setFilter] = useState<RequestStatus[]>([]);
 
-  useEffect(() => {
-    const loadAllProposals = async () => {
-      try {
-        setLoading(true);
-
-        // First get all vaults the user has access to
-        const vaultsData = await fetchVaults(wallet.address || undefined);
-
-        // Then fetch proposals from each vault
-        const allProposals: any[] = [];
-        for (const vault of vaultsData.all) {
-          try {
-            const vaultProposals = await fetchProposals(vault.id);
-            // Add vault info to each proposal
-            const proposalsWithVaultInfo = vaultProposals.map((p: any) => ({
-              ...p,
-              vaultId: vault.id,
-              vaultName: vault.vaultId || `Vault ${vault.id.slice(0, 8)}`,
-              approvalThreshold: vault.approvalThreshold,
-            }));
-            allProposals.push(...proposalsWithVaultInfo);
-          } catch (err) {
-            console.error(`Failed to load proposals for vault ${vault.id}:`, err);
-          }
+  const load = useCallback(async () => {
+    setFailure(null);
+    setData(null);
+    try {
+      const vaults = await fetchVaults(wallet.address || undefined);
+      const own: Record<string, unknown>[] = [...vaults.created, ...vaults.signerIn];
+      const results = await Promise.allSettled(
+        own.map((vault) => fetchProposals(String(vault.id), wallet.address))
+      );
+      const rows: RequestRow[] = [];
+      let failedVaults = 0;
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          failedVaults += 1;
+          return;
         }
-
-        // Sort by creation date (most recent first)
-        allProposals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-        setProposals(allProposals);
-        setError(null);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load proposals');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (wallet.address) {
-      loadAllProposals();
-    } else {
-      setLoading(false);
+        rows.push(...result.value.map((raw: Record<string, unknown>) => toRow(raw, own[index])));
+      });
+      rows.sort((a, b) => Date.parse(b.createdAt ?? '') - Date.parse(a.createdAt ?? ''));
+      setData({ rows, vaultCount: own.length, failedVaults });
+    } catch (error) {
+      setFailure(asFlowError(error).message);
     }
   }, [wallet.address]);
 
-  // Calculate stats
-  const pendingProposals = proposals.filter((p) => p.status === 'pending');
-  const approvedProposals = proposals.filter((p) => p.status === 'approved');
-  const executedProposals = proposals.filter((p) => p.status === 'executed');
-  const rejectedProposals = proposals.filter((p) => p.status === 'rejected');
-  const totalAmount = proposals.reduce((sum, p) => sum + (p.amount || 0), 0);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  // Filter proposals
-  const filteredProposals = proposals.filter((proposal) => {
-    if (statusFilter !== 'all' && proposal.status !== statusFilter) return false;
-    return true;
-  });
+  const all = useMemo(() => data?.rows ?? [], [data]);
+  const rows = all.filter(
+    (row) => filter.length === 0 || filter.includes(row.status as RequestStatus)
+  );
+  const state: ListState = failure
+    ? 'error'
+    : !data
+      ? 'loading'
+      : all.length === 0
+        ? 'empty'
+        : rows.length === 0
+          ? 'no-results'
+          : 'ready';
 
-  // Table columns
-  const columns: Column<Proposal>[] = [
-    {
-      key: 'id',
-      label: 'Proposal',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-sans font-medium text-textPrimary">{row.reason || 'Untitled'}</p>
-          <p className="text-xs text-textMuted font-mono">{row.id}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'vaultName',
-      label: 'Vault',
-      sortable: true,
-      render: (row) => (
-        <p className="font-mono text-sm text-textPrimary">{row.vaultName}</p>
-      ),
-    },
-    {
-      key: 'amount',
-      label: 'Amount',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => (
-        <p className="font-display font-bold text-primary text-right">
-          {row.amount?.toFixed(4) || '0.0000'} BCH
-        </p>
-      ),
-    },
-    {
-      key: 'recipient',
-      label: 'Recipient',
-      sortable: true,
-      render: (row) => (
-        <p className="font-mono text-sm text-textMuted">
-          {row.recipient?.slice(0, 15)}...{row.recipient?.slice(-10)}
-        </p>
-      ),
-    },
-    {
-      key: 'approvalCount',
-      label: 'Approvals',
-      sortable: true,
-      className: 'text-center',
-      render: (row) => {
-        const progress = row.approvalThreshold > 0
-          ? (row.approvalCount / row.approvalThreshold) * 100
-          : 0;
-        return (
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center gap-2 w-full">
-              <div className="flex-1 bg-surfaceAlt rounded-full h-2 overflow-hidden min-w-[80px]">
-                <div
-                  className="h-full bg-accent rounded-full transition-all"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            </div>
-            <span className="text-xs font-mono text-textMuted">
-              {row.approvalCount} / {row.approvalThreshold}
-            </span>
-          </div>
-        );
-      },
-    },
-    {
-      key: 'status',
-      label: 'Status',
-      sortable: true,
-      className: 'text-center',
-      render: (row) => {
-        const statusColors = {
-          pending: 'bg-secondary/10 text-secondary border-secondary',
-          approved: 'bg-accent/10 text-accent border-accent',
-          executed: 'bg-primary/10 text-primary border-primary',
-          rejected: 'bg-surfaceAlt text-textMuted border-border',
-        };
-        return (
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-sans font-medium border ${
-              statusColors[row.status]
-            }`}
-          >
-            {row.status.toUpperCase()}
-          </span>
-        );
-      },
-    },
-    {
-      key: 'createdAt',
-      label: 'Created',
-      sortable: true,
-      render: (row) => {
-        const date = new Date(row.createdAt);
-        return (
-          <div>
-            <p className="text-sm font-sans text-textPrimary">
-              {date.toLocaleDateString()}
-            </p>
-            <p className="text-xs text-textMuted font-mono">
-              {date.toLocaleTimeString()}
-            </p>
-          </div>
-        );
-      },
-    },
-  ];
+  const pending = all.filter((row) => row.status === 'pending');
+  const needsYou = pending.filter(
+    (row) => !row.approvals.some((a) => sameAddress(a, wallet.address))
+  ).length;
+  const approved = all.filter((row) => row.status === 'approved').length;
 
-  const handleImport = (data: any[]) => {
-    console.log('Imported proposals:', data);
-    // Could navigate to batch create or handle import
-  };
-
-  if (!wallet.isConnected) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center max-w-md">
-          <FileText className="w-16 h-16 text-textMuted mx-auto mb-4" />
-          <h2 className="text-2xl font-display font-bold text-textPrimary mb-2">
-            Connect Your Wallet
-          </h2>
-          <p className="text-textMuted font-sans mb-6">
-            Please connect your wallet to view and manage proposals.
-          </p>
-          <Button onClick={openModal}>Connect Wallet</Button>
-        </div>
-      </div>
+  const empty =
+    data && data.vaultCount === 0 ? (
+      <EmptyState
+        icon={FileCheck}
+        title={REQUESTS_PAGE.empty.title}
+        description={REQUESTS_PAGE.empty.noVaultsLine}
+        action={
+          <ButtonLink to="/vaults/create" variant="primary" leadingIcon={Plus}>
+            {REQUESTS_PAGE.empty.createVault}
+          </ButtonLink>
+        }
+      />
+    ) : (
+      <EmptyState
+        icon={FileCheck}
+        title={REQUESTS_PAGE.empty.title}
+        description={REQUESTS_PAGE.empty.line}
+        action={
+          <ButtonLink to="/vaults" variant="primary">
+            {REQUESTS_PAGE.empty.action}
+          </ButtonLink>
+        }
+      />
     );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen pb-20 bg-background">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-          <div className="mb-6 md:mb-8">
-            <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-4">
-              Proposals
-            </h1>
-          </div>
-          <div className="text-center py-12 bg-surface rounded-lg border border-border">
-            <XCircle className="w-16 h-16 text-textMuted mx-auto mb-4" />
-            <h2 className="text-2xl font-display font-bold text-textPrimary mb-2">
-              Unable to load proposals
-            </h2>
-            <p className="text-textMuted font-mono">{error}</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen pb-20 bg-background">
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-        {/* Header */}
-        <div className="mb-6 md:mb-8">
-          <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 md:gap-6 mb-6 md:mb-8">
-            <div>
-              <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-4">
-                Proposals
-              </h1>
-              <p className="font-sans text-textMuted max-w-2xl text-sm leading-relaxed">
-                Multi-signature proposal management across all your vaults. Track approvals and execution status.
-              </p>
-            </div>
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-            <StatsCard
-              label="Total Proposals"
-              value={proposals.length}
-              subtitle={`${pendingProposals.length} pending`}
-              icon={FileText}
-              color="primary"
+    <PageContainer>
+      <PageHeader title={REQUESTS_PAGE.title} description={REQUESTS_PAGE.description} />
+      <Stack>
+        {data && data.failedVaults > 0 ? (
+          <Notice tone="warning" title={REQUESTS_PAGE.someFailedTitle}>
+            {REQUESTS_PAGE.someFailed(data.failedVaults)}
+          </Notice>
+        ) : null}
+        {state === 'ready' || state === 'no-results' ? (
+          <>
+            {approved > 0 ? (
+              <Notice tone="info" title={READY_TO_SEND.title}>
+                {READY_TO_SEND.line}
+              </Notice>
+            ) : null}
+            <ListToolbar
+              chips={
+                <FilterChips
+                  label={REQUESTS_PAGE.filterLabel}
+                  options={FILTERS}
+                  selected={filter}
+                  onChange={setFilter}
+                  showAll
+                />
+              }
+              stats={
+                <StatRow>
+                  <StatTile label={REQUESTS_PAGE.stats.needsYou} value={String(needsYou)} />
+                  <StatTile label={REQUESTS_PAGE.stats.waiting} value={String(pending.length)} />
+                  <StatTile label={REQUESTS_PAGE.stats.approved} value={String(approved)} />
+                </StatRow>
+              }
             />
-            <StatsCard
-              label="Pending Approval"
-              value={pendingProposals.length}
-              subtitle="Awaiting signatures"
-              icon={Clock}
-              color="secondary"
-              progress={{
-                percentage: proposals.length > 0 ? (pendingProposals.length / proposals.length) * 100 : 0,
-                label: 'Pending',
-              }}
+          </>
+        ) : null}
+        <List
+          label={REQUESTS_PAGE.listLabel}
+          columns={COLUMNS}
+          rows={rows}
+          rowKey={(row) => row.id}
+          rowHref={(row) => `/vaults/${row.vaultId}`}
+          state={state}
+          empty={empty}
+          noResults={
+            <NoResults thing={REQUESTS_PAGE.noResultsThing} onClear={() => setFilter([])} />
+          }
+          error={
+            <ErrorState
+              title={REQUESTS_PAGE.loadFailedTitle}
+              reason={failure ?? errorMessage('LOAD_FAILED', { things: 'Spending requests' })}
+              onRetry={load}
             />
-            <StatsCard
-              label="Approved"
-              value={approvedProposals.length + executedProposals.length}
-              subtitle="Ready or executed"
-              icon={CheckCircle}
-              color="accent"
-            />
-            <StatsCard
-              label="Total Value"
-              value={`${totalAmount.toFixed(4)} BCH`}
-              subtitle="All proposals"
-              icon={TrendingUp}
-              color="muted"
-            />
-          </div>
-
-          {/* Status Filter */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-textMuted font-sans">Status:</span>
-            {(['all', 'pending', 'approved', 'executed', 'rejected'] as const).map((status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                className={`px-3 py-1.5 rounded-md text-xs font-sans font-medium transition-colors ${
-                  statusFilter === status
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'bg-surface text-textSecondary hover:bg-surfaceAlt border border-border'
-                }`}
-              >
-                {status.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Data Table */}
-        {loading ? (
-          <SkeletonTable rows={6} columns={7} />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={filteredProposals}
-            onRowClick={(proposal) => navigate(`/vaults/${proposal.vaultId}`)}
-            enableSearch
-            enableExport
-            enableImport
-            onImport={handleImport}
-            emptyMessage="No proposals found. Proposals will appear here when created in your vaults."
-          />
-        )}
-      </div>
-    </div>
+          }
+        />
+      </Stack>
+    </PageContainer>
   );
 }

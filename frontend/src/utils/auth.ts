@@ -29,6 +29,13 @@
 
 import { deserializeWcSignOptions, type SerializedWcTransaction } from './blockchain';
 import type { CashScriptSignOptions, CashScriptSignResponse } from '../types/wallet';
+import { CodedError, apiFailure, flowFailure, walletRequestFailure } from '../copy/errors';
+import { SIGN_IN_NOTICE, WALLET_PROMPTS } from '../copy/wallets';
+
+/** Fired just before a sign-in request goes to the wallet, so the app can say it's coming. */
+export const SIGN_IN_NOTICE_EVENT = 'flowguard:sign-in-notice';
+
+export type SignInNoticeDetail = { title: string; line: string };
 
 const BEARER_STORAGE_KEY = 'flowguard.siwx.bearer';
 const EXPIRY_SAFETY_MARGIN_MS = 30_000;
@@ -37,7 +44,7 @@ const AUTH_BASE = '/api/auth';
 
 export interface WalletForAuth {
   address: string | null;
-  signMessage: (message: string) => Promise<string>;
+  signMessage: (message: string, userPrompt?: string) => Promise<string>;
   /**
    * Some wallets have no usable message-signing primitive, so they prove ownership
    * by signing a non-broadcastable proof transaction instead. These are present on
@@ -151,16 +158,23 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    let detail = '';
-    try {
-      const data = (await resp.json()) as { message?: string; error?: string };
-      detail = data.message || data.error || '';
-    } catch {
-      // ignore body parse failure - fall through with the bare status
-    }
-    throw new Error(`${path} failed: ${resp.status}${detail ? ` - ${detail}` : ''}`);
+    const body: unknown = await resp.json().catch(() => null);
+    throw apiFailure(body, resp.status, 'SIGN_IN_FAILED');
   }
   return (await resp.json()) as T;
+}
+
+function announceSignIn(): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  const detail: SignInNoticeDetail = { title: SIGN_IN_NOTICE.title, line: SIGN_IN_NOTICE.line };
+  window.dispatchEvent(new CustomEvent<SignInNoticeDetail>(SIGN_IN_NOTICE_EVENT, { detail }));
+}
+
+/** A wallet's answer to a sign-in request, mapped to the sign-in codes. */
+function signInFailure(error: unknown): CodedError {
+  const failure = walletRequestFailure(error, 'signIn');
+  if (failure.code === 'WALLET_REJECTED') return flowFailure('SIGN_IN_REJECTED', { details: failure.details });
+  return failure;
 }
 
 /**
@@ -169,7 +183,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
  */
 async function obtainBearer(wallet: WalletForAuth): Promise<string> {
   if (!wallet.address) {
-    throw new Error('Wallet must be connected before authFetch can sign in');
+    throw flowFailure('NOT_CONNECTED');
   }
 
   const domain =
@@ -192,17 +206,22 @@ async function obtainBearer(wallet: WalletForAuth): Promise<string> {
   // non-broadcastable proof transaction (same single-use nonce, same bearer).
   if (needsTxProof) {
     if (!wallet.signCashScriptTransaction) {
-      throw new Error('This wallet cannot sign FlowGuard login requests (no transaction signing support).');
+      throw flowFailure('WALLET_UNSUPPORTED', { details: 'This wallet has no transaction signing for the sign-in proof.' });
     }
     if (!nonce.authProof) {
-      throw new Error('Login failed: the server did not issue a proof transaction for this wallet.');
+      throw flowFailure('SIGN_IN_FAILED', { details: 'The server sent no sign-in proof transaction.' });
     }
     const options = deserializeWcSignOptions(nonce.authProof);
-    const signed = await wallet.signCashScriptTransaction({
-      ...options,
-      broadcast: false,
-      userPrompt: 'Prove wallet ownership to FlowGuard (this transaction cannot be broadcast and moves no funds)',
-    });
+    announceSignIn();
+    const signed = await wallet
+      .signCashScriptTransaction({
+        ...options,
+        broadcast: false,
+        userPrompt: WALLET_PROMPTS.signInProof,
+      })
+      .catch((error: unknown) => {
+        throw signInFailure(error);
+      });
     const verify = await postJson<VerifyResponse>(`${AUTH_BASE}/verify-tx`, {
       address: wallet.address,
       nonceId: nonce.nonceId,
@@ -212,7 +231,10 @@ async function obtainBearer(wallet: WalletForAuth): Promise<string> {
     return verify.bearer;
   }
 
-  const signature = await wallet.signMessage(nonce.message);
+  announceSignIn();
+  const signature = await wallet.signMessage(nonce.message, WALLET_PROMPTS.signInMessage).catch((error: unknown) => {
+    throw signInFailure(error);
+  });
 
   const verify = await postJson<VerifyResponse>(`${AUTH_BASE}/verify`, {
     address: wallet.address,
@@ -259,13 +281,7 @@ export async function authFetch(input: RequestInfo | URL, init: AuthFetchInit): 
   if (response.status === 401) {
     // Bearer expired or rejected - burn the cache, force a refresh, retry once.
     clearCachedBearer();
-    try {
-      bearer = await obtainBearer(wallet);
-    } catch (refreshError) {
-      // Surface the original 401 if the refresh itself fails - the caller
-      // typically renders the body text as the error message.
-      throw refreshError;
-    }
+    bearer = await obtainBearer(wallet);
     headers.set('Authorization', `Bearer ${bearer}`);
     response = await fetch(input, { ...rest, headers });
   }
@@ -284,14 +300,8 @@ export async function authFetchJson<T = unknown>(
 ): Promise<T> {
   const response = await authFetch(input, init);
   if (!response.ok) {
-    let detail = '';
-    try {
-      const data = (await response.json()) as { message?: string; error?: string };
-      detail = data.message || data.error || '';
-    } catch {
-      // ignore
-    }
-    throw new Error(detail || `${response.status} ${response.statusText}`);
+    const body: unknown = await response.json().catch(() => null);
+    throw apiFailure(body, response.status, 'UNKNOWN');
   }
   return (await response.json()) as T;
 }

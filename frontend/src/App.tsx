@@ -1,14 +1,14 @@
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense, useEffect } from 'react';
 import { DashboardLayout } from './components/layout/DashboardLayout';
+import { ScrollManager } from './components/layout/ScrollManager';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { WalletModal } from './components/ui/WalletModal';
-import { TransactionNoticeToast } from './components/ui/TransactionNoticeToast';
 import { useWallet } from './hooks/useWallet';
 import { useWalletModal } from './hooks/useWalletModal';
 // Home stays eager-loaded so first paint on the marketing site is fast.
 import Home from './pages/Home';
-import { isAppHost, isExplorerHost } from './utils/publicUrls';
+import { DOCS_SITE_URL, isAppHost, isExplorerHost } from './utils/publicUrls';
 
 // All non-critical routes are lazy-loaded so they don't enter the initial
 // JS bundle. Each `lazy()` call below corresponds to a separate chunk that
@@ -19,11 +19,9 @@ const VaultsPage = lazy(() => import('./pages/VaultsPage'));
 const CreateVaultPage = lazy(() => import('./pages/CreateVaultPage'));
 const VaultDetailPage = lazy(() => import('./pages/VaultDetailPage'));
 const CreateProposalPage = lazy(() => import('./pages/CreateProposalPage'));
+const ProposalRedirectPage = lazy(() => import('./pages/ProposalRedirectPage'));
 const ProposalsPage = lazy(() => import('./pages/ProposalsPage'));
-const RequestDetailPage = lazy(() => import('./pages/RequestDetailPage'));
-const BudgetPlansPage = lazy(() => import('./pages/BudgetPlansPage'));
 const CreateBudgetPlanPage = lazy(() => import('./pages/CreateBudgetPlanPage'));
-const GovernancePage = lazy(() => import('./pages/GovernancePage'));
 
 const StreamsPage = lazy(() => import('./pages/StreamsPage'));
 const StreamDetailPage = lazy(() => import('./pages/StreamDetailPage'));
@@ -84,6 +82,7 @@ const DaoRolesPage = lazy(() => import('./pages/dao/DaoRolesPage').then((m) => (
 const DaoTreasuryPolicyPage = lazy(() => import('./pages/dao/DaoTreasuryPolicyPage').then((m) => ({ default: m.DaoTreasuryPolicyPage })));
 const DaoStreamsPage = lazy(() => import('./pages/dao/DaoStreamsPage').then((m) => ({ default: m.DaoStreamsPage })));
 const SplitLoginScreen = lazy(() => import('./pages/SplitLoginScreen').then((m) => ({ default: m.SplitLoginScreen })));
+const KitPage = import.meta.env.DEV ? lazy(() => import('./pages/dev/KitPage')) : null;
 
 import { RouteFallback } from './components/ui/RouteFallback';
 
@@ -97,10 +96,8 @@ function preloadAllLazyRoutes() {
     () => import('./pages/VaultDetailPage'),
     () => import('./pages/CreateProposalPage'),
     () => import('./pages/ProposalsPage'),
-    () => import('./pages/RequestDetailPage'),
     () => import('./pages/BudgetPlansPage'),
     () => import('./pages/CreateBudgetPlanPage'),
-    () => import('./pages/GovernancePage'),
     () => import('./pages/StreamsPage'),
     () => import('./pages/StreamDetailPage'),
     () => import('./pages/CreateStreamPage'),
@@ -144,20 +141,18 @@ function preloadAllLazyRoutes() {
   });
 }
 
+function DocsSiteRedirect() {
+  useEffect(() => {
+    window.location.replace(DOCS_SITE_URL);
+  }, []);
+  return <RouteFallback />;
+}
+
 function App() {
   const wallet = useWallet();
   const { isOpen, closeModal } = useWalletModal();
-  const location = useLocation();
   const onAppHost = isAppHost();
   const onExplorerHost = isExplorerHost();
-
-  // Scroll to top on route change
-  useEffect(() => {
-    const isProductGrants = location.pathname === '/grants' || location.pathname.startsWith('/grants/');
-    if (!location.pathname.startsWith('/app') && !location.pathname.startsWith('/streams') && !location.pathname.startsWith('/vaults') && !location.pathname.startsWith('/payments') && !location.pathname.startsWith('/airdrops') && !location.pathname.startsWith('/bounties') && !location.pathname.startsWith('/rewards') && !isProductGrants && !location.pathname.startsWith('/proposals') && !location.pathname.startsWith('/budgets') && !location.pathname.startsWith('/governance') && location.pathname !== '/explorer') {
-      window.scrollTo({ top: 0, behavior: 'auto' });
-    }
-  }, [location.pathname, location.search]);
 
   // Pre-warm every lazy route chunk on browser idle so navigation is instant.
   useEffect(() => {
@@ -165,9 +160,9 @@ function App() {
   }, []);
 
   return (
-    <div className="bg-background min-h-screen flex flex-col">
-      {/* Header removed from App.tsx - Dashboard has internal Nav, Landing has its own Header */}
-      <main className="flex-grow">
+    <div className="bg-canvas min-h-screen flex flex-col">
+      <ScrollManager />
+      <div className="flex-grow">
         <Suspense fallback={<RouteFallback />}>
         <Routes>
           {/* Public routes */}
@@ -177,7 +172,9 @@ function App() {
               onExplorerHost ? (
                 <ExplorerPage />
               ) : onAppHost ? (
-                wallet.isConnected ? (
+                !wallet.initAttempted ? (
+                  <RouteFallback />
+                ) : wallet.isConnected ? (
                   <ProtectedRoute>
                     <DashboardLayout>
                       <AppShellPage />
@@ -198,6 +195,8 @@ function App() {
             element={
               onAppHost ? (
                 <Navigate to="/" replace />
+              ) : !wallet.initAttempted ? (
+                <RouteFallback />
               ) : wallet.isConnected ? (
                 <ProtectedRoute>
                   <DashboardLayout>
@@ -665,7 +664,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <DashboardLayout>
-                  <RequestDetailPage />
+                  <ProposalRedirectPage />
                 </DashboardLayout>
               </ProtectedRoute>
             }
@@ -675,7 +674,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <DashboardLayout>
-                  <BudgetPlansPage />
+                  <VaultsPage />
                 </DashboardLayout>
               </ProtectedRoute>
             }
@@ -690,26 +689,13 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route
-            path="/governance"
-            element={
-              <ProtectedRoute>
-                <DashboardLayout>
-                  <GovernancePage />
-                </DashboardLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/governance/create"
-            element={
-              <ProtectedRoute>
-                <DashboardLayout>
-                  <GovernancePage />
-                </DashboardLayout>
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/governance" element={<Navigate to="/vaults" replace />} />
+          <Route path="/governance/create" element={<Navigate to="/vaults" replace />} />
+
+          <Route path="/developers" element={<DocsSiteRedirect />} />
+          <Route path="/docs" element={<DocsSiteRedirect />} />
+
+          {KitPage ? <Route path="/dev/kit" element={<KitPage />} /> : null}
 
           {/* 404 catch-all - MUST stay last. Renders NotFoundPage with the
               attempted path, a search box, and curated destinations so users
@@ -717,7 +703,7 @@ function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
         </Suspense>
-      </main>
+      </div>
 
       {/* Global Wallet Modal - rendered at App level, not in Header */}
       <WalletModal
@@ -725,9 +711,7 @@ function App() {
         onClose={closeModal}
         onSelectWallet={wallet.connect}
         isConnecting={wallet.isConnecting}
-        error={wallet.error}
       />
-      <TransactionNoticeToast />
     </div>
   );
 }

@@ -30,15 +30,13 @@
 
 import { Web3ModalWalletConnectConnector } from './Web3ModalWalletConnectConnector';
 import { WalletType } from '../types/wallet';
-
-/** OPTN Wallet install / project page, surfaced when the wallet is unavailable. */
-export const OPTN_WALLET_URL = 'https://www.optnlabs.com/';
-
-/** Public source of the wallet this connector targets. */
-export const OPTN_WALLET_REPO = 'https://github.com/BitcoinBay/OPTNWallet';
+import { flowFailure } from '../copy/errors';
+import { PAIRING } from '../copy/wallets';
 
 export class OptnConnector extends Web3ModalWalletConnectConnector {
   type: WalletType = WalletType.OPTN;
+
+  protected pairingCopy = PAIRING.optn;
 
   /** See constraint 1 in the file header. */
   supportsMessageSigning = false;
@@ -50,10 +48,8 @@ export class OptnConnector extends Web3ModalWalletConnectConnector {
    * selects automatically from `supportsMessageSigning === false`.
    */
   async signMessage(): Promise<string> {
-    throw new Error(
-      'OPTN Wallet cannot sign FlowGuard login messages.\n\n' +
-        'FlowGuard signs in with a non-broadcastable proof transaction instead — ' +
-        'approve the "Prove wallet ownership" request in OPTN.',
-    );
+    throw flowFailure('SIGN_IN_FAILED', {
+      details: 'OPTN signs in with a proof transaction. Message signing was requested instead.',
+    });
   }
 }

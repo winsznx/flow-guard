@@ -1,4 +1,5 @@
 import { Helmet } from 'react-helmet-async';
+import { MARKETING_HOME_TITLE, SITE_NAME, documentTitle } from '../../copy/nav';
 import { getCurrentSiteOrigin, MAIN_SITE_URL } from '../../utils/publicUrls';
 
 interface PageMetaProps {
@@ -8,19 +9,32 @@ interface PageMetaProps {
   image?: string;
   imageAlt?: string;
   type?: 'website' | 'article';
+  /** Use the title as written, without the "| FlowGuard" suffix. */
+  exactTitle?: boolean;
+  /** Ask search engines to leave the page out, for pages like the 404 that shouldn't show in results. */
+  noindex?: boolean;
 }
 
-const SITE_NAME = 'FlowGuard';
-const DEFAULT_IMAGE = `${MAIN_SITE_URL}/images/FlowGuard%20Preview.png`;
-const DEFAULT_IMAGE_ALT = 'FlowGuard social preview card';
+const DEFAULT_IMAGE = `${MAIN_SITE_URL}/og-default.png`;
+const DEFAULT_IMAGE_ALT = MARKETING_HOME_TITLE;
+const TWITTER_HANDLE = '@flowguard_';
 
-function resolveAbsoluteUrl(pathOrUrl?: string) {
-  const siteUrl = getCurrentSiteOrigin();
+function encodePath(path: string): string {
+  try {
+    return encodeURI(decodeURI(path));
+  } catch {
+    return encodeURI(path);
+  }
+}
+
+function resolveAbsoluteUrl(pathOrUrl?: string): string | undefined {
   if (!pathOrUrl) return undefined;
   if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
-    return pathOrUrl;
+    const url = new URL(pathOrUrl);
+    return `${url.origin}${encodePath(url.pathname)}${url.search}${url.hash}`;
   }
-  return `${siteUrl}${pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`}`;
+  const path = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+  return `${getCurrentSiteOrigin()}${encodePath(path)}`;
 }
 
 export function PageMeta({
@@ -30,16 +44,19 @@ export function PageMeta({
   image,
   imageAlt = DEFAULT_IMAGE_ALT,
   type = 'website',
+  exactTitle = false,
+  noindex = false,
 }: PageMetaProps) {
-  const canonicalUrl = resolveAbsoluteUrl(path) || getCurrentSiteOrigin();
-  const imageUrl = resolveAbsoluteUrl(image) || DEFAULT_IMAGE;
-  const fullTitle = title.includes(SITE_NAME) ? title : `${title} | ${SITE_NAME}`;
+  const canonicalUrl = resolveAbsoluteUrl(path) ?? getCurrentSiteOrigin();
+  const imageUrl = resolveAbsoluteUrl(image) ?? DEFAULT_IMAGE;
+  const fullTitle = exactTitle || title.includes(SITE_NAME) ? title : documentTitle(title);
 
   return (
     <Helmet>
       <title>{fullTitle}</title>
       <link rel="canonical" href={canonicalUrl} />
       <meta name="description" content={description} />
+      {noindex ? <meta name="robots" content="noindex" /> : null}
 
       <meta property="og:type" content={type} />
       <meta property="og:site_name" content={SITE_NAME} />
@@ -50,7 +67,7 @@ export function PageMeta({
       <meta property="og:image:alt" content={imageAlt} />
 
       <meta name="twitter:card" content="summary_large_image" />
-      <meta name="twitter:site" content="@flowguard_" />
+      <meta name="twitter:site" content={TWITTER_HANDLE} />
       <meta name="twitter:title" content={fullTitle} />
       <meta name="twitter:description" content={description} />
       <meta name="twitter:image" content={imageUrl} />

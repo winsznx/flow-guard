@@ -1,6 +1,20 @@
 import { authFetch, type WalletForAuth } from './auth';
+import { CodedError, apiErrorDetails, apiFailure, flowFailure, rawErrorText, type ErrorCode } from '../copy/errors';
 
 const API_BASE_URL = '/api';
+
+/** Reads a failed response's body and throws its catalog error. Raw server text goes to details. */
+export async function throwApiError(response: Response, fallback: ErrorCode): Promise<never> {
+  const body: unknown = await response.json().catch(() => null);
+  throw apiFailure(body, response.status, fallback);
+}
+
+/** A read of one record: a missing or private record isn't a connection problem. */
+function readFailureCode(status: number): ErrorCode {
+  if (status === 404) return 'NOT_FOUND';
+  if (status === 403) return 'NO_ACCESS';
+  return 'LOAD_FAILED';
+}
 
 export interface VaultsResponse {
   created: any[];
@@ -17,7 +31,7 @@ export async function fetchVaults(userAddress?: string): Promise<VaultsResponse>
 
   const response = await fetch(`${API_BASE_URL}/vaults`, { headers });
   if (!response.ok) {
-    throw new Error('Failed to fetch vaults');
+    await throwApiError(response, 'LOAD_FAILED');
   }
   return response.json();
 }
@@ -30,10 +44,7 @@ export async function fetchVault(id: string, userAddress?: string): Promise<any>
 
   const response = await fetch(`${API_BASE_URL}/vaults/${id}`, { headers });
   if (!response.ok) {
-    if (response.status === 403) {
-      throw new Error('Access denied: This vault is private');
-    }
-    throw new Error('Failed to fetch vault');
+    await throwApiError(response, readFailureCode(response.status));
   }
   return response.json();
 }
@@ -51,22 +62,17 @@ export async function createVault(data: any, wallet: WalletForAuth): Promise<any
     body: JSON.stringify(data),
   });
   if (!response.ok) {
-    let detail = '';
-    try {
-      const body = await response.json();
-      detail = body?.message || body?.error || '';
-    } catch {
-      // ignore
-    }
-    throw new Error(detail || 'Failed to create vault');
+    await throwApiError(response, 'UNKNOWN');
   }
   return response.json();
 }
 
-export async function fetchProposals(vaultId: string): Promise<any[]> {
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/proposals`);
+export async function fetchProposals(vaultId: string, userAddress?: string | null): Promise<any[]> {
+  const headers: Record<string, string> = {};
+  if (userAddress) headers['x-user-address'] = userAddress;
+  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/proposals`, { headers });
   if (!response.ok) {
-    throw new Error('Failed to fetch proposals');
+    await throwApiError(response, 'LOAD_FAILED');
   }
   return response.json();
 }
@@ -83,21 +89,7 @@ export async function createProposal(
     body: JSON.stringify(data),
   });
   if (!response.ok) {
-    throw new Error('Failed to create proposal');
-  }
-  return response.json();
-}
-
-export async function approveProposal(
-  proposalId: string,
-  wallet: WalletForAuth,
-): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/proposals/${proposalId}/approve`, {
-    wallet,
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw new Error('Failed to approve proposal');
+    await throwApiError(response, 'UNKNOWN');
   }
   return response.json();
 }
@@ -114,8 +106,7 @@ export async function addSigner(
     body: JSON.stringify({ signerAddress }),
   });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Failed to add signer' }));
-    throw new Error(error.error || 'Failed to add signer');
+    await throwApiError(response, 'UNKNOWN');
   }
   return response.json();
 }
@@ -141,21 +132,11 @@ export async function broadcastTransaction(
     body: JSON.stringify({ txHex, ...metadata }),
   });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Failed to broadcast transaction' }));
-    const base = error.userMessage || error.message || error.error || 'Failed to broadcast transaction';
-    const reason = error?.debug?.reason;
-    const diagnostics = error?.debug?.diagnostics ?? error?.diagnostics;
-    const detailChunks: string[] = [];
-    if (typeof reason === 'string' && reason.trim().length > 0 && reason.trim() !== base) {
-      detailChunks.push(`Reason: ${reason.trim()}`);
+    const body: unknown = await response.json().catch(() => null);
+    if (body && typeof body === 'object' && 'diagnostics' in body) {
+      console.debug('[api] Broadcast diagnostics:', body.diagnostics);
     }
-    if (diagnostics) {
-      detailChunks.push(`Diagnostics: ${JSON.stringify(diagnostics)}`);
-    }
-    if (detailChunks.length > 0) {
-      throw new Error(`${base}\n\n${detailChunks.join('\n\n')}`);
-    }
-    throw new Error(base);
+    throw apiFailure(body, response.status, 'BROADCAST_REJECTED');
   }
   return response.json();
 }
@@ -168,12 +149,16 @@ export async function getDepositInfo(vaultId: string, userAddress: string): Prom
     },
   });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Failed to get deposit info' }));
-    throw new Error(error.error || 'Failed to get deposit info');
+    await throwApiError(response, 'SERVER_PREPARE_FAILED');
   }
   return response.json();
 }
 
+/**
+ * The deposit is already on the network when this runs, so a failure here is never a
+ * failed deposit: it throws SENT_NOT_SYNCED with the transaction, and the page keeps
+ * checking instead of offering a second deposit.
+ */
 export async function updateVaultBalance(
   vaultId: string,
   txid: string,
@@ -184,14 +169,19 @@ export async function updateVaultBalance(
   const baseDelayMs = 1200;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/confirm-funding`, {
-      wallet,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ txHash: txid, amount }),
-    });
+    let response: Response;
+    try {
+      response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/confirm-funding`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ txHash: txid, amount }),
+      });
+    } catch (error) {
+      throw depositNotSynced(txid, rawErrorText(error));
+    }
 
     const payload = await response.json().catch(() => ({}));
     if (response.ok) {
@@ -200,186 +190,32 @@ export async function updateVaultBalance(
 
     const retryablePending = response.status === 409 && payload?.retryable === true;
     if (!retryablePending || attempt === maxAttempts) {
-      throw new Error(payload.error || payload.message || 'Failed to update vault balance');
+      throw depositNotSynced(txid, apiErrorDetails(payload, response.status));
     }
 
     const waitMs = Math.min(baseDelayMs * attempt, 5000);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
-  throw new Error('Failed to update vault balance');
+  throw depositNotSynced(txid);
+}
+
+function depositNotSynced(txid: string, details?: string): CodedError {
+  return flowFailure('SENT_NOT_SYNCED', { params: { outcome: 'deposit' }, txid, details });
 }
 
 // Streams API
 export async function fetchStreams(params: { sender?: string; recipient?: string; status?: string }): Promise<any> {
   const qs = new URLSearchParams(params as Record<string, string>);
   const response = await fetch(`${API_BASE_URL}/streams?${qs}`);
-  if (!response.ok) throw new Error('Failed to fetch streams');
+  if (!response.ok) await throwApiError(response, 'LOAD_FAILED');
   return response.json();
 }
 
-export async function fetchStream(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/streams/${id}`);
-  if (!response.ok) throw new Error('Failed to fetch stream');
-  return response.json();
-}
-
-export async function createStream(data: any, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/streams/create`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to create stream');
-  return response.json();
-}
-
-export async function claimStream(id: string, wallet: WalletForAuth, amount?: number): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/streams/${id}/claim`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount }),
-  });
-  if (!response.ok) throw new Error('Failed to claim stream');
-  return response.json();
-}
-
-export async function cancelStream(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/streams/${id}/cancel`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sender: wallet.address }),
-  });
-  if (!response.ok) throw new Error('Failed to cancel stream');
-  return response.json();
-}
-
-// Payments API
 export async function fetchPayments(params: { sender?: string; recipient?: string }): Promise<any> {
   const qs = new URLSearchParams(params as Record<string, string>);
   const response = await fetch(`${API_BASE_URL}/payments?${qs}`);
-  if (!response.ok) throw new Error('Failed to fetch payments');
-  return response.json();
-}
-
-export async function fetchPayment(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/payments/${id}`);
-  if (!response.ok) throw new Error('Failed to fetch payment');
-  return response.json();
-}
-
-export async function createPayment(data: any, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/payments/create`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to create payment');
-  return response.json();
-}
-
-export async function pausePayment(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/payments/${id}/pause`, { wallet, method: 'POST' });
-  if (!response.ok) throw new Error('Failed to pause payment');
-  return response.json();
-}
-
-export async function resumePayment(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/payments/${id}/resume`, { wallet, method: 'POST' });
-  if (!response.ok) throw new Error('Failed to resume payment');
-  return response.json();
-}
-
-export async function cancelPayment(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/payments/${id}/cancel`, { wallet, method: 'POST' });
-  if (!response.ok) throw new Error('Failed to cancel payment');
-  return response.json();
-}
-
-// Airdrops API
-export async function fetchAirdrops(creator: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops?creator=${encodeURIComponent(creator)}`);
-  if (!response.ok) throw new Error('Failed to fetch airdrops');
-  return response.json();
-}
-
-export async function fetchClaimableAirdrops(address: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops/claimable?address=${encodeURIComponent(address)}`);
-  if (!response.ok) throw new Error('Failed to fetch claimable airdrops');
-  return response.json();
-}
-
-export async function fetchAirdrop(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/airdrops/${id}`);
-  if (!response.ok) throw new Error('Failed to fetch airdrop');
-  return response.json();
-}
-
-export async function createAirdrop(data: any, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/airdrops/create`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to create airdrop');
-  return response.json();
-}
-
-export async function claimAirdrop(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/airdrops/${id}/claim`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ claimerAddress: wallet.address }),
-  });
-  if (!response.ok) throw new Error('Failed to claim airdrop');
-  return response.json();
-}
-
-export async function pauseAirdrop(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/airdrops/${id}/pause`, { wallet, method: 'POST' });
-  if (!response.ok) throw new Error('Failed to pause airdrop');
-  return response.json();
-}
-
-export async function cancelAirdrop(id: string, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/airdrops/${id}/cancel`, { wallet, method: 'POST' });
-  if (!response.ok) throw new Error('Failed to cancel airdrop');
-  return response.json();
-}
-
-// Governance API
-export async function fetchGovernanceProposals(vaultId: string, status?: string): Promise<any[]> {
-  const qs = status ? `?status=${status}` : '';
-  const response = await fetch(`${API_BASE_URL}/vaults/${vaultId}/governance${qs}`);
-  if (!response.ok) throw new Error('Failed to fetch governance proposals');
-  return response.json();
-}
-
-export async function createGovernanceProposal(vaultId: string, data: any, wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/vaults/${vaultId}/governance`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to create governance proposal');
-  return response.json();
-}
-
-export async function castVote(proposalId: string, vote: 'FOR' | 'AGAINST' | 'ABSTAIN', wallet: WalletForAuth): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/governance/${proposalId}/vote`, {
-    wallet,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vote }),
-  });
-  if (!response.ok) throw new Error('Failed to cast vote');
+  if (!response.ok) await throwApiError(response, 'LOAD_FAILED');
   return response.json();
 }
 
@@ -398,8 +234,7 @@ export async function createBudgetPlan(
     body: JSON.stringify(data),
   });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Failed to create budget plan' }));
-    throw new Error(error.error || 'Failed to create budget plan');
+    await throwApiError(response, 'UNKNOWN');
   }
   return response.json();
 }
@@ -411,37 +246,8 @@ export async function fetchBudgetPlans(vaultId?: string): Promise<any[]> {
 
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error('Failed to fetch budget plans');
+    await throwApiError(response, 'LOAD_FAILED');
   }
   return response.json();
 }
 
-export async function fetchBudgetPlan(id: string): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/budget-plans/${id}`);
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('Budget plan not found');
-    }
-    throw new Error('Failed to fetch budget plan');
-  }
-  return response.json();
-}
-
-export async function updateBudgetPlanStatus(
-  id: string,
-  status: string,
-  wallet: WalletForAuth,
-): Promise<any> {
-  const response = await authFetch(`${API_BASE_URL}/budget-plans/${id}/status`, {
-    wallet,
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ status }),
-  });
-  if (!response.ok) {
-    throw new Error('Failed to update budget plan status');
-  }
-  return response.json();
-}

@@ -1,456 +1,415 @@
-/**
- * PaymentsPage - Professional Recurring Payments Management
- * Sablier-quality with DataTable, circular progress, CSV import/export
- */
-
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Repeat, Plus, DollarSign, Clock, Zap, TrendingUp, Calendar, ExternalLink } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { ListToolbar } from '../components/layout/ListToolbar';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { Amount } from '../components/ui/Amount';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { FilterChips } from '../components/ui/FilterChips';
+import { Plus, Repeat, Users } from '../components/ui/Icon';
+import { List, type Column, type ListState } from '../components/ui/List';
+import { NoResults } from '../components/ui/NoResults';
+import { SearchInput } from '../components/ui/SearchInput';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { StatRow } from '../components/ui/StatRow';
+import { StatTile } from '../components/ui/StatTile';
+import { StatusPill } from '../components/ui/StatusPill';
+import type { Asset } from '../components/ui/types';
 import { useWallet } from '../hooks/useWallet';
-import { useWalletModal } from '../hooks/useWalletModal';
-import { Button } from '../components/ui/Button';
-import { SkeletonTable } from '../components/ui/Skeleton';
-import { DataTable, Column } from '../components/shared/DataTable';
-import { StatsCard } from '../components/shared/StatsCard';
-import { getExplorerTxUrl } from '../utils/blockchain';
-import { formatLogicalId } from '../utils/display';
-import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
+import { showFinished } from '../copy/common';
+import { formatAddress, formatDate, formatRelative } from '../copy/format';
+import {
+  INTERVAL_WORD,
+  PAYMENTS_PAGE,
+  paymentFrom,
+  paymentTo,
+  tokenRowsLeftOut,
+  type PaymentInterval,
+} from '../copy/payments';
+import { STATUS, lifecycleStatus, type StatusKey } from '../copy/status';
+import { getCachedTokenMeta } from '../utils/tokenMeta';
 
-type PaymentStatus = 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
-type PaymentInterval = 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'YEARLY';
+type View = 'all' | 'receiving' | 'sending';
+type StatusFilter = 'all' | 'notFunded' | 'scheduled' | 'active' | 'readyToClaim' | 'paused' | 'finished' | 'cancelled';
 
-interface RecurringPayment {
+interface PaymentRow {
   id: string;
-  payment_id: string;
   sender: string;
   recipient: string;
-  recipient_name?: string;
-  token_type: 'BCH' | 'CASHTOKENS';
+  recipient_name?: string | null;
+  token_type: string;
   token_category?: string | null;
+  token_decimals?: number | null;
   amount_per_period: number;
   interval: PaymentInterval;
+  interval_seconds?: number | null;
   start_date: number;
-  end_date?: number;
+  end_date?: number | null;
   next_payment_date: number;
   total_paid: number;
   payment_count: number;
-  status: PaymentStatus;
-  pausable: boolean;
-  created_at: number;
-  tx_hash?: string | null;
-  latest_event?: {
-    event_type: string;
-    status?: string | null;
-    tx_hash?: string | null;
-    created_at: number;
-  } | null;
+  status: string;
+}
+
+type ListedPayment = PaymentRow & { role: 'sending' | 'receiving' };
+
+const BCH: Asset = { kind: 'bch' };
+const DAY_SECONDS = 86_400;
+const NO_END_PAYMENTS = 12;
+/** The server signs a claim with a lock time 2 hours in the past, so a payment is claimable 2 hours after it's due. */
+const CLAIM_LAG_SECONDS = 7_200;
+const INTERVAL_SECONDS: Record<PaymentInterval, number> = {
+  DAILY: DAY_SECONDS,
+  WEEKLY: 7 * DAY_SECONDS,
+  BIWEEKLY: 14 * DAY_SECONDS,
+  MONTHLY: 30 * DAY_SECONDS,
+  YEARLY: 365 * DAY_SECONDS,
+};
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'all', label: PAYMENTS_PAGE.views.all },
+  { value: 'receiving', label: PAYMENTS_PAGE.views.receiving },
+  { value: 'sending', label: PAYMENTS_PAGE.views.sending },
+];
+
+const FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: PAYMENTS_PAGE.filterAll },
+  { value: 'readyToClaim', label: STATUS.readyToClaim.word },
+  { value: 'notFunded', label: STATUS.notFunded.word },
+  { value: 'scheduled', label: STATUS.scheduled.word },
+  { value: 'active', label: STATUS.active.word },
+  { value: 'paused', label: STATUS.paused.word },
+  { value: 'finished', label: STATUS.finished.word },
+  { value: 'cancelled', label: STATUS.cancelled.word },
+];
+
+function readView(value: string | null): View {
+  return value === 'receiving' || value === 'sending' ? value : 'all';
+}
+
+function readStatus(value: string | null): StatusFilter {
+  return FILTERS.some((filter) => filter.value === value) ? (value as StatusFilter) : 'all';
+}
+
+function paymentAsset(row: PaymentRow): Asset {
+  if (row.token_type === 'BCH' || !row.token_category) return BCH;
+  const meta = getCachedTokenMeta(row.token_category);
+  return { kind: 'token', tokenId: row.token_category, symbol: meta?.symbol, decimals: row.token_decimals ?? meta?.decimals ?? 0 };
+}
+
+function intervalSeconds(row: PaymentRow): number {
+  return Number(row.interval_seconds) || INTERVAL_SECONDS[row.interval] || 30 * DAY_SECONDS;
+}
+
+/** Mirrors the server: with an end date, ceil((end - start) / interval) payments, otherwise 12. */
+function paymentTotal(row: PaymentRow): number {
+  const step = intervalSeconds(row);
+  if (row.end_date && row.end_date > row.start_date) return Math.max(1, Math.ceil((row.end_date - row.start_date) / step));
+  return NO_END_PAYMENTS;
+}
+
+/** Payments due and claimable now, the same count the detail page shows. */
+function dueCount(row: PaymentRow, nowSeconds: number): number {
+  const left = Math.max(0, paymentTotal(row) - Number(row.payment_count || 0));
+  const claimableFrom = nowSeconds - CLAIM_LAG_SECONDS;
+  if (left === 0 || claimableFrom < row.next_payment_date) return 0;
+  return Math.min(left, Math.floor((claimableFrom - row.next_payment_date) / intervalSeconds(row)) + 1);
+}
+
+function rowStatus(row: ListedPayment, nowSeconds: number): StatusKey {
+  const base = lifecycleStatus(row.status, { startsAt: row.start_date * 1000, now: nowSeconds * 1000 }) ?? 'active';
+  if (base !== 'active' && base !== 'scheduled') return base;
+  if (Number(row.payment_count) >= paymentTotal(row)) return 'finished';
+  if (row.role === 'receiving' && base === 'active' && nowSeconds >= row.next_payment_date + CLAIM_LAG_SECONDS) {
+    return 'readyToClaim';
+  }
+  return base;
+}
+
+function isDone(status: StatusKey): boolean {
+  return status === 'finished' || status === 'cancelled';
+}
+
+async function fetchPayments(param: 'sender' | 'recipient', address: string): Promise<PaymentRow[]> {
+  const response = await fetch(`/api/payments?${param}=${encodeURIComponent(address)}`);
+  if (!response.ok) throw new Error(`Recurring payments request failed with ${response.status}`);
+  const data: { payments?: PaymentRow[] } = await response.json();
+  return data.payments ?? [];
+}
+
+function counterparty(row: ListedPayment): string {
+  return formatAddress(row.role === 'sending' ? row.recipient : row.sender);
+}
+
+function rowName(row: ListedPayment): string {
+  if (row.role === 'receiving') return paymentFrom(counterparty(row));
+  return row.recipient_name?.trim() || paymentTo(counterparty(row));
+}
+
+const WEEK_SECONDS = 7 * DAY_SECONDS;
+
+function nextCell(row: ListedPayment, status: StatusKey, nowSeconds: number): ReactNode {
+  if (status === 'readyToClaim') return PAYMENTS_PAGE.readyNow;
+  if (status === 'notFunded') return PAYMENTS_PAGE.afterFunding;
+  if (status !== 'active' && status !== 'scheduled') return null;
+  const date = formatDate(row.next_payment_date, { dropSameYear: true, now: nowSeconds * 1000 });
+  if (!date) return null;
+  const soon = Math.abs(row.next_payment_date - nowSeconds) < WEEK_SECONDS;
+  const relative = soon ? formatRelative(row.next_payment_date, nowSeconds * 1000) : null;
+  return (
+    <>
+      <span className="md:hidden">{PAYMENTS_PAGE.nextOn} </span>
+      {relative ? `${date} · ${relative}` : date}
+    </>
+  );
 }
 
 export default function PaymentsPage() {
   const wallet = useWallet();
-  const { openModal } = useWalletModal();
-  const navigate = useNavigate();
-  const [payments, setPayments] = useState<RecurringPayment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'sent' | 'received'>('sent');
-  const [statusFilter, setStatusFilter] = useState<'all' | PaymentStatus>('all');
-  const network = import.meta.env.VITE_BCH_NETWORK === 'mainnet' ? 'mainnet' : 'chipnet';
+  const [params, setParams] = useSearchParams();
+  const view = readView(params.get('view'));
+  const status = readStatus(params.get('status'));
+  const query = params.get('q') ?? '';
+  const [rows, setRows] = useState<ListedPayment[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const nowSeconds = Math.floor(Date.now() / 1000);
 
-  const formatEventLabel = (eventType: string) => {
-    switch (eventType) {
-      case 'created':
-        return 'Payment Created';
-      case 'funded':
-        return 'Payment Funded';
-      case 'claim':
-        return 'Payment Claimed';
-      case 'paused':
-        return 'Payment Paused';
-      case 'resumed':
-        return 'Payment Resumed';
-      case 'cancelled':
-        return 'Payment Cancelled';
-      default:
-        return eventType
-          .split('_')
-          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-          .join(' ');
+  const load = useCallback(async () => {
+    if (!wallet.address) return;
+    setFailed(false);
+    setRows(null);
+    try {
+      const [sent, received] = await Promise.all([
+        fetchPayments('sender', wallet.address),
+        fetchPayments('recipient', wallet.address),
+      ]);
+      const seen = new Set<string>();
+      const merged: ListedPayment[] = [];
+      for (const row of sent) {
+        seen.add(row.id);
+        merged.push({ ...row, role: 'sending' });
+      }
+      for (const row of received) {
+        if (!seen.has(row.id)) merged.push({ ...row, role: 'receiving' });
+      }
+      setRows(merged);
+    } catch (error) {
+      console.error('Recurring payments did not load', error);
+      setFailed(true);
     }
-  };
+  }, [wallet.address]);
 
   useEffect(() => {
-    if (!wallet.address) {
-      setLoading(false);
-      return;
+    void load();
+  }, [load]);
+
+  const update = (next: Record<string, string | null>) => {
+    const merged = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null || value === '' || value === 'all') merged.delete(key);
+      else merged.set(key, value);
     }
-
-    const fetchPayments = async () => {
-      try {
-        setLoading(true);
-        const endpoint =
-          viewMode === 'sent'
-            ? `/api/payments?sender=${wallet.address}`
-            : `/api/payments?recipient=${wallet.address}`;
-
-        const response = await fetch(endpoint);
-        const data = await response.json();
-        setPayments(data.payments || []);
-      } catch (error) {
-        console.error('Failed to fetch payments:', error);
-        setPayments([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchPayments();
-  }, [wallet.address, viewMode]);
-
-  // Calculate stats
-  const activePayments = payments.filter((p) => p.status === 'ACTIVE');
-
-  type TokenKey = string;
-  const tokenKey = (p: Pick<RecurringPayment, 'token_type' | 'token_category'>): TokenKey =>
-    `${p.token_type}::${p.token_category ?? ''}`;
-
-  const bucketsToString = (
-    buckets: Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null }>,
-  ): string => {
-    const entries = Array.from(buckets.values()).filter((b) => b.amount > 0);
-    if (entries.length === 0) return '—';
-    return entries
-      .map((b) => `${formatTokenAmount(b.amount, b.tokenType, b.tokenCategory, { noSuffix: true })} ${tokenSymbol(b.tokenType, b.tokenCategory)}`)
-      .join(' + ');
+    setParams(merged, { replace: true });
   };
 
-  const totalPaidBuckets = new Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null }>();
-  for (const p of payments) {
-    const key = tokenKey(p);
-    const existing = totalPaidBuckets.get(key);
-    if (existing) existing.amount += p.total_paid;
-    else totalPaidBuckets.set(key, { amount: p.total_paid, tokenType: p.token_type, tokenCategory: p.token_category });
-  }
-  const totalPaidDisplay = bucketsToString(totalPaidBuckets);
-  const totalPaidNumeric = payments.reduce((sum, p) => sum + p.total_paid, 0);
+  const inView = useMemo(
+    () => (rows ?? []).filter((row) => view === 'all' || row.role === view),
+    [rows, view],
+  );
 
-  const avgBuckets = new Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null; count: number }>();
-  for (const p of payments) {
-    const key = tokenKey(p);
-    const existing = avgBuckets.get(key);
-    if (existing) {
-      existing.amount += p.amount_per_period;
-      existing.count += 1;
-    } else {
-      avgBuckets.set(key, { amount: p.amount_per_period, tokenType: p.token_type, tokenCategory: p.token_category, count: 1 });
-    }
-  }
-  const avgPaymentDisplay = (() => {
-    const entries = Array.from(avgBuckets.values()).filter((b) => b.count > 0);
-    if (entries.length === 0) return '—';
-    return entries
-      .map((b) => {
-        const avg = b.amount / b.count;
-        return `${formatTokenAmount(avg, b.tokenType, b.tokenCategory, { noSuffix: true })} ${tokenSymbol(b.tokenType, b.tokenCategory)}`;
-      })
-      .join(' + ');
-  })();
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return inView.filter((row) => {
+      if (status !== 'all' && rowStatus(row, nowSeconds) !== status) return false;
+      if (!needle) return true;
+      const haystack = [row.recipient_name ?? '', row.recipient, row.sender].join(' ').toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [inView, query, status, nowSeconds]);
 
-  // Calculate monthly equivalent outflow, bucketed per token
-  const monthlyOutflowBuckets = new Map<TokenKey, { amount: number; tokenType: RecurringPayment['token_type']; tokenCategory?: string | null }>();
-  for (const p of activePayments.filter((p) => viewMode === 'sent')) {
-    const multiplier =
-      p.interval === 'DAILY' ? 30 :
-      p.interval === 'WEEKLY' ? 4.33 :
-      p.interval === 'BIWEEKLY' ? 2.17 :
-      p.interval === 'MONTHLY' ? 1 :
-      p.interval === 'YEARLY' ? 0.083 : 1;
-    const key = tokenKey(p);
-    const existing = monthlyOutflowBuckets.get(key);
-    const contribution = p.amount_per_period * multiplier;
-    if (existing) existing.amount += contribution;
-    else monthlyOutflowBuckets.set(key, { amount: contribution, tokenType: p.token_type, tokenCategory: p.token_category });
-  }
-  const totalMonthlyOutflowDisplay = bucketsToString(monthlyOutflowBuckets);
+  const open = status === 'all' ? filtered.filter((row) => !isDone(rowStatus(row, nowSeconds))) : filtered;
+  const done = status === 'all' ? filtered.filter((row) => isDone(rowStatus(row, nowSeconds))) : [];
 
-  // Filter payments
-  const filteredPayments = payments.filter((payment) => {
-    if (statusFilter !== 'all' && payment.status !== statusFilter) return false;
-    return true;
-  });
+  const filtering = status !== 'all' || query.trim() !== '';
+  const state: ListState = failed
+    ? 'error'
+    : rows === null
+      ? 'loading'
+      : filtered.length > 0
+        ? 'ready'
+        : inView.length === 0
+          ? 'empty'
+          : filtering
+            ? 'no-results'
+            : 'empty';
 
-  // Table columns
-  const columns: Column<RecurringPayment>[] = [
+  const bchRows = inView.filter((row) => paymentAsset(row).kind === 'bch');
+  const tokenCount = inView.length - bchRows.length;
+  const activeCount = inView.filter((row) => {
+    const key = rowStatus(row, nowSeconds);
+    return key === 'active' || key === 'readyToClaim' || key === 'scheduled';
+  }).length;
+  const readyBch = bchRows
+    .filter((row) => rowStatus(row, nowSeconds) === 'readyToClaim')
+    .reduce((sum, row) => sum + dueCount(row, nowSeconds) * Number(row.amount_per_period || 0), 0);
+  const paidOut = bchRows.filter((row) => row.role === 'sending').reduce((sum, row) => sum + Number(row.total_paid || 0), 0);
+  const claimedIn = bchRows
+    .filter((row) => row.role === 'receiving')
+    .reduce((sum, row) => sum + Number(row.total_paid || 0), 0);
+  const tokenSub = tokenCount > 0 ? tokenRowsLeftOut(tokenCount) : undefined;
+  const showStats = state !== 'empty' && state !== 'error' && (rows === null || inView.length > 0);
+  const tileState = rows === null ? 'loading' : 'ready';
+
+  const columns: Column<ListedPayment>[] = [
     {
-      key: 'payment_id',
-      label: 'Payment ID',
-      sortable: true,
-      render: (row) => (
-        <div>
-          <p className="font-sans font-medium text-textPrimary">
-            {row.recipient_name || formatLogicalId(row.payment_id)}
-          </p>
-          <p className="text-xs text-textMuted font-mono">{formatLogicalId(row.payment_id)}</p>
-        </div>
+      key: 'payment',
+      header: PAYMENTS_PAGE.columns.payment,
+      primary: true,
+      cell: (row) => (
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-title-item text-ink">{rowName(row)}</span>
+          <span className="text-small text-ink-muted">
+            {[row.role === 'sending' ? PAYMENTS_PAGE.youSend : PAYMENTS_PAGE.youReceive, INTERVAL_WORD[row.interval]]
+              .filter(Boolean)
+              .join(' · ')}
+          </span>
+        </span>
       ),
-    },
-    {
-      key: viewMode === 'sent' ? 'recipient' : 'sender',
-      label: viewMode === 'sent' ? 'Recipient' : 'Sender',
-      sortable: true,
-      render: (row) => {
-        const address = viewMode === 'sent' ? row.recipient : row.sender;
-        return (
-          <p className="font-mono text-sm text-textMuted">
-            {address.slice(0, 15)}...{address.slice(-10)}
-          </p>
-        );
-      },
-    },
-    {
-      key: 'amount_per_period',
-      label: 'Amount per Period',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => (
-        <div className="text-right">
-          <p className="font-display font-bold text-primary">
-            {formatTokenAmount(row.amount_per_period, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
-          </p>
-          <p className="text-xs text-textMuted font-mono">{row.interval}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'total_paid',
-      label: 'Total Paid',
-      sortable: true,
-      className: 'text-right',
-      render: (row) => (
-        <div className="text-right">
-          <p className="font-display font-bold text-accent">
-            {formatTokenAmount(row.total_paid, row.token_type, row.token_category, { noSuffix: true })} {tokenSymbol(row.token_type, row.token_category)}
-          </p>
-          <p className="text-xs text-textMuted font-mono">{row.payment_count} payments</p>
-        </div>
-      ),
-    },
-    {
-      key: 'next_payment_date',
-      label: 'Next Payment',
-      sortable: true,
-      render: (row) => {
-        if (row.status !== 'ACTIVE') {
-          return <span className="text-xs text-textMuted font-sans">-</span>;
-        }
-        const nextDate = new Date(row.next_payment_date * 1000);
-        const isUpcoming = nextDate.getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
-        return (
-          <div>
-            <p className={`text-sm font-sans ${isUpcoming ? 'text-accent font-medium' : 'text-textPrimary'}`}>
-              {nextDate.toLocaleDateString()}
-            </p>
-            <p className="text-xs text-textMuted font-mono">
-              {nextDate.toLocaleTimeString()}
-            </p>
-          </div>
-        );
-      },
     },
     {
       key: 'status',
-      label: 'Status',
-      sortable: true,
-      className: 'text-center',
-      render: (row) => {
-        const statusColors = {
-          ACTIVE: 'bg-accent/10 text-accent border-accent',
-          PAUSED: 'bg-secondary/10 text-secondary border-secondary',
-          CANCELLED: 'bg-surfaceAlt text-textMuted border-border',
-          COMPLETED: 'bg-primary/10 text-primary border-primary',
-        };
-        return (
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-sans font-medium border ${
-              statusColors[row.status]
-            }`}
-          >
-            {row.status}
-          </span>
-        );
-      },
+      header: PAYMENTS_PAGE.columns.status,
+      mobile: 'top',
+      cell: (row) => <StatusPill status={rowStatus(row, nowSeconds)} />,
     },
     {
-      key: 'latest_event',
-      label: 'Latest Activity',
-      render: (row) => {
-        if (!row.latest_event) {
-          return <span className="text-xs text-textMuted font-sans">No events</span>;
-        }
-
-        const latestTxHash = row.latest_event.tx_hash || row.tx_hash;
-        return (
-          <div className="space-y-1">
-            <p className="text-sm font-sans text-textPrimary">
-              {formatEventLabel(row.latest_event.event_type)}
-            </p>
-            <p className="text-xs text-textMuted font-mono">
-              {new Date(row.latest_event.created_at * 1000).toLocaleString()}
-            </p>
-            {latestTxHash && (
-              <a
-                href={getExplorerTxUrl(latestTxHash, network)}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(event) => event.stopPropagation()}
-                className="inline-flex items-center gap-1 text-xs text-primary hover:text-primaryHover font-medium"
-              >
-                View Tx
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-          </div>
-        );
-      },
+      key: 'each',
+      header: PAYMENTS_PAGE.columns.each,
+      align: 'end',
+      mobile: 'bottom-start',
+      cell: (row) => <Amount value={row.amount_per_period} asset={paymentAsset(row)} precision="list" />,
+    },
+    {
+      key: 'next',
+      header: PAYMENTS_PAGE.columns.next,
+      mobile: 'bottom-end',
+      cell: (row) => nextCell(row, rowStatus(row, nowSeconds), nowSeconds),
     },
   ];
 
-  const handleImport = (data: any[]) => {
-    console.log('Imported payments:', data);
-    navigate('/payments/batch-create', { state: { importedData: data } });
-  };
+  const createButton = (
+    <ButtonLink variant="primary" leadingIcon={Plus} to="/payments/create">
+      {PAYMENTS_PAGE.create}
+    </ButtonLink>
+  );
 
-  if (!wallet.isConnected) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center max-w-md">
-          <Repeat className="w-16 h-16 text-textMuted mx-auto mb-4" />
-          <h2 className="text-2xl font-display font-bold text-textPrimary mb-2">
-            Connect Your Wallet
-          </h2>
-          <p className="text-textMuted font-sans mb-6">
-            Please connect your wallet to view and manage recurring payments.
-          </p>
-          <Button onClick={openModal}>Connect Wallet</Button>
-        </div>
-      </div>
+  const empty =
+    view === 'receiving' ? (
+      <EmptyState
+        icon={Repeat}
+        title={PAYMENTS_PAGE.empty.receiving.title}
+        description={PAYMENTS_PAGE.empty.receiving.description}
+        learnMore={{ label: PAYMENTS_PAGE.howItWorks, to: '/help#someone-set-up-a-payment' }}
+      />
+    ) : (
+      <EmptyState
+        icon={Repeat}
+        title={view === 'sending' ? PAYMENTS_PAGE.empty.sending.title : PAYMENTS_PAGE.empty.all.title}
+        description={view === 'sending' ? PAYMENTS_PAGE.empty.sending.description : PAYMENTS_PAGE.empty.all.description}
+        example={PAYMENTS_PAGE.empty.all.example}
+        action={createButton}
+        learnMore={{ label: PAYMENTS_PAGE.howItWorks, to: '/help#stream-or-recurring-payment' }}
+      />
     );
-  }
 
   return (
-    <div className="min-h-screen pb-20 bg-background">
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-        {/* Header */}
-        <div className="mb-6 md:mb-8">
-          <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 md:gap-6 mb-6 md:mb-8">
-            <div>
-              <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-3 md:mb-4">
-                Recurring Payments
-              </h1>
-              <p className="font-sans text-textMuted max-w-2xl text-sm leading-relaxed">
-                Automated recurring payments for salaries, subscriptions, allowances, and invoices.
-              </p>
-            </div>
-            <Button
-              size="lg"
-              onClick={() => navigate('/payments/create')}
-              className="shadow-lg"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Create Payment
-            </Button>
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-            <StatsCard
-              label="Active Payments"
-              value={activePayments.length}
-              subtitle={`${payments.length} total`}
-              icon={Repeat}
-              color="primary"
+    <PageContainer>
+      <PageHeader
+        title={PAYMENTS_PAGE.title}
+        description={PAYMENTS_PAGE.description}
+        primaryAction={createButton}
+        secondaryActions={[
+          <ButtonLink key="pay-many" variant="secondary" leadingIcon={Users} to="/streams/batch-create">
+            {PAYMENTS_PAGE.payMany}
+          </ButtonLink>,
+        ]}
+      />
+      <Stack>
+        <ListToolbar
+          segments={
+            <SegmentedControl
+              label={PAYMENTS_PAGE.viewLabel}
+              options={VIEWS}
+              value={view}
+              onChange={(next) => update({ view: next, status: null })}
             />
-            <StatsCard
-              label="Total Paid"
-              value={totalPaidDisplay}
-              subtitle="All time"
-              icon={DollarSign}
-              color="accent"
-              progress={{
-                percentage: Math.min(100, (totalPaidNumeric / 100) * 100),
-                label: 'Paid',
-              }}
+          }
+          search={
+            <SearchInput
+              label={PAYMENTS_PAGE.searchLabel}
+              placeholder={PAYMENTS_PAGE.searchPlaceholder}
+              value={query}
+              onChange={(next) => update({ q: next })}
+              className="w-full"
             />
-            <StatsCard
-              label="Monthly Outflow"
-              value={totalMonthlyOutflowDisplay}
-              subtitle="Active payments"
-              icon={TrendingUp}
-              color="secondary"
+          }
+          chips={
+            <FilterChips
+              label={PAYMENTS_PAGE.filterLabel}
+              options={view === 'sending' ? FILTERS.filter((filter) => filter.value !== 'readyToClaim') : FILTERS}
+              selected={[status]}
+              onChange={(next) => update({ status: next[0] ?? null })}
             />
-            <StatsCard
-              label="Avg Payment"
-              value={avgPaymentDisplay}
-              subtitle="Per period"
-              icon={Zap}
-              color="muted"
-            />
-          </div>
+          }
+          stats={
+            showStats ? (
+          <StatRow>
+            <StatTile label={PAYMENTS_PAGE.stats.active} value={activeCount} state={tileState} />
+            {view !== 'sending' ? (
+              <StatTile
+                label={PAYMENTS_PAGE.stats.ready}
+                value={<Amount value={readyBch} asset={BCH} size="lg" precision="list" />}
+                sub={tokenSub}
+                state={tileState}
+              />
+            ) : null}
+            {view !== 'receiving' ? (
+              <StatTile
+                label={PAYMENTS_PAGE.stats.paid}
+                value={<Amount value={paidOut} asset={BCH} size="lg" precision="list" />}
+                sub={tokenSub}
+                state={tileState}
+              />
+            ) : null}
+            {view !== 'sending' ? (
+              <StatTile
+                label={PAYMENTS_PAGE.stats.received}
+                value={<Amount value={claimedIn} asset={BCH} size="lg" precision="list" />}
+                sub={tokenSub}
+                state={tileState}
+              />
+            ) : null}
+          </StatRow>
+            ) : null
+          }
+        />
 
-          {/* View Mode Toggle */}
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <Button
-              variant={viewMode === 'sent' ? 'primary' : 'outline'}
-              onClick={() => setViewMode('sent')}
-              className="flex items-center gap-2"
-            >
-              <DollarSign className="w-4 h-4" />
-              Payments Sent
-            </Button>
-            <Button
-              variant={viewMode === 'received' ? 'primary' : 'outline'}
-              onClick={() => setViewMode('received')}
-              className="flex items-center gap-2"
-            >
-              <Calendar className="w-4 h-4" />
-              Payments Received
-            </Button>
-          </div>
-
-          {/* Status Filter */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-textMuted font-sans">Status:</span>
-            {(['all', 'ACTIVE', 'PAUSED', 'COMPLETED', 'CANCELLED'] as const).map((status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                className={`px-3 py-1.5 rounded-md text-xs font-sans font-medium transition-colors ${
-                  statusFilter === status
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'bg-surface text-textSecondary hover:bg-surfaceAlt border border-border'
-                }`}
-              >
-                {status}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Data Table */}
-        {loading ? (
-          <SkeletonTable rows={6} columns={5} />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={filteredPayments}
-            onRowClick={(payment) => navigate(`/payments/${payment.id}`)}
-            enableSearch
-            enableExport
-            enableImport
-            onImport={handleImport}
-            emptyMessage="No recurring payments found. Create your first payment to get started."
-          />
-        )}
-      </div>
-    </div>
+        <List
+          label={PAYMENTS_PAGE.listLabel}
+          columns={columns}
+          rows={open}
+          rowKey={(row) => row.id}
+          rowHref={(row) => `/payments/${row.id}`}
+          state={state}
+          collapsed={done.length > 0 ? { label: showFinished(done.length), rows: done } : undefined}
+          empty={empty}
+          noResults={<NoResults thing={PAYMENTS_PAGE.noResultsThing} onClear={() => update({ status: null, q: null })} />}
+          error={<ErrorState title={PAYMENTS_PAGE.error.title} reason={PAYMENTS_PAGE.error.reason} onRetry={load} />}
+        />
+      </Stack>
+    </PageContainer>
   );
 }

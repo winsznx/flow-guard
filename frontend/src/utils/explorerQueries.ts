@@ -1,13 +1,12 @@
 /**
- * Typed fetch wrappers for the FlowGuard Explorer backend.
- *
- * Mirrors the response shapes documented in backend/src/api/explorer.ts and
- * backend/src/api/explorer-advanced.ts so the page can drop every `any` cast.
- *
- * All fetchers normalise paths through a single `/api` prefix and throw
- * `ExplorerApiError` on non-2xx responses so callers can render specific
- * empty / error states.
+ * Typed fetch wrappers for the Explorer endpoints in backend/src/api/explorer-advanced.ts.
+ * Every fetcher throws ExplorerApiError, with status 0 when the request never got a response,
+ * so pages can map the cause to plain copy and keep the raw detail out of the UI.
+ * Responses are read field by field: a missing or malformed field becomes null (or drops the row)
+ * instead of reaching the page with the wrong shape.
  */
+
+import type { ExplorerLoadProblem, ExplorerTransactionEntity } from '../copy/explorer';
 
 const API_BASE = '/api';
 
@@ -23,26 +22,104 @@ export class ExplorerApiError extends Error {
   }
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      if (body?.error && typeof body.error === 'string') detail = body.error;
-    } catch {
-      // body might not be JSON - swallow and surface statusText.
-    }
-    throw new ExplorerApiError(detail, response.status, path);
+async function readErrorDetail(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json();
+    if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string')
+      return body.error;
+  } catch (parseError) {
+    return parseError instanceof Error
+      ? `${response.statusText} (${parseError.message})`
+      : response.statusText;
   }
-  return (await response.json()) as T;
+  return response.statusText;
+}
+
+async function fetchJson(path: string): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`);
+  } catch (networkError) {
+    throw new ExplorerApiError(
+      networkError instanceof Error ? networkError.message : 'Network error',
+      0,
+      path
+    );
+  }
+  if (!response.ok) {
+    throw new ExplorerApiError(await readErrorDetail(response), response.status, path);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch (parseError) {
+    throw new ExplorerApiError(
+      parseError instanceof Error ? parseError.message : 'Unreadable response',
+      response.status,
+      path
+    );
+  }
+}
+
+type Fields = Record<string, unknown>;
+
+function isFields(value: unknown): value is Fields {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function fieldsOf(value: unknown): Fields {
+  return isFields(value) ? value : {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function readId(value: unknown): string | null {
+  if (typeof value === 'string' && value !== '') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readTime(value: unknown): string | number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/** Rows that can't be read are dropped; a missing list is null so the page can tell it apart from an empty one. */
+function readRows<T>(value: unknown, readRow: (fields: Fields) => T | null): T[] | null {
+  if (!Array.isArray(value)) return null;
+  const rows: T[] = [];
+  for (const item of value) {
+    if (!isFields(item)) continue;
+    const row = readRow(item);
+    if (row !== null) rows.push(row);
+  }
+  return rows;
+}
+
+export function explorerLoadProblem(error: unknown): ExplorerLoadProblem {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'offline';
+  if (!(error instanceof ExplorerApiError)) return 'other';
+  if (error.status === 429) return 'rateLimited';
+  if (error.status >= 500) return 'server';
+  if (error.status === 0) return 'offline';
+  return 'other';
 }
 
 type QueryValue = string | number | boolean | undefined | null;
 
-function toQueryString(params: Record<string, QueryValue> | object): string {
+function toQueryString(params: Record<string, QueryValue>): string {
   const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params as Record<string, QueryValue>)) {
+  for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === '') continue;
     search.set(key, String(value));
   }
@@ -50,62 +127,103 @@ function toQueryString(params: Record<string, QueryValue> | object): string {
   return result ? `?${result}` : '';
 }
 
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/stats                                             */
-/* ------------------------------------------------------------------ */
+export interface ExplorerStatsCounts {
+  total: number | null;
+  active: number | null;
+  recent24h: number | null;
+}
 
 export interface ExplorerStatsResponse {
-  network: {
-    blockHeight: number;
-    network: 'chipnet' | 'mainnet' | string;
-  };
-  flowguard: {
-    vaults: { total: number; totalValue: number; recent24h: number };
-    streams: { total: number; active: number; totalVolume: number; recent24h: number };
-    proposals: { total: number; active: number; totalAmount: number; recent24h: number };
+  vaults: ExplorerStatsCounts;
+  streams: ExplorerStatsCounts;
+  proposals: ExplorerStatsCounts;
+}
+
+function readStatsCounts(value: unknown): ExplorerStatsCounts {
+  const fields = fieldsOf(value);
+  return {
+    total: readNumber(fields.total),
+    active: readNumber(fields.active),
+    recent24h: readNumber(fields.recent24h),
   };
 }
 
-export function getExplorerStats(): Promise<ExplorerStatsResponse> {
-  return fetchJson<ExplorerStatsResponse>('/explorer/stats');
+export async function getExplorerStats(): Promise<ExplorerStatsResponse> {
+  const flowguard = fieldsOf(fieldsOf(await fetchJson('/explorer/stats')).flowguard);
+  return {
+    vaults: readStatsCounts(flowguard.vaults),
+    streams: readStatsCounts(flowguard.streams),
+    proposals: readStatsCounts(flowguard.proposals),
+  };
 }
-
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/transactions                                      */
-/* ------------------------------------------------------------------ */
 
 export type ExplorerTxType = 'VAULT' | 'STREAM' | 'PAYMENT' | 'AIRDROP' | 'PROPOSAL';
-export type ExplorerTokenType = 'BCH' | 'CASHTOKENS' | string;
+
+const TX_TYPES: readonly ExplorerTxType[] = ['VAULT', 'STREAM', 'PAYMENT', 'AIRDROP', 'PROPOSAL'];
 
 export interface ExplorerLatestEvent {
+  entity_id: string | null;
   event_type: string;
-  status?: string | null;
-  tx_hash?: string | null;
-  created_at: string | number;
+  tx_hash: string | null;
+  created_at: string | number | null;
 }
 
 export interface ExplorerTransactionRow {
   id: string;
-  name?: string | null;
-  sender?: string | null;
-  recipient?: string | null;
-  amount: number;
-  token_type?: ExplorerTokenType | null;
-  token_category?: string | null;
+  name: string | null;
+  sender: string | null;
+  recipient: string | null;
+  amount: number | null;
+  token_type: string | null;
+  token_category: string | null;
   tx_type: ExplorerTxType;
   status: string;
-  created_at: number;
-  tx_hash?: string | null;
-  contract_address?: string | null;
-  vault_id?: string | null;
-  latest_event?: ExplorerLatestEvent | null;
+  created_at: number | string | null;
+  tx_hash: string | null;
+  contract_address: string | null;
+  vault_id: string | null;
+  latest_event: ExplorerLatestEvent | null;
 }
 
 export interface ExplorerTransactionsResponse {
   transactions: ExplorerTransactionRow[];
   total: number;
-  limit: number;
-  offset: number;
+  /** Rows on this page that couldn't be read and were left out. */
+  dropped: number;
+}
+
+function readLatestEvent(value: unknown): ExplorerLatestEvent | null {
+  if (!isFields(value)) return null;
+  const eventType = readString(value.event_type);
+  if (!eventType) return null;
+  return {
+    entity_id: readId(value.entity_id),
+    event_type: eventType,
+    tx_hash: readString(value.tx_hash),
+    created_at: readTime(value.created_at),
+  };
+}
+
+function readTransactionRow(fields: Fields): ExplorerTransactionRow | null {
+  const id = readId(fields.id);
+  const txType = TX_TYPES.find((type) => type === fields.tx_type);
+  if (!id || !txType) return null;
+  return {
+    id,
+    name: readString(fields.name),
+    sender: readString(fields.sender),
+    recipient: readString(fields.recipient),
+    amount: readNumber(fields.amount),
+    token_type: readString(fields.token_type),
+    token_category: readString(fields.token_category),
+    tx_type: txType,
+    status: readString(fields.status) ?? '',
+    created_at: readTime(fields.created_at),
+    tx_hash: readString(fields.tx_hash),
+    contract_address: readString(fields.contract_address),
+    vault_id: readId(fields.vault_id),
+    latest_event: readLatestEvent(fields.latest_event),
+  };
 }
 
 export type ExplorerSortField = 'time' | 'amount' | 'type' | 'status';
@@ -115,227 +233,222 @@ export interface ExplorerTransactionsQuery {
   type?: 'vault' | 'stream' | 'payment' | 'airdrop' | 'proposal';
   status?: string;
   address?: string;
-  minAmount?: number;
-  maxAmount?: number;
-  startDate?: string;
-  endDate?: string;
   sort?: ExplorerSortField;
   order?: ExplorerSortOrder;
   limit?: number;
   offset?: number;
 }
 
-export function getExplorerTransactions(
-  query: ExplorerTransactionsQuery = {},
+export async function getExplorerTransactions(
+  query: ExplorerTransactionsQuery = {}
 ): Promise<ExplorerTransactionsResponse> {
-  return fetchJson<ExplorerTransactionsResponse>(
-    `/explorer/transactions${toQueryString(query)}`,
-  );
+  const path = `/explorer/transactions${toQueryString({ ...query })}`;
+  const fields = fieldsOf(await fetchJson(path));
+  const transactions = readRows(fields.transactions, readTransactionRow);
+  if (transactions === null)
+    throw new ExplorerApiError('Response has no transactions list', 200, path);
+  const sent = Array.isArray(fields.transactions) ? fields.transactions.length : 0;
+  return {
+    transactions,
+    total: Math.max(readNumber(fields.total) ?? 0, transactions.length),
+    dropped: sent - transactions.length,
+  };
 }
-
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/address/:address                                  */
-/* ------------------------------------------------------------------ */
 
 export interface ExplorerAddressVault {
   vault_id: string;
-  id?: string;
-  name: string;
-  creator: string;
-  contract_address?: string | null;
-  total_deposit: number;
-  created_at: string | number;
+  name: string | null;
+  creator: string | null;
+  contract_address: string | null;
+  total_deposit: number | null;
+  created_at: string | number | null;
 }
 
 export interface ExplorerAddressStream {
-  id?: string;
+  /** The stream's record UUID, which activity events use as `entity_id`. Null until the endpoint returns it. */
+  id: string | null;
   stream_id: string;
-  sender: string;
-  recipient: string;
-  total_amount: number;
+  sender: string | null;
+  recipient: string | null;
+  total_amount: number | null;
+  token_type: string | null;
+  token_category: string | null;
   status: string;
-  stream_type?: string;
-  created_at: string | number;
+  created_at: string | number | null;
 }
 
 export interface ExplorerAddressProposal {
   id: string;
-  vault_id: string;
-  recipient: string;
-  amount: number;
-  reason?: string | null;
+  vault_id: string | null;
+  recipient: string | null;
+  amount: number | null;
+  reason: string | null;
   status: string;
-  created_at: string | number;
+  created_at: string | number | null;
 }
 
+/** Every part is null when the server left it out, so the drawer can say that part didn't load. */
 export interface ExplorerAddressResponse {
-  address: string;
-  balance: number;
-  balanceSat: number;
+  balance: number | null;
   activity: {
-    vaultsCreated: number;
-    vaultsAsSigner: number;
-    streamsSent: number;
-    streamsReceived: number;
-    proposalsReceived: number;
+    vaultsCreated: number | null;
+    streamsSent: number | null;
+    streamsReceived: number | null;
+    proposalsReceived: number | null;
   };
-  totals: {
-    sent: number;
-    received: number;
-    proposed: number;
-  };
-  vaults: ExplorerAddressVault[];
+  vaults: ExplorerAddressVault[] | null;
   streams: {
-    sent: ExplorerAddressStream[];
-    received: ExplorerAddressStream[];
+    sent: ExplorerAddressStream[] | null;
+    received: ExplorerAddressStream[] | null;
   };
-  proposals: ExplorerAddressProposal[];
+  proposals: ExplorerAddressProposal[] | null;
 }
 
-export function getExplorerAddress(address: string): Promise<ExplorerAddressResponse> {
-  return fetchJson<ExplorerAddressResponse>(`/explorer/address/${encodeURIComponent(address)}`);
+function readVault(fields: Fields): ExplorerAddressVault | null {
+  const id = readId(fields.vault_id);
+  if (!id) return null;
+  return {
+    vault_id: id,
+    name: readString(fields.name),
+    creator: readString(fields.creator),
+    contract_address: readString(fields.contract_address),
+    total_deposit: readNumber(fields.total_deposit),
+    created_at: readTime(fields.created_at),
+  };
 }
 
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/contract/:address                                 */
-/* ------------------------------------------------------------------ */
-
-export interface ExplorerContractResponse {
-  contract: {
-    address: string;
-    type: string;
-    balance: number;
-    balanceSat: number;
-    utxoCount: number;
+function readStream(fields: Fields): ExplorerAddressStream | null {
+  const id = readId(fields.stream_id);
+  if (!id) return null;
+  return {
+    id: readId(fields.id),
+    stream_id: id,
+    sender: readString(fields.sender),
+    recipient: readString(fields.recipient),
+    total_amount: readNumber(fields.total_amount),
+    token_type: readString(fields.token_type),
+    token_category: readString(fields.token_category),
+    status: readString(fields.status) ?? '',
+    created_at: readTime(fields.created_at),
   };
-  vault: {
-    id: string;
-    name: string;
-    creator: string;
-    signerCount: number;
-    approvalThreshold: number;
-    totalDeposit: number;
-    createdAt: string | number;
-  };
-  stats: {
-    proposalCount: number;
-    pendingProposals: number;
-    totalProposed: number;
-    totalExecuted: number;
-    cycleCount: number;
-    transactionCount: number;
-  };
-  proposals: ExplorerAddressProposal[];
-  cycles: Array<Record<string, unknown>>;
-  transactions: Array<Record<string, unknown>>;
 }
 
-export function getExplorerContract(address: string): Promise<ExplorerContractResponse> {
-  return fetchJson<ExplorerContractResponse>(`/explorer/contract/${encodeURIComponent(address)}`);
+function readProposal(fields: Fields): ExplorerAddressProposal | null {
+  const id = readId(fields.id);
+  if (!id) return null;
+  return {
+    id,
+    vault_id: readId(fields.vault_id),
+    recipient: readString(fields.recipient),
+    amount: readNumber(fields.amount),
+    reason: readString(fields.reason),
+    status: readString(fields.status) ?? '',
+    created_at: readTime(fields.created_at),
+  };
 }
 
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/search                                            */
-/* ------------------------------------------------------------------ */
+export async function getExplorerAddress(address: string): Promise<ExplorerAddressResponse> {
+  const fields = fieldsOf(await fetchJson(`/explorer/address/${encodeURIComponent(address)}`));
+  const activity = fieldsOf(fields.activity);
+  const streams = fieldsOf(fields.streams);
+  return {
+    balance: readNumber(fields.balance),
+    activity: {
+      vaultsCreated: readNumber(activity.vaultsCreated),
+      streamsSent: readNumber(activity.streamsSent),
+      streamsReceived: readNumber(activity.streamsReceived),
+      proposalsReceived: readNumber(activity.proposalsReceived),
+    },
+    vaults: readRows(fields.vaults, readVault),
+    streams: {
+      sent: readRows(streams.sent, readStream),
+      received: readRows(streams.received, readStream),
+    },
+    proposals: readRows(fields.proposals, readProposal),
+  };
+}
+
+const SEARCH_ENTITIES: readonly ExplorerTransactionEntity[] = [
+  'stream',
+  'payment',
+  'airdrop',
+  'reward',
+  'bounty',
+  'grant',
+];
+
+/** One FlowGuard event recorded against a transaction ID, from the search `transactions` bucket. */
+export interface ExplorerSearchTransaction {
+  tx_hash: string;
+  entity_type: ExplorerTransactionEntity;
+  entity_id: string;
+  event_type: string;
+  created_at: string | number | null;
+}
 
 export interface ExplorerSearchResponse {
-  query: string;
-  results: {
-    vaults: ExplorerAddressVault[];
-    streams: ExplorerAddressStream[];
-    proposals: ExplorerAddressProposal[];
-    addresses: Array<{ address: string }>;
-  };
-  totalResults: number;
+  vaults: ExplorerAddressVault[];
+  streams: ExplorerAddressStream[];
+  proposals: ExplorerAddressProposal[];
+  transactions: ExplorerSearchTransaction[];
 }
 
-export function searchExplorer(query: string): Promise<ExplorerSearchResponse> {
-  return fetchJson<ExplorerSearchResponse>(`/explorer/search${toQueryString({ q: query })}`);
-}
-
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/timeline                                          */
-/* ------------------------------------------------------------------ */
-
-export type ExplorerTimelineEventType =
-  | 'VAULT_CREATED'
-  | 'STREAM_CREATED'
-  | 'PROPOSAL_CREATED';
-
-export interface ExplorerTimelineEvent {
-  type: ExplorerTimelineEventType;
-  id: string;
-  name?: string | null;
-  creator?: string | null;
-  sender?: string | null;
-  recipient?: string | null;
-  vaultId?: string | null;
-  reason?: string | null;
-  amount: number;
-  timestamp: string | number;
-}
-
-export interface ExplorerTimelineResponse {
-  timeline: ExplorerTimelineEvent[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export function getExplorerTimeline(
-  query: { limit?: number; offset?: number } = {},
-): Promise<ExplorerTimelineResponse> {
-  return fetchJson<ExplorerTimelineResponse>(`/explorer/timeline${toQueryString(query)}`);
-}
-
-/* ------------------------------------------------------------------ */
-/* GET /api/explorer/activity (legacy aggregate feed)                  */
-/* ------------------------------------------------------------------ */
-
-export type ExplorerActivityType = 'STREAM' | 'PAYMENT' | 'AIRDROP' | 'TREASURY';
-
-export interface ExplorerActivityRow {
-  id: string;
-  stream_id: string;
-  sender: string;
-  recipient: string;
-  token_type: string;
-  token_category?: string | null;
-  total_amount: number;
-  vested_amount: number;
-  progress_percentage: number;
-  stream_type: string;
-  status: string;
-  created_at: number;
-  activity_type: ExplorerActivityType;
-}
-
-export interface ExplorerActivityResponse {
-  streams: ExplorerActivityRow[];
-  stats: {
-    totalVolume: number;
-    activeCount: number;
-    completedCount: number;
-    totalCount: number;
+function readSearchTransaction(fields: Fields): ExplorerSearchTransaction | null {
+  const txHash = readString(fields.tx_hash);
+  const entityId = readId(fields.entity_id);
+  const entityType = SEARCH_ENTITIES.find(
+    (entity) => entity === readString(fields.entity_type)?.toLowerCase()
+  );
+  if (!txHash || !entityId || !entityType) return null;
+  return {
+    tx_hash: txHash,
+    entity_type: entityType,
+    entity_id: entityId,
+    event_type: readString(fields.event_type) ?? '',
+    created_at: readTime(fields.created_at),
   };
 }
 
-export interface ExplorerActivityQuery {
-  type?: 'vesting' | 'payments' | 'airdrops' | 'treasuries';
-  token?: string;
-  status?: string;
-  limit?: number;
+export async function searchExplorer(query: string): Promise<ExplorerSearchResponse> {
+  const results = fieldsOf(
+    fieldsOf(await fetchJson(`/explorer/search${toQueryString({ q: query })}`)).results
+  );
+  return {
+    vaults: readRows(results.vaults, readVault) ?? [],
+    streams: readRows(results.streams, readStream) ?? [],
+    proposals: readRows(results.proposals, readProposal) ?? [],
+    transactions: readRows(results.transactions, readSearchTransaction) ?? [],
+  };
 }
 
-export function getExplorerActivity(
-  query: ExplorerActivityQuery = {},
-): Promise<ExplorerActivityResponse> {
-  return fetchJson<ExplorerActivityResponse>(`/explorer/activity${toQueryString(query)}`);
+export function looksLikeBchAddress(value: string): boolean {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return false;
+  return /^(?:(?:bitcoincash|bchtest|bchreg):)?[qpzr][a-z0-9]{40,90}$/.test(trimmed);
 }
 
-/* ------------------------------------------------------------------ */
-/* GET /api/streams/activity - canonical event-sourced feed            */
-/* ------------------------------------------------------------------ */
+export function looksLikeTxHash(value: string): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(value.trim());
+}
+
+export type DetectedQueryKind = 'address' | 'transaction' | 'text';
+
+export function detectQueryKind(value: string): DetectedQueryKind {
+  const trimmed = value.trim();
+  if (looksLikeBchAddress(trimmed)) return 'address';
+  if (looksLikeTxHash(trimmed)) return 'transaction';
+  return 'text';
+}
+
+/**
+ * Security test records sit in the public mainnet data until they're purged (PLAN 5.2).
+ * The Explorer hides them by name meanwhile.
+ */
+const TEST_RECORD_NAME = /ABTEST-SECURITY-TEST|PLEASE-PURGE/i;
+
+export function isHiddenTestRecord(name: string | null | undefined): boolean {
+  return Boolean(name && TEST_RECORD_NAME.test(name));
+}
 
 export interface StreamActivityStream {
   stream_id: string;
@@ -344,12 +457,6 @@ export interface StreamActivityStream {
   recipient: string;
   stream_type: string;
   schedule_template?: string | null;
-  launch_context?: {
-    source: string;
-    title?: string;
-    description?: string;
-    preferredLane?: string;
-  } | null;
 }
 
 export interface StreamActivityEvent {
@@ -367,7 +474,6 @@ export interface StreamActivityEvent {
 }
 
 export interface StreamActivityResponse {
-  success?: boolean;
   events: StreamActivityEvent[];
   total: number;
   page: number;
@@ -380,73 +486,15 @@ export interface StreamActivityResponse {
 export interface StreamActivityQuery {
   address?: string;
   vaultId?: string;
-  treasury?: boolean;
-  contextSource?: string;
   eventType?: string;
-  dateFrom?: number | string;
-  dateTo?: number | string;
   limit?: number;
   page?: number;
 }
 
-export function getStreamActivity(
-  query: StreamActivityQuery = {},
+export async function getStreamActivity(
+  query: StreamActivityQuery = {}
 ): Promise<StreamActivityResponse> {
-  return fetchJson<StreamActivityResponse>(`/streams/activity${toQueryString(query)}`);
-}
-
-/* ------------------------------------------------------------------ */
-/* Local helpers                                                       */
-/* ------------------------------------------------------------------ */
-
-/**
- * Coerce a created_at field that may be (a) unix seconds, (b) unix
- * milliseconds, or (c) an ISO string into a millisecond timestamp.
- */
-export function toUnixMs(value: string | number | null | undefined): number {
-  if (value === null || value === undefined) return NaN;
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value > 1_000_000_000_000 ? value : value * 1000;
-  }
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) {
-    return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
-  }
-  const parsed = Date.parse(String(value));
-  return Number.isFinite(parsed) ? parsed : NaN;
-}
-
-/**
- * Best-effort detection of a Bitcoin Cash address. Accepts mainnet and
- * chipnet prefixes plus prefixless cashaddrs.
- */
-export function looksLikeBchAddress(value: string): boolean {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return false;
-  if (/^bitcoincash:[qpzr][a-z0-9]{40,90}$/.test(trimmed)) return true;
-  if (/^bchtest:[qpzr][a-z0-9]{40,90}$/.test(trimmed)) return true;
-  if (/^bchreg:[qpzr][a-z0-9]{40,90}$/.test(trimmed)) return true;
-  if (/^[qpzr][a-z0-9]{40,90}$/.test(trimmed)) return true;
-  return false;
-}
-
-/** Best-effort detection of a Bitcoin Cash transaction hash. */
-export function looksLikeTxHash(value: string): boolean {
-  return /^[0-9a-fA-F]{64}$/.test(value.trim());
-}
-
-/** Best-effort detection of a CashTokens category (32-byte hex). */
-export function looksLikeTokenCategory(value: string): boolean {
-  return looksLikeTxHash(value);
-}
-
-export type DetectedQueryKind = 'address' | 'tx' | 'category' | 'text';
-
-export function detectQueryKind(value: string): DetectedQueryKind {
-  const trimmed = value.trim();
-  if (!trimmed) return 'text';
-  if (looksLikeBchAddress(trimmed)) return 'address';
-  if (looksLikeTxHash(trimmed)) return 'tx';
-  if (looksLikeTokenCategory(trimmed)) return 'category';
-  return 'text';
+  return (await fetchJson(
+    `/streams/activity${toQueryString({ ...query })}`
+  )) as StreamActivityResponse;
 }

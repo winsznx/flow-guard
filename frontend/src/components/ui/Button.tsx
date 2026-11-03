@@ -1,69 +1,218 @@
-import React from 'react';
-import { Loader2 } from 'lucide-react';
+import React, { useId } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import { Icon, LoaderCircle } from './Icon';
+import {
+  BUTTON_BASE,
+  BUTTON_ICON_SIZE,
+  BUTTON_INACTIVE,
+  BUTTON_LINK_BASE,
+  BUTTON_LINK_INACTIVE,
+  BUTTON_REASON,
+  BUTTON_SIZES,
+  BUTTON_VARIANTS,
+} from './classes';
+import { cx } from './cx';
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost';
-  size?: 'sm' | 'md' | 'lg';
+export {
+  BUTTON_BASE,
+  BUTTON_ICON_SIZE,
+  BUTTON_INACTIVE,
+  BUTTON_LINK_BASE,
+  BUTTON_LINK_INACTIVE,
+  BUTTON_REASON,
+  BUTTON_SIZES,
+  BUTTON_VARIANTS,
+} from './classes';
+import type { ActionState, Size } from './types';
+
+export type ButtonVariant =
+  | 'primary'
+  | 'secondary'
+  | 'ghost'
+  | 'danger'
+  | 'danger-quiet'
+  | 'on-inverse'
+  | 'on-inverse-secondary'
+  | 'link';
+
+type AriaPassthrough = Pick<
+  React.AriaAttributes,
+  'aria-expanded' | 'aria-controls' | 'aria-haspopup' | 'aria-pressed' | 'aria-describedby'
+>;
+
+export type ButtonProps = {
+  variant?: ButtonVariant;
+  size?: Size;
+  leadingIcon?: LucideIcon;
+  trailingIcon?: LucideIcon;
+  fullWidth?: boolean;
+  /** For `variant="link"` on its own line, not inside running text: it then gets a full touch target on phones. */
+  standalone?: boolean;
+  type?: 'button' | 'submit';
+  form?: string;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   children: React.ReactNode;
+  className?: string;
+} & AriaPassthrough &
+  ActionState;
+
+type LegacyButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'type'> & {
+  variant?: ButtonVariant | 'outline';
+  size?: Size;
+  type?: 'button' | 'submit' | 'reset';
   loading?: boolean;
+  children: React.ReactNode;
+};
+
+/** A link-style action on its own line lays out as a row, so the touch-target min-height applies. */
+const STANDALONE_LINK_BASE = BUTTON_LINK_BASE.replace(/^inline /, 'inline-flex items-center gap-1 ');
+
+const LEGACY_BASE = cx(BUTTON_BASE.replace(' whitespace-nowrap', ''), 'text-center');
+
+const LEGACY_SIZES = {
+  sm: 'min-h-control-sm px-3 py-1.5 text-label',
+  md: 'min-h-control-md px-4 py-2 text-label',
+  lg: 'min-h-control-lg px-6 py-2.5 text-body font-medium',
+} as const;
+
+function joinIds(...ids: (string | undefined | false)[]): string | undefined {
+  const joined = ids.filter(Boolean).join(' ');
+  return joined || undefined;
 }
 
-/**
- * Button component following FlowGuard Sage palette design system
- *
- * DESIGN RULES:
- * - Uses ONLY Sage palette colors (#F1F3E0, #D2DCB6, #A1BC98, #778873)
- * - All colors via Tailwind classes from globals.css tokens
- * - NO hardcoded hex values
- *
- * Variants:
- * - primary: Sage dark (brand700 #778873) bg, hover lighter
- * - secondary: Sage light (brand100 #D2DCB6) bg
- * - outline: Transparent with Sage border
- * - ghost: Transparent with hover Sage soft bg
- */
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'primary', size = 'md', children, className = '', disabled, loading, ...props }, ref) => {
-    const baseStyles =
-      'font-semibold rounded-md transition-all duration-200 ' +
-      'focus:outline-none focus-visible:ring-2 focus-visible:ring-focusRing focus-visible:ring-offset-2 ' +
-      'inline-flex items-center justify-center font-mono ' +
-      'disabled:opacity-50 disabled:cursor-not-allowed';
+function isLegacy(props: ButtonProps | LegacyButtonProps): props is LegacyButtonProps {
+  return props.variant === 'outline' || 'loading' in props;
+}
 
-    const variants = {
-      primary:
-        'bg-primary text-white hover:bg-primaryHover ' +
-        'hover:shadow-md hover:-translate-y-0.5 active:translate-y-0',
-      secondary:
-        'bg-primarySoft text-textPrimary hover:bg-brand-300 ' +
-        'hover:shadow-md hover:-translate-y-0.5 active:translate-y-0',
-      outline:
-        'border-2 border-border text-textPrimary bg-white ' +
-        'hover:bg-surfaceAlt hover:border-borderHover ' +
-        'hover:shadow-sm active:bg-primarySoft',
-      ghost:
-        'bg-transparent text-textSecondary hover:text-textPrimary ' +
-        'hover:bg-surfaceAlt active:bg-primarySoft',
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps | LegacyButtonProps>(
+  function Button(props, ref) {
+    const reasonId = useId();
+    const legacy = isLegacy(props);
+    // Unmigrated pages leave out the variant and expect the old filled button that wraps its label (PLAN 1.1).
+    const legacyLook = legacy || props.variant === undefined;
+    const {
+      variant: rawVariant = 'primary',
+      size = 'md',
+      type = 'button',
+      children,
+      className,
+      onClick,
+      disabled = false,
+    } = props;
+    const variant: ButtonVariant = rawVariant === 'outline' ? 'secondary' : rawVariant;
+
+    const leadingIcon = legacy ? undefined : props.leadingIcon;
+    const trailingIcon = legacy ? undefined : props.trailingIcon;
+    const fullWidth = legacy ? false : props.fullWidth;
+    const standalone = legacy ? false : Boolean(props.standalone);
+    const busy = legacy ? Boolean(props.loading) : Boolean(props.busy);
+    const busyLabel = legacy ? undefined : props.busyLabel;
+    const disabledReason = 'disabledReason' in props ? props.disabledReason : undefined;
+
+    const nativeRest = nativeButtonAttributes(props);
+
+    const inactive = Boolean(disabled);
+    const blocked = inactive || busy;
+    const showReason = inactive && Boolean(disabledReason);
+    const isLink = variant === 'link';
+    const iconSize = BUTTON_ICON_SIZE[size];
+
+    const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+      if (blocked) {
+        e.preventDefault();
+        return;
+      }
+      onClick?.(e);
     };
 
-    const sizes = {
-      sm: 'px-3 py-2.5 text-sm min-h-[40px] md:min-h-[36px] md:py-2',
-      md: 'px-4 py-3 text-sm md:text-base min-h-[44px] md:py-2.5 md:min-h-[40px]',
-      lg: 'px-5 py-3.5 text-base md:px-6 md:text-lg md:py-3 min-h-[48px]',
-    };
+    const leading = busy ? (
+      <span className="inline-flex size-4 animate-spin">
+        <Icon icon={LoaderCircle} size={16} />
+      </span>
+    ) : leadingIcon ? (
+      <Icon icon={leadingIcon} size={iconSize} />
+    ) : null;
+    const trailing = trailingIcon ? <Icon icon={trailingIcon} size={iconSize} /> : null;
 
-    return (
+    const content =
+      busy && busyLabel ? (
+        <span className="grid">
+          <span className="invisible col-start-1 row-start-1 inline-flex items-center justify-center gap-2" aria-hidden="true">
+            {leadingIcon ? <Icon icon={leadingIcon} size={iconSize} /> : null}
+            {children}
+            {trailing}
+          </span>
+          <span className="col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
+            {leading}
+            {busyLabel}
+          </span>
+        </span>
+      ) : (
+        <>
+          {leading}
+          {children}
+          {trailing}
+        </>
+      );
+
+    const look = isLink
+      ? cx(standalone ? STANDALONE_LINK_BASE : BUTTON_LINK_BASE, inactive ? BUTTON_LINK_INACTIVE : BUTTON_VARIANTS.link)
+      : cx(legacyLook ? LEGACY_BASE : BUTTON_BASE, (legacyLook ? LEGACY_SIZES : BUTTON_SIZES)[size], inactive ? BUTTON_INACTIVE : BUTTON_VARIANTS[variant], busy && 'cursor-progress');
+
+    const button = (
       <button
+        {...nativeRest}
         ref={ref}
-        disabled={disabled || loading}
-        className={`${baseStyles} ${variants[variant]} ${sizes[size]} ${className}`}
-        {...props}
+        type={type}
+        className={cx(look, fullWidth && 'w-full', !disabledReason && className)}
+        aria-disabled={inactive || undefined}
+        aria-busy={busy || undefined}
+        aria-describedby={joinIds(props['aria-describedby'], showReason && reasonId)}
+        data-inline={(isLink && !standalone) || undefined}
+        onClick={handleClick}
       >
-        {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />}
-        {children}
+        {content}
       </button>
     );
-  }
+
+    if (!disabledReason) return button;
+
+    return (
+      <span className={cx('inline-flex flex-col items-start gap-1.5', fullWidth && 'w-full', className)}>
+        {button}
+        {showReason ? (
+          <span id={reasonId} className={BUTTON_REASON}>
+            {disabledReason}
+          </span>
+        ) : null}
+      </span>
+    );
+  },
 );
 
-Button.displayName = 'Button';
+const OWN_PROPS = new Set([
+  'variant',
+  'size',
+  'type',
+  'children',
+  'className',
+  'onClick',
+  'disabled',
+  'leadingIcon',
+  'trailingIcon',
+  'fullWidth',
+  'standalone',
+  'busy',
+  'busyLabel',
+  'disabledReason',
+  'loading',
+  'aria-describedby',
+]);
+
+function nativeButtonAttributes(props: object): Record<string, unknown> {
+  const native: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (!OWN_PROPS.has(key)) native[key] = value;
+  }
+  return native;
+}

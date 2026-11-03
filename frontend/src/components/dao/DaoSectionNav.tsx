@@ -1,47 +1,148 @@
-import { Link, useLocation } from 'react-router-dom';
-import { daoNavSections } from '../../data/daoBeta';
+import { useId, useState, type ReactNode } from 'react';
+import { PageHeader, type PageHeaderProps } from '../layout/PageHeader';
+import { Button } from '../ui/Button';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { Heading } from '../ui/Heading';
+import { useToast } from '../ui/Toast';
+import { ORGANIZATION_GROUP } from '../../copy/nav';
+import { ORG_PAGES, ORG_TABS_LABEL, SAMPLE } from '../../copy/organization';
+import { useDaoWorkspace } from '../../stores/useDaoWorkspace';
 
-export function DaoSectionNav() {
-  const location = useLocation();
+export type OrganizationPageKey = keyof typeof ORG_PAGES;
+
+const NAV_KEY: Record<OrganizationPageKey, string> = {
+  overview: 'orgOverview',
+  streams: 'orgStreams',
+  team: 'orgTeam',
+  roles: 'orgRoles',
+  rules: 'orgRules',
+};
+
+const TABS = ORGANIZATION_GROUP.items.map((item) => ({
+  key: item.key,
+  label: item.label,
+  to: item.path,
+}));
+
+export function SampleResetButton() {
+  const resetSample = useDaoWorkspace((state) => state.resetSample);
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+
+  const reset = async () => {
+    resetSample();
+    setOpen(false);
+    toast({ tone: 'success', title: SAMPLE.reset.done });
+  };
 
   return (
-    <div className="mb-8 space-y-3">
-      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-        <span className="inline-flex items-center rounded-full bg-accent/10 px-3 py-1 text-[11px] font-mono uppercase tracking-[0.24em] text-accent">
-          DAO Beta
-        </span>
-        <p className="text-sm font-mono text-textMuted">
-          Preview the organization layer before live role mapping and policy execution ship.
-        </p>
-      </div>
+    <>
+      <Button variant="secondary" onClick={() => setOpen(true)}>
+        {SAMPLE.reset.action}
+      </Button>
+      <ConfirmDialog
+        open={open}
+        title={SAMPLE.reset.title}
+        body={SAMPLE.reset.body}
+        confirmLabel={SAMPLE.reset.action}
+        keepLabel={SAMPLE.reset.keep}
+        tone="danger"
+        busyLabel={SAMPLE.reset.busy}
+        onConfirm={reset}
+        onClose={() => setOpen(false)}
+      />
+    </>
+  );
+}
 
-      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-4 lg:overflow-visible lg:pb-0">
-        {daoNavSections.map((section) => {
-          const active = location.pathname === section.path;
+function secondaryActionsFor(sample: boolean, own: ReactNode): PageHeaderProps['secondaryActions'] {
+  const reset = sample ? <SampleResetButton key="reset" /> : null;
+  if (own && reset) return [own, reset];
+  if (own) return [own];
+  if (reset) return [reset];
+  return [];
+}
 
-          return (
-            <Link
-              key={section.path}
-              to={section.path}
-              className={`min-w-[240px] snap-start rounded-2xl border p-3.5 transition-all sm:min-w-[260px] lg:min-w-0 lg:p-4 ${
-                active
-                  ? 'border-accent bg-accent/5 shadow-sm'
-                  : 'border-border/40 bg-surface hover:border-borderHover hover:bg-surfaceAlt'
-              }`}
-            >
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <h2 className="font-display text-base text-textPrimary md:text-lg">{section.label}</h2>
-                <span
-                  className={`inline-flex h-2.5 w-2.5 rounded-full ${
-                    active ? 'bg-accent ring-4 ring-accent/15' : 'bg-border'
-                  }`}
-                />
-              </div>
-              <p className="text-xs leading-5 text-textMuted md:text-sm md:leading-6">{section.description}</p>
-            </Link>
-          );
-        })}
+type OrganizationHeaderProps = Pick<PageHeaderProps, 'stateLine' | 'primaryAction'> & {
+  secondaryAction?: ReactNode;
+  page: OrganizationPageKey;
+  /** Sample pages get the "Reset sample data" action next to their own. */
+  sample: boolean;
+};
+
+/** The page header every Organization page shares: title, beta tag and the section tabs. */
+export function OrganizationHeader({
+  page,
+  sample,
+  stateLine,
+  primaryAction,
+  secondaryAction,
+}: OrganizationHeaderProps) {
+  const copy = ORG_PAGES[page];
+  const documentTitle = 'documentTitle' in copy ? copy.documentTitle : copy.title;
+
+  return (
+    <PageHeader
+      title={copy.title}
+      documentTitle={documentTitle}
+      description={copy.description}
+      badge="beta"
+      stateLine={stateLine}
+      primaryAction={primaryAction}
+      secondaryActions={secondaryActionsFor(sample, secondaryAction)}
+      tabs={{ label: ORG_TABS_LABEL, items: TABS, activeKey: NAV_KEY[page] }}
+    />
+  );
+}
+
+type OrganizationSectionProps = {
+  title: string;
+  description: string;
+  action?: ReactNode;
+  children: ReactNode;
+};
+
+/** A titled block holding one list, so the list's own card isn't nested inside a panel. */
+export function OrganizationSection({
+  title,
+  description,
+  action,
+  children,
+}: OrganizationSectionProps) {
+  const headingId = useId();
+
+  return (
+    <section aria-labelledby={headingId} className="flex min-w-0 flex-col gap-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1">
+          <Heading level="section" id={headingId}>
+            {title}
+          </Heading>
+          <p className="text-small text-ink-secondary">{description}</p>
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
-    </div>
+      {children}
+    </section>
+  );
+}
+
+type CardLabelledProps = {
+  before?: string;
+  after?: string;
+  children: ReactNode;
+};
+
+/**
+ * A list value with words around it that show only on the phone card layout, where the column
+ * header isn't shown. The breakpoint matches the one `List` switches at.
+ */
+export function CardLabelled({ before, after, children }: CardLabelledProps) {
+  return (
+    <>
+      {before ? <span className="text-ink-muted md:hidden">{before} </span> : null}
+      {children}
+      {after ? <span className="text-ink-muted md:hidden"> {after}</span> : null}
+    </>
   );
 }

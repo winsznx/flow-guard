@@ -1,595 +1,566 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Card } from '../components/ui/Card';
+import { useState, type FormEvent } from 'react';
+import { Navigate, useSearchParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { Address } from '../components/ui/Address';
+import { AddressInput } from '../components/ui/AddressInput';
+import { Amount } from '../components/ui/Amount';
+import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
-import { useWallet } from '../hooks/useWallet';
-import { useTransactionConfirm } from '../hooks/useTransactionConfirm';
-import { createVault, updateVaultBalance } from '../utils/api';
-import { depositToVault, getExplorerTxUrl } from '../utils/blockchain';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Card } from '../components/ui/Card';
+import { DetailList } from '../components/ui/DetailList';
+import { ErrorSummary } from '../components/ui/ErrorSummary';
+import { Heading } from '../components/ui/Heading';
+import { Input } from '../components/ui/Input';
+import { Notice } from '../components/ui/Notice';
+import { PublicKeyInput } from '../components/ui/PublicKeyInput';
+import { RadioGroup } from '../components/ui/Radio';
+import { Select } from '../components/ui/Select';
+import { Steps } from '../components/ui/Steps';
+import { Switch } from '../components/ui/Switch';
+import { Textarea } from '../components/ui/Textarea';
+import { TermHint } from '../components/ui/TermHint';
+import { TransactionReview } from '../components/ui/TransactionReview';
+import { TxLink } from '../components/ui/TxLink';
+import type { Asset } from '../components/ui/types';
+import { ACTIONS, LABELS } from '../copy/common';
+import { asFlowError, errorMessage, type FlowError } from '../copy/errors';
+import { formatAmount } from '../copy/format';
+import { addressErrors } from '../copy/network';
+import { NETWORK_FEE_CEILING_BCH } from '../copy/pricing';
+import {
+  VAULT_CREATE,
+  VAULT_DETAIL,
+  everyDays,
+  reachedNetwork,
+  sameAddress,
+  signersRequiredShort,
+} from '../copy/vaults';
 import { useNetwork } from '../hooks/useNetwork';
+import { useWallet } from '../hooks/useWallet';
+import { createVault, updateVaultBalance } from '../utils/api';
+import { depositToVault } from '../utils/blockchain';
+
+const BCH: Asset = { kind: 'bch' };
+const SIGNER_COUNT = 3;
+
+type StepKey = 'name' | 'signers' | 'money' | 'check';
+type Interval = (typeof VAULT_CREATE.intervals)[number]['value'];
+type Approvals = '1' | '2';
+type SignerRow = { address: string; addressValid: boolean; publicKey: string; keyValid: boolean };
+type Errors = Record<string, string>;
+type CreatedVault = { id: string; contractAddress: string };
+
+const STEPS: { key: StepKey; label: string }[] = [
+  { key: 'name', label: VAULT_CREATE.steps.name },
+  { key: 'signers', label: VAULT_CREATE.steps.signers },
+  { key: 'money', label: VAULT_CREATE.steps.money },
+  { key: 'check', label: VAULT_CREATE.steps.check },
+];
+
+const ORDER: StepKey[] = STEPS.map((step) => step.key);
+
+const emptySigner = (): SignerRow => ({
+  address: '',
+  addressValid: false,
+  publicKey: '',
+  keyValid: false,
+});
+
+const fieldId = (key: string) => `vault-${key}`;
 
 export default function CreateVaultPage() {
-  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const wallet = useWallet();
   const network = useNetwork();
-  const { confirmTransaction, TransactionConfirmModal } = useTransactionConfirm();
-  const [step, setStep] = useState(1);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [depositStatus, setDepositStatus] = useState<'idle' | 'creating' | 'depositing' | 'updating' | 'success' | 'error'>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const [txid, setTxid] = useState<string | null>(null);
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    depositAmount: '',
-    spendingCap: '',
-    approvalThreshold: '2',
-    signers: ['', '', ''],
-    signerPubkeys: ['', '', ''], // NEW: Public keys for blockchain deployment
-    cycleDuration: '2592000', // 30 days in seconds
-    unlockAmount: '',
-    isPublic: false, // Default to private
-  });
+  const [step, setStep] = useState<StepKey>('name');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [isPublic, setIsPublic] = useState(false);
+  const [signers, setSigners] = useState<SignerRow[]>(() =>
+    Array.from({ length: SIGNER_COUNT }, emptySigner)
+  );
+  const [approvals, setApprovals] = useState<Approvals>('2');
+  const [deposit, setDeposit] = useState('');
+  const [howOften, setHowOften] = useState<Interval>('2592000');
+  const [release, setRelease] = useState('');
+  const [limit, setLimit] = useState('');
+  const [errors, setErrors] = useState<Errors>({});
+  const [errorLabels, setErrorLabels] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<FlowError | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<CreatedVault | null>(null);
+  const [depositing, setDepositing] = useState(false);
+  const [deposited, setDeposited] = useState<'no' | 'yes' | 'syncing'>('no');
+  const [depositTxid, setDepositTxid] = useState<string | null>(null);
 
-  const handleInputChange = (field: string, value: string | boolean) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  if (params.get('type') === 'grants') return <Navigate to="/grants/create" replace />;
+
+  const depositValue = Number.parseFloat(deposit);
+  const releaseValue = Number.parseFloat(release);
+  const limitValue = Number.parseFloat(limit);
+  const walletBch = wallet.balance?.bch ?? null;
+  const depositLabel = formatAmount(Number.isFinite(depositValue) ? depositValue : 0, BCH) ?? '';
+  const coversDeposit = walletBch === null || depositValue + NETWORK_FEE_CEILING_BCH <= walletBch;
+
+  const updateSigner = (index: number, patch: Partial<SignerRow>) => {
+    setSigners((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   };
 
-  const handleSignerChange = (index: number, value: string) => {
-    const newSigners = [...formData.signers];
-    newSigners[index] = value;
-    setFormData(prev => ({ ...prev, signers: newSigners }));
+  const fillMyWallet = () => {
+    if (!wallet.address) return;
+    updateSigner(0, {
+      address: wallet.address,
+      addressValid: true,
+      publicKey: wallet.publicKey ?? '',
+      keyValid: Boolean(wallet.publicKey),
+    });
   };
 
-  const handlePubkeyChange = (index: number, value: string) => {
-    const newPubkeys = [...formData.signerPubkeys];
-    newPubkeys[index] = value;
-    setFormData(prev => ({ ...prev, signerPubkeys: newPubkeys }));
-  };
-
-  // Auto-fill creator's address and public key in first signer slot
-  const fillCreatorInfo = () => {
-    if (wallet.address && wallet.publicKey) {
-      const newSigners = [...formData.signers];
-      const newPubkeys = [...formData.signerPubkeys];
-      newSigners[0] = wallet.address;
-      newPubkeys[0] = wallet.publicKey;
-      setFormData(prev => ({
-        ...prev,
-        signers: newSigners,
-        signerPubkeys: newPubkeys
-      }));
+  const validate = (key: StepKey): { errors: Errors; labels: Record<string, string> } => {
+    const next: Errors = {};
+    const labels: Record<string, string> = {};
+    const add = (field: string, label: string, message: string) => {
+      next[field] = message;
+      labels[field] = label;
+    };
+    const checkAll = key === 'check';
+    if (key === 'name' || checkAll) {
+      if (!name.trim()) add('name', VAULT_CREATE.name.label, VAULT_CREATE.name.required);
     }
-  };
-
-  const handleNext = () => {
-    if (step < 6) setStep(step + 1);
-  };
-
-  const handleBack = () => {
-    if (step > 1) setStep(step - 1);
-  };
-
-  const handleSubmit = async () => {
-    if (!wallet.address) {
-      setError('Please connect your wallet first');
-      return;
+    if (key === 'signers' || checkAll) {
+      signers.forEach((row, i) => {
+        const label = VAULT_CREATE.signers.signer(i + 1);
+        if (!row.address.trim()) add(`address-${i}`, label, VAULT_CREATE.signers.addressRequired);
+        else if (!row.addressValid) add(`address-${i}`, label, addressErrors(network).notAnAddress);
+        else if (signers.some((other, j) => j < i && sameAddress(other.address, row.address))) {
+          add(`address-${i}`, label, VAULT_CREATE.signers.duplicate);
+        }
+        const keyLabel = `${label}: ${VAULT_CREATE.signers.publicKey}`;
+        if (!row.publicKey.trim()) add(`key-${i}`, keyLabel, VAULT_CREATE.signers.keyRequired);
+        else if (!row.keyValid) add(`key-${i}`, keyLabel, VAULT_CREATE.signers.keyInvalid);
+      });
     }
+    if (key === 'money' || checkAll) {
+      if (!Number.isFinite(depositValue) || depositValue <= 0) {
+        add('deposit', VAULT_CREATE.money.deposit, VAULT_CREATE.money.depositRequired);
+      } else if (depositValue > VAULT_CREATE.maxDeposit) {
+        add('deposit', VAULT_CREATE.money.deposit, VAULT_CREATE.money.depositTooLarge);
+      } else if (!coversDeposit) {
+        add('deposit', VAULT_CREATE.money.deposit, VAULT_CREATE.insufficient(depositLabel));
+      }
+      if (!Number.isFinite(releaseValue) || releaseValue <= 0) {
+        add('release', VAULT_CREATE.money.releaseAmount, VAULT_CREATE.money.releaseRequired);
+      }
+    }
+    return { errors: next, labels };
+  };
 
-    setIsSubmitting(true);
-    setError(null);
-    setDepositStatus('creating');
-    setTxid(null);
+  const goTo = (key: StepKey) => {
+    setErrors({});
+    setErrorLabels({});
+    setStep(key);
+  };
 
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const result = validate(step);
+    setErrors(result.errors);
+    setErrorLabels(result.labels);
+    if (Object.keys(result.errors).length > 0) return;
+    const index = ORDER.indexOf(step);
+    if (step === 'check') void create();
+    else setStep(ORDER[index + 1]);
+  };
+
+  const create = async () => {
+    if (creating || created || !wallet.address) return;
+    setCreating(true);
+    setSubmitError(null);
     try {
-      // Filter out empty signers and public keys
-      const validSigners = formData.signers.filter(s => s.trim() !== '');
-      const validPubkeys = formData.signerPubkeys.filter(pk => pk.trim() !== '');
-
-      // Prepare vault data
-      const vaultData = {
-        name: formData.name || undefined,
-        description: formData.description || undefined,
-        totalDeposit: parseFloat(formData.depositAmount),
-        spendingCap: formData.spendingCap ? parseFloat(formData.spendingCap) : 0,
-        approvalThreshold: parseInt(formData.approvalThreshold),
-        signers: validSigners,
-        signerPubkeys: validPubkeys,
-        cycleDuration: parseInt(formData.cycleDuration),
-        unlockAmount: parseFloat(formData.unlockAmount),
-        isPublic: formData.isPublic,
-      };
-
-      // Validate data
-      if (vaultData.totalDeposit <= 0) {
-        throw new Error('Deposit amount must be greater than 0');
-      }
-      if (vaultData.unlockAmount <= 0) {
-        throw new Error('Unlock amount must be greater than 0');
-      }
-      if (!Number.isInteger(vaultData.approvalThreshold) || vaultData.approvalThreshold < 1 || vaultData.approvalThreshold > 2) {
-        throw new Error('Approval threshold must be 1 or 2 (current on-chain vault spend path is 2-of-3 maximum)');
-      }
-
-      // Validate deposit amount is reasonable
-      // For chipnet, max 100 BCH is reasonable; for mainnet, max 1000 BCH
-      const network = wallet.network || 'chipnet';
-      const maxDeposit = network === 'mainnet' ? 1000 : 100;
-
-      if (vaultData.totalDeposit > maxDeposit) {
-        throw new Error(
-          `Deposit amount (${vaultData.totalDeposit} BCH) exceeds the maximum allowed for ${network} (${maxDeposit} BCH). ` +
-          `If you intended to enter satoshis, please convert: ${vaultData.totalDeposit} satoshis = ${(vaultData.totalDeposit / 100000000).toFixed(8)} BCH`
-        );
-      }
-
-      // Warn if amount seems suspiciously large (whole number > 1000 might be satoshis)
-      if (vaultData.totalDeposit >= 1000 && vaultData.totalDeposit === Math.floor(vaultData.totalDeposit)) {
-        const possibleSatoshis = vaultData.totalDeposit;
-        const possibleBCH = possibleSatoshis / 100000000;
-        if (possibleBCH < maxDeposit) {
-          throw new Error(
-            `The deposit amount (${vaultData.totalDeposit}) seems unusually large. ` +
-            `Did you mean to enter ${possibleBCH.toFixed(8)} BCH instead? ` +
-            `If you entered satoshis, please convert to BCH (divide by 100,000,000).`
-          );
-        }
-      }
-
-      if (validSigners.length !== 3) {
-        throw new Error('Exactly 3 signers are required for blockchain deployment');
-      }
-      if (validPubkeys.length !== 3) {
-        throw new Error('Exactly 3 signer public keys are required for blockchain deployment');
-      }
-      if (validSigners.length < vaultData.approvalThreshold) {
-        throw new Error('Number of signers must be at least the approval threshold');
-      }
-
-      // Validate wallet balance before proceeding
-      if (wallet.balance) {
-        const walletBalanceBCH = wallet.balance.bch || 0;
-        const requiredAmount = vaultData.totalDeposit + 0.0001; // Add small buffer for fees
-
-        if (walletBalanceBCH < requiredAmount) {
-          throw new Error(
-            `Insufficient balance. You have ${walletBalanceBCH.toFixed(4)} BCH, but need ${requiredAmount.toFixed(4)} BCH (including fees). ` +
-            `Please check that you entered the deposit amount in BCH, not satoshis. ` +
-            `If you entered satoshis, convert to BCH by dividing by 100,000,000.`
-          );
-        }
-      }
-
-      // Step 1: Create vault (deploy contract)
-      setDepositStatus('creating');
-      const newVault = await createVault(vaultData, wallet);
-
-      if (!newVault.contractAddress) {
-        throw new Error('Vault created but contract address not available. Please try again.');
-      }
-
-      // Step 2: Deposit funds to vault contract
-      if (vaultData.totalDeposit > 0) {
-        setDepositStatus('depositing');
-
-        try {
-          // Deposit BCH to the contract address
-          // All supported wallets sign on their own surface; no extra confirmation needed.
-          const depositTxid = await depositToVault(
-            wallet,
-            newVault.contractAddress,
-            vaultData.totalDeposit,
-            undefined,
-            newVault.id,
-          );
-
-          setTxid(depositTxid);
-
-          // Step 3: Update vault balance in database
-          setDepositStatus('updating');
-          await updateVaultBalance(
-            newVault.id,
-            depositTxid,
-            vaultData.totalDeposit,
-            wallet,
-          );
-
-          setDepositStatus('success');
-
-          // Small delay to show success message
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        } catch (depositError: any) {
-          // If deposit fails, vault is still created but not funded
-          // User can deposit later from vault detail page
-          setDepositStatus('error');
-          throw new Error(
-            `Vault created successfully, but deposit failed: ${depositError.message}. ` +
-            `You can deposit funds later from the vault detail page.`
-          );
-        }
-      } else {
-        setDepositStatus('success');
-      }
-
-      // Navigate to vault detail page
-      navigate(`/vaults/${newVault.id}`);
-    } catch (err: any) {
-      setError(err.message || 'Failed to create vault');
-      setDepositStatus('error');
-      setIsSubmitting(false);
+      const vault = await createVault(
+        {
+          name: name.trim(),
+          description: description.trim() || undefined,
+          totalDeposit: depositValue,
+          spendingCap: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 0,
+          approvalThreshold: Number(approvals),
+          signers: signers.map((row) => row.address.trim()),
+          signerPubkeys: signers.map((row) => row.publicKey.trim()),
+          cycleDuration: Number(howOften),
+          unlockAmount: releaseValue,
+          isPublic,
+        },
+        wallet
+      );
+      setCreated({
+        id: String(vault.id ?? ''),
+        contractAddress: String(vault.contractAddress ?? ''),
+      });
+    } catch (error) {
+      setSubmitError(asFlowError(error));
+    } finally {
+      setCreating(false);
     }
   };
+
+  const runDeposit = async () => {
+    if (!created) return {};
+    let txid: string;
+    try {
+      txid = await depositToVault(
+        wallet,
+        created.contractAddress,
+        depositValue,
+        undefined,
+        created.id
+      );
+    } catch (error) {
+      if (reachedNetwork(error)) {
+        setDepositTxid(asFlowError(error).txid ?? null);
+        setDeposited('syncing');
+      }
+      throw error;
+    }
+    setDepositTxid(txid);
+    setDeposited('syncing');
+    await updateVaultBalance(created.id, txid, depositValue, wallet);
+    setDeposited('yes');
+    return { txid };
+  };
+
+  const header = (
+    <PageHeader
+      title={VAULT_CREATE.title}
+      description={VAULT_CREATE.description}
+      back={{ to: '/vaults', label: VAULT_CREATE.back }}
+    />
+  );
+
+  if (created) {
+    return (
+      <PageContainer width="reading">
+        {header}
+        <Card>
+          <div className="flex flex-col gap-4">
+            {created.contractAddress ? (
+              <Heading level="section" as="h2">
+                {VAULT_CREATE.created.title}
+              </Heading>
+            ) : (
+              <Notice tone="warning" title={VAULT_CREATE.created.notSetUpTitle}>
+                {VAULT_CREATE.created.notSetUpLine}
+              </Notice>
+            )}
+            {deposited === 'yes' ? (
+              <Notice tone="success" title={VAULT_CREATE.created.done} />
+            ) : deposited === 'syncing' ? (
+              <Notice tone="warning" title={errorMessage('SENT_NOT_SYNCED', { outcome: 'deposit' })}>
+                {depositTxid ? <TxLink txid={depositTxid} network={network} /> : null}
+              </Notice>
+            ) : created.contractAddress ? (
+              <p className="text-body text-ink-secondary">
+                {VAULT_CREATE.created.depositLine(depositLabel)}
+              </p>
+            ) : null}
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <ButtonLink
+                to={`/vaults/${created.id}`}
+                variant={deposited !== 'no' || !created.contractAddress ? 'primary' : 'secondary'}
+              >
+                {VAULT_CREATE.created.goToVault}
+              </ButtonLink>
+              {deposited !== 'no' || !created.contractAddress ? null : (
+                <Button variant="primary" onClick={() => setDepositing(true)}>
+                  {VAULT_CREATE.created.deposit(depositLabel)}
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+        {created.contractAddress ? (
+          <TransactionReview
+            open={depositing}
+            onClose={() => setDepositing(false)}
+            title={VAULT_CREATE.created.depositReviewTitle(depositLabel)}
+            summary={{
+              direction: 'out',
+              leavesWallet: { amount: String(depositValue), asset: BCH },
+              goesTo: { address: created.contractAddress, name: name.trim() },
+              network,
+            }}
+            checks={
+              walletBch === null
+                ? []
+                : [
+                    {
+                      label: VAULT_CREATE.money.deposit,
+                      ok: coversDeposit,
+                      fix: VAULT_CREATE.insufficient(depositLabel),
+                    },
+                  ]
+            }
+            run={runDeposit}
+            next={
+              <div className="flex flex-col gap-2">
+                <p>{VAULT_CREATE.created.done}</p>
+                <div>
+                  <ButtonLink to={`/vaults/${created.id}`} variant="secondary" size="sm">
+                    {VAULT_CREATE.created.goToVault}
+                  </ButtonLink>
+                </div>
+              </div>
+            }
+          />
+        ) : null}
+      </PageContainer>
+    );
+  }
+
+  const invalid = Object.keys(errors);
+  const intervalWords = everyDays(Number(howOften)) ?? '';
 
   return (
-    <>
-      <TransactionConfirmModal />
-      <div className="py-8">
-        <div className="max-w-3xl mx-auto px-6">
-          <div className="mb-8">
-            <Link to="/vaults" className="text-sm font-mono text-textMuted hover:text-textPrimary transition-colors">
-              ← Back to Vaults
-            </Link>
-          </div>
+    <PageContainer width="reading">
+      {header}
+      <Stack>
+        <Steps steps={STEPS} current={step} onBack={(key) => goTo(key as StepKey)} />
+        <form noValidate onSubmit={submit} className="flex flex-col gap-6">
+          {step === 'name' ? (
+            <>
+              <Input
+                id={fieldId('name')}
+                label={VAULT_CREATE.name.label}
+                helper={VAULT_CREATE.name.helper}
+                placeholder={VAULT_CREATE.name.placeholder}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                error={errors.name}
+              />
+              <Textarea
+                label={VAULT_CREATE.name.description}
+                optional
+                helper={VAULT_CREATE.name.descriptionHelper}
+                placeholder={VAULT_CREATE.name.descriptionPlaceholder}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={3}
+              />
+              <Switch
+                label={VAULT_CREATE.name.public}
+                description={VAULT_CREATE.name.publicLine}
+                checked={isPublic}
+                onChange={setIsPublic}
+              />
+            </>
+          ) : null}
 
-          <h1 className="text-4xl md:text-5xl font-display mb-8 tracking-tight">Create Vault</h1>
-
-          {/* Error Display */}
-          {error && (
-            <div className="mb-8 p-4 bg-error/5 border border-error/20 rounded-lg">
-              <p className="text-error font-mono text-sm">{error}</p>
-            </div>
-          )}
-
-          {/* Deposit Status Display */}
-          {isSubmitting && depositStatus !== 'idle' && (
-            <div className="mb-8 p-6 bg-accent/5 border border-accent/20 rounded-lg">
-              {depositStatus === 'creating' && (
-                <div className="flex items-center gap-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent"></div>
-                  <p className="text-textPrimary font-mono text-sm">
-                    Creating vault and deploying contract...
-                  </p>
-                </div>
-              )}
-              {depositStatus === 'depositing' && (
-                <div className="flex items-center gap-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent"></div>
-                  <p className="text-textPrimary font-mono text-sm">
-                    Depositing {formData.depositAmount} BCH to vault... Please confirm in wallet.
-                  </p>
-                </div>
-              )}
-              {depositStatus === 'updating' && (
-                <div className="flex items-center gap-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent"></div>
-                  <p className="text-textPrimary font-mono text-sm">
-                    Updating vault balance...
-                  </p>
-                </div>
-              )}
-              {depositStatus === 'success' && (
-                <div className="flex items-center gap-4">
-                  <div className="h-5 w-5 rounded-full bg-accent flex items-center justify-center">
-                    <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <div className="text-textPrimary font-mono text-sm">
-                    <p>Vault created and funded successfully!</p>
-                    {txid && (
-                      <span className="block text-xs mt-1 text-textMuted">
-                        TX: <a
-                          href={getExplorerTxUrl(txid, network)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline hover:text-accent"
-                        >
-                          {txid.substring(0, 16)}...
-                        </a>
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Progress Steps */}
-          <div className="mb-12">
-            <div className="flex justify-between items-center relative">
-              {/* Connecting Line */}
-              <div className="absolute left-0 top-1/2 w-full h-[1px] bg-border/30 -z-10" />
-
-              {[1, 2, 3, 4, 5, 6].map((s) => (
-                <div key={s} className="bg-background px-2">
-                  <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-xs border transition-colors duration-300 ${s <= step
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-white text-textMuted border-border'
-                      }`}
-                  >
-                    {s}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-between mt-2 px-1">
-              <span className="text-[10px] uppercase tracking-widest text-textMuted">Basics</span>
-              <span className="text-[10px] uppercase tracking-widest text-textMuted">Funds</span>
-              <span className="text-[10px] uppercase tracking-widest text-textMuted">Schedule</span>
-              <span className="text-[10px] uppercase tracking-widest text-textMuted">Signers</span>
-              <span className="text-[10px] uppercase tracking-widest text-textMuted">Cap</span>
-              <span className="text-[10px] uppercase tracking-widest text-textMuted">Review</span>
-            </div>
-          </div>
-
-          <Card padding="xl" className="border-border/40 shadow-sm">
-            {/* Step 1: Basic Info */}
-            {step === 1 && (
-              <div className="space-y-8">
-                <h2 className="text-2xl font-display">Basic Information</h2>
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Vault Name</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) => handleInputChange('name', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
-                    placeholder="e.g., DAO Treasury"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Description</label>
-                  <textarea
-                    value={formData.description}
-                    onChange={(e) => handleInputChange('description', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
-                    rows={4}
-                    placeholder="Describe the purpose of this vault..."
-                  />
-                </div>
-                <div>
-                  <label className="flex items-center gap-4 cursor-pointer p-4 border border-border rounded-lg hover:bg-surfaceAlt transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={formData.isPublic}
-                      onChange={(e) => handleInputChange('isPublic', e.target.checked)}
-                      className="w-5 h-5 text-accent border-border rounded focus:ring-accent"
-                    />
+          {step === 'signers' ? (
+            <>
+              <div className="flex flex-col gap-1 text-body text-ink-secondary">
+                <p>
+                  {VAULT_CREATE.signers.intro}{' '}
+                  <TermHint term="publicKey">{VAULT_CREATE.signers.publicKey}</TermHint>
+                </p>
+                <p className="text-small">{VAULT_CREATE.signers.fixed}</p>
+              </div>
+              {signers.map((row, i) => (
+                <fieldset
+                  key={i}
+                  className="flex flex-col gap-4 rounded-card border border-line p-4"
+                >
+                  <legend className="px-1 text-label text-ink">
+                    {VAULT_CREATE.signers.signer(i + 1)}
+                  </legend>
+                  {i === 0 && wallet.address && !sameAddress(row.address, wallet.address) ? (
                     <div>
-                      <span className="block text-sm font-bold uppercase tracking-wide">Make vault public</span>
-                      <span className="block text-xs text-textMuted mt-1">
-                        Public vaults can be viewed by anyone, but only signers can create proposals and approve them.
-                      </span>
+                      <Button variant="secondary" size="sm" onClick={fillMyWallet}>
+                        {VAULT_CREATE.signers.useMine}
+                      </Button>
                     </div>
-                  </label>
-                </div>
-              </div>
-            )}
-
-            {/* Step 2: Deposit Amount */}
-            {step === 2 && (
-              <div className="space-y-8">
-                <h2 className="text-2xl font-display">Deposit Amount</h2>
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Total Deposit (BCH)</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={formData.depositAmount}
-                      onChange={(e) => handleInputChange('depositAmount', e.target.value)}
-                      className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
-                      placeholder="0.00"
-                      step="0.01"
-                      min="0.00001"
-                      max={wallet.network === 'mainnet' ? 1000 : 100}
-                    />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">BCH</span>
-                  </div>
-                  <p className="mt-3 text-xs text-textMuted font-mono">
-                    This is the total amount of BCH you'll deposit into the vault.
-                    {wallet.network === 'chipnet' && (
-                      <span className="block mt-1 text-warning">
-                        ⚠️ Maximum {100} BCH for chipnet testing.
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Step 3: Unlock Schedule */}
-            {step === 3 && (
-              <div className="space-y-8">
-                <h2 className="text-2xl font-display">Unlock Schedule</h2>
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Cycle Duration</label>
-                  <select
-                    value={formData.cycleDuration}
-                    onChange={(e) => handleInputChange('cycleDuration', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm appearance-none"
-                  >
-                    <option value="604800">Weekly (7 days)</option>
-                    <option value="2592000">Monthly (30 days)</option>
-                    <option value="7776000">Quarterly (90 days)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Unlock Amount per Cycle</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={formData.unlockAmount}
-                      onChange={(e) => handleInputChange('unlockAmount', e.target.value)}
-                      className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
-                      placeholder="0.00"
-                      step="0.01"
-                    />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">BCH</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Step 4: Signers and Threshold */}
-            {step === 4 && (
-              <div className="space-y-8">
-                <h2 className="text-2xl font-display">Signers & Threshold</h2>
-
-                <div className="p-4 bg-accent/5 border border-accent/20 rounded-lg">
-                  <p className="text-xs font-mono text-textMuted">
-                    <strong className="text-textPrimary">BLOCKCHAIN DEPLOYMENT:</strong> Smart contract requires exactly 3 valid signer addresses and public keys.
-                  </p>
-                </div>
-
-                {wallet.address && wallet.publicKey && (
-                  <button
-                    onClick={fillCreatorInfo}
-                    type="button"
-                    className="text-xs uppercase tracking-wider font-bold text-accent hover:text-accent-hover transition-colors"
-                  >
-                    + Auto-fill my wallet as Signer 1
-                  </button>
-                )}
-
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Approval Threshold</label>
-                  <input
-                    type="number"
-                    value={formData.approvalThreshold}
-                    onChange={(e) => handleInputChange('approvalThreshold', e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-sm"
-                    min="1"
-                    max="2"
+                  ) : null}
+                  <AddressInput
+                    id={fieldId(`address-${i}`)}
+                    label={VAULT_CREATE.signers.address}
+                    helper={VAULT_CREATE.signers.addressHelper}
+                    value={row.address}
+                    onChange={(address) => updateSigner(i, { address })}
+                    onValidChange={(addressValid) => updateSigner(i, { addressValid })}
+                    network={network}
+                    error={errors[`address-${i}`]}
                   />
-                  <p className="mt-2 text-xs text-textMuted font-mono">
-                    Current on-chain vault spend path supports up to 2-of-3. Set threshold to 1 or 2.
-                  </p>
-                </div>
+                  <PublicKeyInput
+                    id={fieldId(`key-${i}`)}
+                    label={VAULT_CREATE.signers.publicKey}
+                    helper={VAULT_CREATE.signers.publicKeyHelper}
+                    value={row.publicKey}
+                    onChange={(publicKey) => updateSigner(i, { publicKey })}
+                    onValidChange={(keyValid) => updateSigner(i, { keyValid })}
+                    error={
+                      errors[`key-${i}`] ??
+                      (i === 0 && sameAddress(row.address, wallet.address) && !row.publicKey
+                        ? VAULT_CREATE.signers.noPublicKey
+                        : undefined)
+                    }
+                  />
+                </fieldset>
+              ))}
+              <RadioGroup<Approvals>
+                legend={VAULT_CREATE.signers.approvals}
+                name="vault-approvals"
+                value={approvals}
+                onChange={setApprovals}
+                options={[
+                  { value: '1', label: VAULT_CREATE.signers.approvalsOption(1) },
+                  { value: '2', label: VAULT_CREATE.signers.approvalsOption(2) },
+                ]}
+              />
+              <p className="text-small text-ink-muted">{VAULT_CREATE.signers.approvalsLine}</p>
+            </>
+          ) : null}
 
-                <div className="space-y-6">
-                  <label className="block text-sm font-bold uppercase tracking-wide">Signers (3 Required)</label>
-                  {formData.signers.map((signer, index) => (
-                    <div key={index} className="space-y-3 p-6 border border-border rounded-lg bg-whiteAlt/50">
-                      <div className="font-bold text-xs uppercase tracking-wider text-textMuted">
-                        Signer {index + 1}
-                      </div>
-                      <input
-                        type="text"
-                        value={signer}
-                        onChange={(e) => handleSignerChange(index, e.target.value)}
-                        className="w-full px-4 py-2 bg-white border border-border rounded focus:outline-none focus:border-primary font-mono text-xs"
-                        placeholder="BCH Address (bitcoincash:...)"
-                      />
-                      <input
-                        type="text"
-                        value={formData.signerPubkeys[index]}
-                        onChange={(e) => handlePubkeyChange(index, e.target.value)}
-                        className="w-full px-4 py-2 bg-white border border-border rounded focus:outline-none focus:border-primary font-mono text-xs"
-                        placeholder="Public Key (hex)"
-                      />
-                      {formData.signerPubkeys[index] && (
-                        <p className="text-[10px] font-mono flex items-center gap-2">
-                          <span className="text-accent">✓ key provided</span>
-                          {formData.signerPubkeys[index].length !== 66 && (
-                            <span className="text-warning">⚠ Check length (66)</span>
-                          )}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+          {step === 'money' ? (
+            <>
+              <AmountInput
+                id={fieldId('deposit')}
+                label={VAULT_CREATE.money.deposit}
+                helper={
+                  depositValue >= 1000 && Number.isInteger(depositValue)
+                    ? VAULT_CREATE.money.looksLikeSats
+                    : VAULT_CREATE.money.depositHelper
+                }
+                asset={BCH}
+                value={deposit}
+                onChange={setDeposit}
+                balance={walletBch === null ? null : formatAmount(walletBch, BCH)}
+                error={errors.deposit}
+              />
+              <Select<Interval>
+                label={VAULT_CREATE.money.howOften}
+                helper={VAULT_CREATE.money.howOftenHelper}
+                value={howOften}
+                onValueChange={setHowOften}
+                options={[...VAULT_CREATE.intervals]}
+              />
+              <AmountInput
+                id={fieldId('release')}
+                label={VAULT_CREATE.money.releaseAmount}
+                helper={VAULT_CREATE.money.releaseHelper}
+                asset={BCH}
+                value={release}
+                onChange={setRelease}
+                error={errors.release}
+              />
+              <AmountInput
+                label={`${VAULT_CREATE.money.limit} ${LABELS.optional}`}
+                helper={VAULT_CREATE.money.limitHelper}
+                asset={BCH}
+                value={limit}
+                onChange={setLimit}
+              />
+            </>
+          ) : null}
 
-            {/* Step 5: Spending Cap */}
-            {step === 5 && (
-              <div className="space-y-8">
-                <h2 className="text-2xl font-display">Spending Cap (Optional)</h2>
-                <div>
-                  <label className="block text-sm font-bold uppercase tracking-wide mb-3">Max Spend per Period</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={formData.spendingCap}
-                      onChange={(e) => handleInputChange('spendingCap', e.target.value)}
-                      className="w-full px-4 py-3 bg-white border border-border rounded-lg focus:outline-none focus:border-primary transition-colors font-mono text-lg"
-                      placeholder="No Cap"
-                      step="0.01"
-                    />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-textMuted font-mono text-sm">BCH</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Step 6: Review */}
-            {step === 6 && (
-              <div className="space-y-8">
-                <h2 className="text-2xl font-display">Confirm Deployment</h2>
-
-                <div className="grid gap-6 md:grid-cols-2 font-mono text-sm border-t border-border pt-6">
-                  <div>
-                    <span className="text-xs uppercase text-textMuted block mb-1">Name</span>
-                    <p className="font-bold">{formData.name || 'Untitled'}</p>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase text-textMuted block mb-1">Deposit</span>
-                    <p className="font-bold">{formData.depositAmount || '0'} BCH</p>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase text-textMuted block mb-1">Schedule</span>
-                    <p className="font-bold">{formData.unlockAmount || '0'} BCH / {formData.cycleDuration === '604800' ? 'Week' : 'Month'}</p>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase text-textMuted block mb-1">Threshold</span>
-                    <p className="font-bold">{formData.approvalThreshold}-of-{formData.signers.filter(s => s).length}</p>
-                  </div>
-                </div>
-
-                <div className="border-t border-border pt-6">
-                  <span className="text-xs uppercase text-textMuted block mb-3">Signers</span>
-                  <div className="space-y-2">
-                    {formData.signers.filter(s => s).map((signer, index) => (
-                      <div key={index} className="flex justify-between items-center text-xs font-mono p-2 bg-whiteAlt rounded">
-                        <span className="truncate w-1/3">{signer}</span>
-                        <span className="truncate w-1/3 text-textMuted">{formData.signerPubkeys[index] || '-'}</span>
-                      </div>
+          {step === 'check' ? (
+            <Card>
+              <div className="flex flex-col gap-4">
+                <Heading level="item" as="h2">
+                  {VAULT_CREATE.check.title}
+                </Heading>
+                <DetailList
+                  items={[
+                    { label: VAULT_CREATE.name.label, value: name.trim() },
+                    { label: VAULT_CREATE.name.description, value: description.trim() },
+                    {
+                      label: VAULT_DETAIL.details.visibility,
+                      value: isPublic
+                        ? VAULT_DETAIL.details.publicValue
+                        : VAULT_DETAIL.details.privateValue,
+                    },
+                    {
+                      label: VAULT_CREATE.money.deposit,
+                      value: <Amount value={deposit || '0'} asset={BCH} />,
+                    },
+                    {
+                      label: VAULT_CREATE.money.releaseAmount,
+                      value: release
+                        ? `${formatAmount(releaseValue, BCH) ?? ''} ${intervalWords}`
+                        : null,
+                    },
+                    {
+                      label: VAULT_CREATE.money.limit,
+                      value: limitValue > 0 ? formatAmount(limitValue, BCH) : null,
+                    },
+                    {
+                      label: VAULT_CREATE.signers.approvals,
+                      value: signersRequiredShort(Number(approvals), SIGNER_COUNT),
+                    },
+                  ]}
+                />
+                <div className="flex flex-col gap-2">
+                  <p className="text-label text-ink-secondary">{VAULT_CREATE.check.signersLabel}</p>
+                  <ul className="flex flex-col gap-2">
+                    {signers.map((row, i) => (
+                      <li key={i} className="flex flex-col gap-0.5">
+                        <span className="text-small text-ink-muted">
+                          {VAULT_CREATE.signers.signer(i + 1)}
+                        </span>
+                        <Address
+                          value={row.address}
+                          variant="full"
+                          isYou={sameAddress(row.address, wallet.address)}
+                        />
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 </div>
-
-                <div className="p-4 bg-accent/5 border border-accent/20 rounded-lg">
-                  <p className="text-xs font-mono text-textMuted">
-                    <strong className="text-textPrimary">READY TO DEPLOY:</strong> Clicking "Deploy Vault" will initiate a blockchain transaction.
-                  </p>
-                </div>
+                <p className="text-small text-ink-secondary">{VAULT_CREATE.check.fixedNote}</p>
+                <p className="text-small text-ink-secondary">{VAULT_CREATE.check.createNote}</p>
+                <Notice tone="info" title={VAULT_CREATE.check.sendingNote} />
               </div>
+            </Card>
+          ) : null}
+
+          {invalid.length > 0 ? (
+            <ErrorSummary
+              title={VAULT_CREATE.check.errorTitle}
+              message={VAULT_CREATE.check.fixFields}
+              fields={invalid.map((key) => ({ label: errorLabels[key] ?? key, id: fieldId(key) }))}
+            />
+          ) : null}
+          {submitError ? (
+            <ErrorSummary title={VAULT_CREATE.check.errorTitle} message={submitError.message} />
+          ) : null}
+
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+            {step === 'name' ? (
+              <ButtonLink to="/vaults" variant="ghost">
+                {VAULT_CREATE.back}
+              </ButtonLink>
+            ) : (
+              <Button variant="ghost" onClick={() => goTo(ORDER[ORDER.indexOf(step) - 1])}>
+                {ACTIONS.back}
+              </Button>
             )}
-
-            {/* Navigation Buttons */}
-            <div className="flex justify-between mt-12 pt-8 border-t border-border">
-              {step > 1 ? (
-                <Button variant="outline" onClick={handleBack} disabled={isSubmitting}>
-                  BACK
-                </Button>
-              ) : (
-                <div />
-              )}
-
-              {step < 6 ? (
-                <Button onClick={handleNext}>NEXT STEP</Button>
-              ) : (
-                <Button onClick={handleSubmit} disabled={isSubmitting} variant="primary" className="shadow-lg shadow-accent/20">
-                  {isSubmitting
-                    ? 'PROCESSING...'
-                    : 'DEPLOY VAULT'}
-                </Button>
-              )}
-            </div>
-          </Card>
-        </div>
-      </div>
-    </>
+            {step === 'check' ? (
+              <Button
+                type="submit"
+                variant="primary"
+                busy={creating}
+                busyLabel={VAULT_CREATE.check.creating}
+              >
+                {VAULT_CREATE.check.create}
+              </Button>
+            ) : (
+              <Button type="submit" variant="primary">
+                {ACTIONS.continue}
+              </Button>
+            )}
+          </div>
+        </form>
+      </Stack>
+    </PageContainer>
   );
 }

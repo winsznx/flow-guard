@@ -1,73 +1,63 @@
-import type { ReactNode } from 'react';
-import { X } from 'lucide-react';
+import { useId, type FormEvent, type ReactNode } from 'react';
 import { Button } from '../ui/Button';
+import { Dialog } from '../ui/Dialog';
+import { ACTIONS } from '../../copy/common';
 
-interface DaoWorkspaceModalProps {
-  isOpen: boolean;
+type SampleEditDialogProps = {
+  open: boolean;
   title: string;
-  description?: string;
-  children: ReactNode;
+  line: string;
+  saveLabel: string;
+  onSave: () => void;
   onClose: () => void;
-  onSubmit?: () => void;
-  submitLabel?: string;
-  submitDisabled?: boolean;
-  onDelete?: () => void;
-  deleteLabel?: string;
-}
+  /** Opens the remove confirmation. Only shown when editing an existing row. */
+  remove?: { label: string; onSelect: () => void };
+  children: ReactNode;
+};
 
-export function DaoWorkspaceModal({
-  isOpen,
+/** The add and edit form for one row of Organization sample data. */
+export function SampleEditDialog({
+  open,
   title,
-  description,
-  children,
+  line,
+  saveLabel,
+  onSave,
   onClose,
-  onSubmit,
-  submitLabel = 'Save changes',
-  submitDisabled = false,
-  onDelete,
-  deleteLabel = 'Delete',
-}: DaoWorkspaceModalProps) {
-  if (!isOpen) return null;
+  remove,
+  children,
+}: SampleEditDialogProps) {
+  const formId = useId();
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSave();
+  };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-textPrimary/60 p-4 backdrop-blur-sm">
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-border bg-surface shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-border/70 px-6 py-5">
-          <div>
-            <h2 className="font-display text-2xl text-textPrimary">{title}</h2>
-            {description && <p className="mt-2 text-sm leading-6 text-textSecondary">{description}</p>}
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-xl p-2 text-textMuted transition-colors hover:bg-surfaceAlt hover:text-textPrimary"
-            aria-label="Close dialog"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="max-h-[calc(90vh-160px)] overflow-y-auto px-6 py-5">{children}</div>
-
-        <div className="flex flex-col gap-3 border-t border-border/70 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            {onDelete && (
-              <Button variant="ghost" onClick={onDelete} className="justify-start text-textMuted hover:text-primary">
-                {deleteLabel}
-              </Button>
-            )}
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <Button variant="outline" onClick={onClose}>
-              Cancel
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          {remove ? (
+            <Button variant="danger-quiet" onClick={remove.onSelect} className="sm:mr-auto">
+              {remove.label}
             </Button>
-            {onSubmit && (
-              <Button onClick={onSubmit} disabled={submitDisabled}>
-                {submitLabel}
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+          ) : null}
+          <Button variant="secondary" onClick={onClose}>
+            {ACTIONS.close}
+          </Button>
+          <Button variant="primary" type="submit" form={formId}>
+            {saveLabel}
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} noValidate onSubmit={submit} className="flex flex-col gap-4 pt-2">
+        <p className="text-small text-ink-secondary">{line}</p>
+        {children}
+      </form>
+    </Dialog>
   );
 }

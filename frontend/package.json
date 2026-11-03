@@ -1,7 +1,7 @@
 {
   "name": "@flowguard/frontend",
-  "version": "0.1.0",
-  "description": "FlowGuard web app for BCH treasuries, streams, payments, distributions, and governance",
+  "version": "1.1.0",
+  "description": "FlowGuard web app for BCH vaults, streams, payments and distributions",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -9,6 +9,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:design": "node scripts/design-lint.mjs",
+    "lint:copy": "node scripts/copy-lint.mjs",
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "lint:ratchet": "node scripts/lint-ratchet.mjs",
+    "lint:all": "tsc --noEmit -p . && node scripts/lint-ratchet.mjs && node scripts/design-lint.mjs && node scripts/copy-lint.mjs && node scripts/check-contrast.mjs",
     "deploy": "NODE_ENV=production pnpm build && npx wrangler deploy"
   },
   "dependencies": {

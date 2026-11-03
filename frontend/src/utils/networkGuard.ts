@@ -17,20 +17,24 @@
  */
 
 import type { Network } from '../hooks/useNetwork';
+import { errorMessage, type ErrorCode } from '../copy/errors';
 
+/** Code read by classifyWalletError(). The operator detail goes to the console and to `details`. */
 export class NetworkMismatchError extends Error {
+  readonly code: ErrorCode = 'MISCONFIGURED';
+  readonly details: string;
+
   constructor(
     readonly frontendNetwork: Network,
     readonly backendNetwork: string,
   ) {
-    super(
-      `Network mismatch: this build targets BCH ${frontendNetwork}, but the API at ` +
-        `${window.location.origin}/api is running on ${backendNetwork}.\n\n` +
-        `Set VITE_BCH_NETWORK=${backendNetwork} in frontend/.env.local, or ` +
-        `BCH_NETWORK=${frontendNetwork} in backend/.env, then restart both. ` +
-        `Neither side can switch network at runtime.`,
-    );
+    super(errorMessage('MISCONFIGURED'));
     this.name = 'NetworkMismatchError';
+    this.details = `Build network ${frontendNetwork}, server network ${backendNetwork}.`;
+    console.error(
+      `[networkGuard] This build targets ${frontendNetwork}, but the API at ${window.location.origin} ` +
+        `runs on ${backendNetwork}. Set the frontend or backend network to match and restart both.`,
+    );
   }
 }
 

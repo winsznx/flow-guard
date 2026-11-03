@@ -1,0 +1,25 @@
+{
+  "src/connectors/CashonizeConnector.ts": {
+    "@typescript-eslint/no-explicit-any": 2
+  },
+  "src/connectors/PaytacaNativeConnector.ts": {
+    "@typescript-eslint/ban-types": 1,
+    "@typescript-eslint/no-explicit-any": 2
+  },
+  "src/connectors/Web3ModalWalletConnectConnector.ts": {
+    "@typescript-eslint/ban-types": 1,
+    "@typescript-eslint/no-explicit-any": 4
+  },
+  "src/hooks/useWallet.ts": {
+    "@typescript-eslint/no-explicit-any": 3
+  },
+  "src/types/wallet.ts": {
+    "@typescript-eslint/no-explicit-any": 3
+  },
+  "src/utils/api.ts": {
+    "@typescript-eslint/no-explicit-any": 18
+  },
+  "src/utils/blockchain.ts": {
+    "@typescript-eslint/no-explicit-any": 7
+  }
+}

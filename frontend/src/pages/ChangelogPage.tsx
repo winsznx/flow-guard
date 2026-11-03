@@ -1,451 +1,134 @@
-import { useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Search,
-  Calendar,
-  Package,
-  AlertCircle,
-  CheckCircle2,
-  Wrench,
-  Shield,
-  Sparkles,
-  ArrowLeft,
-} from 'lucide-react';
-import { Footer } from '../components/layout/Footer';
+import { useState } from 'react';
+import { MarketingFooter } from '../components/layout/Footer';
+import { MarketingNav } from '../components/layout/MarketingNav';
+import { PageContainer } from '../components/layout/PageContainer';
 import { PageMeta } from '../components/seo/PageMeta';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { Display } from '../components/ui/Display';
+import { Heading } from '../components/ui/Heading';
+import { NoResults } from '../components/ui/NoResults';
+import { Notice } from '../components/ui/Notice';
+import { Panel } from '../components/ui/Panel';
+import { SearchInput } from '../components/ui/SearchInput';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { StatusPill } from '../components/ui/StatusPill';
+import type { Tone } from '../components/ui/types';
+import { formatDate } from '../copy/format';
+import { matchesQuery } from '../copy/help';
+import { CHANGE_LABELS, CHANGELOG_PAGE, RELEASES, type ChangeKind, type Release } from '../copy/updates';
 
-interface ChangelogEntry {
-  version: string;
-  date: string;
-  status: 'alpha' | 'beta' | 'rc' | 'stable';
-  network: 'chipnet' | 'mainnet';
-  breaking: boolean;
-  highlights: string[];
-  added?: string[];
-  changed?: string[];
-  fixed?: string[];
-  security?: string[];
-  migration?: string;
-  links: {
-    repo?: string;
-    compare?: string;
-    demo?: string;
-    docs?: string;
-  };
-}
+type KindFilter = ChangeKind | 'all';
 
-const CHANGELOG: ChangelogEntry[] = [
-  {
-    version: '1.0.0',
-    date: '2026-06-01',
-    status: 'stable',
-    network: 'mainnet',
-    breaking: true,
-    highlights: [
-      'Mainnet launch on Bitcoin Cash',
-      'Audited covenant templates for vault, stream, payment, airdrop, bounty, grant, and reward flows',
-      'BCMR-decorated receipt NFTs across every workflow',
-      'Post-Layla VM features in production: bounded loops, functions, bitwise, P2SH32',
-    ],
-    added: [
-      'Production deployment of every covenant template against BCH mainnet',
-      'Receipt NFTs rendered through BCMR in CashTokens-aware wallets',
-      'Batched payouts using bounded loops for airdrops and rewards',
-      'P2SH32 addressing across all template families',
-    ],
-    changed: [
-      'Templates rewritten on top of the Layla VM (loops, functions, bitwise, P2SH32)',
-      'Default network in the app shell switched to BCH mainnet',
-    ],
-    migration: 'Chipnet alpha state does not migrate. Recreate vaults, streams, and payouts on mainnet.',
-    links: {
-      repo: 'https://github.com/winsznx/flow-guard',
-      docs: '/docs',
-    },
-  },
-  {
-    version: '0.2.0-alpha',
-    date: '2026-02-15',
-    status: 'alpha',
-    network: 'chipnet',
-    breaking: false,
-    highlights: [
-      'Initial alpha release on Chipnet',
-      'Treasury, stream, and payout flows on Chipnet',
-      'Contract-backed schedule families with automated claims',
-      'Multi-signature approval workflows',
-    ],
-    added: [
-      'Vault creation with signer thresholds and treasury policy controls',
-      'Stream creation across linear, hybrid, milestone, tranche, and recurring schedules',
-      'Payment scheduling for one-time, recurring, and refillable recurring payouts',
-      'Multi-signature wallet support',
-      'Activity explorer for public transparency',
-      'Budget plan creation and enforcement',
-      'Proposal system for governance',
-      'Airdrop distribution tool',
-    ],
-    changed: [
-      'Updated UI to use Sage design system',
-      'Improved mobile responsiveness across all pages',
-      'Enhanced wallet connection flow',
-    ],
-    fixed: [
-      'Fixed stream detail page rendering issues',
-      'Resolved wallet disconnection edge cases',
-      'Corrected timezone handling for scheduled payments',
-    ],
-    links: {
-      repo: 'https://github.com/winsznx/flow-guard',
-      docs: '/docs',
-    },
-  },
-  {
-    version: '0.1.0-alpha',
-    date: '2026-02-01',
-    status: 'alpha',
-    network: 'chipnet',
-    breaking: true,
-    highlights: [
-      'Initial proof-of-concept release',
-      'Basic treasury functionality',
-      'Simple vesting schedules',
-    ],
-    added: [
-      'Basic treasury creation',
-      'Simple vesting contracts',
-      'Wallet connection (Paytaca)',
-      'Explorer view for public activity',
-    ],
-    migration: 'This is the initial release. No migration needed.',
-    links: {
-      repo: 'https://github.com/winsznx/flow-guard',
-    },
-  },
+const KINDS: readonly ChangeKind[] = ['added', 'changed', 'fixed'];
+const CHANGE_TONE: Record<ChangeKind, Tone> = { added: 'success', changed: 'info', fixed: 'neutral' };
+
+const FILTER_OPTIONS: { value: KindFilter; label: string }[] = [
+  { value: 'all', label: CHANGELOG_PAGE.all },
+  ...KINDS.map((kind) => ({ value: kind, label: CHANGE_LABELS[kind] })),
 ];
 
-const STATUS_STYLES = {
-  alpha: 'bg-warning/10 text-warning border-warning/30',
-  beta: 'bg-blue-500/10 text-blue-600 border-blue-500/30',
-  rc: 'bg-purple-500/10 text-purple-600 border-purple-500/30',
-  stable: 'bg-success/10 text-success border-success/30',
-};
+type VisibleRelease = Release & { groups: { kind: ChangeKind; items: readonly string[] }[] };
 
-const NETWORK_STYLES = {
-  chipnet: 'bg-orange-500/10 text-orange-600 border-orange-500/30',
-  mainnet: 'bg-primary/10 text-primary border-primary/30',
-};
+function visibleReleases(query: string, filter: KindFilter): VisibleRelease[] {
+  return RELEASES.map((release) => ({
+    ...release,
+    groups: KINDS.filter((kind) => filter === 'all' || filter === kind)
+      .map((kind) => ({
+        kind,
+        items: (release.changes[kind] ?? []).filter((item) => matchesQuery(query, item, release.title)),
+      }))
+      .filter((group) => group.items.length > 0),
+  })).filter((release) => release.groups.length > 0);
+}
 
 export default function ChangelogPage() {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSection, setSelectedSection] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<KindFilter>('all');
+  const releases = visibleReleases(query, filter);
 
-  const filteredChangelog = useMemo(() => {
-    return CHANGELOG.filter((entry) => {
-      if (!searchQuery) return true;
-
-      const query = searchQuery.toLowerCase();
-      return (
-        entry.version.toLowerCase().includes(query) ||
-        entry.highlights.some((h) => h.toLowerCase().includes(query)) ||
-        entry.added?.some((a) => a.toLowerCase().includes(query)) ||
-        entry.changed?.some((c) => c.toLowerCase().includes(query)) ||
-        entry.fixed?.some((f) => f.toLowerCase().includes(query))
-      );
-    });
-  }, [searchQuery]);
+  const clear = () => {
+    setQuery('');
+    setFilter('all');
+  };
 
   return (
-    <main className="bg-background min-h-screen">
-      <PageMeta
-        title="Changelog"
-        description="Track FlowGuard releases, contract-backed feature changes, fixes, and production readiness work across the app."
-        path="/changelog"
-      />
-      {/* Hero */}
-      <section className="pt-32 pb-16 px-6 lg:px-12 bg-surface border-b border-border">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center">
-            <h1 className="font-display text-5xl md:text-6xl font-bold text-textPrimary mb-6">
-              Changelog
-            </h1>
-            <p className="text-xl text-textSecondary max-w-2xl mx-auto">
-              Track all FlowGuard releases, features, and improvements
-            </p>
+    <div className="flex min-h-screen flex-col bg-canvas">
+      <PageMeta title={CHANGELOG_PAGE.title} description={CHANGELOG_PAGE.description} path="/changelog" />
+      <MarketingNav />
+      <main className="min-w-0 flex-1">
+        <PageContainer width="reading" className="flex flex-col gap-8 pt-12 lg:pt-16">
+          <header className="flex flex-col gap-3">
+            <Display size="headline" as="h1">
+              {CHANGELOG_PAGE.title}
+            </Display>
+            <p className="text-body-lg text-ink-secondary">{CHANGELOG_PAGE.description}</p>
+          </header>
+
+          <div className="flex flex-col gap-3">
+            <SearchInput
+              label={CHANGELOG_PAGE.searchLabel}
+              placeholder={CHANGELOG_PAGE.searchPlaceholder}
+              value={query}
+              onChange={setQuery}
+            />
+            <SegmentedControl label={CHANGELOG_PAGE.filterLabel} options={FILTER_OPTIONS} value={filter} onChange={setFilter} />
           </div>
-        </div>
-      </section>
 
-      <div className="max-w-6xl mx-auto px-6 lg:px-12 py-16">
-        <div className="grid lg:grid-cols-4 gap-12">
-          {/* Sidebar - Desktop */}
-          <aside className="hidden lg:block lg:col-span-1">
-            <div className="sticky top-24 space-y-6">
-              <div>
-                <h3 className="font-semibold text-textPrimary mb-3">Versions</h3>
-                <nav className="space-y-2">
-                  {CHANGELOG.map((entry) => (
-                    <a
-                      key={entry.version}
-                      href={`#${entry.version}`}
-                      className="block text-sm text-textSecondary hover:text-textPrimary transition-colors py-1"
-                    >
-                      {entry.version}
-                    </a>
-                  ))}
-                </nav>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-textPrimary mb-3">Filter by</h3>
-                <div className="space-y-2">
-                  <button
-                    onClick={() => setSelectedSection(null)}
-                    className={`block w-full text-left text-sm py-1 transition-colors ${
-                      !selectedSection
-                        ? 'text-primary font-medium'
-                        : 'text-textSecondary hover:text-textPrimary'
-                    }`}
-                  >
-                    All Changes
-                  </button>
-                  <button
-                    onClick={() => setSelectedSection('added')}
-                    className={`block w-full text-left text-sm py-1 transition-colors ${
-                      selectedSection === 'added'
-                        ? 'text-primary font-medium'
-                        : 'text-textSecondary hover:text-textPrimary'
-                    }`}
-                  >
-                    Added
-                  </button>
-                  <button
-                    onClick={() => setSelectedSection('changed')}
-                    className={`block w-full text-left text-sm py-1 transition-colors ${
-                      selectedSection === 'changed'
-                        ? 'text-primary font-medium'
-                        : 'text-textSecondary hover:text-textPrimary'
-                    }`}
-                  >
-                    Changed
-                  </button>
-                  <button
-                    onClick={() => setSelectedSection('fixed')}
-                    className={`block w-full text-left text-sm py-1 transition-colors ${
-                      selectedSection === 'fixed'
-                        ? 'text-primary font-medium'
-                        : 'text-textSecondary hover:text-textPrimary'
-                    }`}
-                  >
-                    Fixed
-                  </button>
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          {/* Main Content */}
-          <div className="lg:col-span-3">
-            {/* Search */}
-            <div className="mb-8">
-              <div className="relative">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-textMuted" />
-                <input
-                  type="text"
-                  placeholder="Search changelog..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary bg-surface text-textPrimary"
-                />
-              </div>
-            </div>
-
-            {/* Changelog Entries */}
-            <div className="space-y-12">
-              {filteredChangelog.map((entry) => (
-                <div
-                  key={entry.version}
-                  id={entry.version}
-                  className="scroll-mt-24 bg-surface border border-border rounded-2xl p-8"
-                >
-                  {/* Version Header */}
-                  <div className="mb-6">
-                    <div className="flex flex-wrap items-center gap-3 mb-4">
-                      <h2 className="font-display text-2xl sm:text-3xl font-bold text-textPrimary">
-                        {entry.version}
-                      </h2>
-                      <span
-                        className={`px-3 py-1 text-xs font-semibold rounded-full border ${STATUS_STYLES[entry.status]}`}
-                      >
-                        {entry.status.toUpperCase()}
-                      </span>
-                      <span
-                        className={`px-3 py-1 text-xs font-semibold rounded-full border ${NETWORK_STYLES[entry.network]}`}
-                      >
-                        {entry.network.toUpperCase()}
-                      </span>
-                      {entry.breaking && (
-                        <span className="px-3 py-1 text-xs font-semibold rounded-full border bg-error/10 text-error border-error/30">
-                          BREAKING
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-textMuted">
-                      <Calendar className="w-4 h-4" />
-                      {new Date(entry.date).toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric',
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Highlights */}
-                  {entry.highlights.length > 0 && (
-                    <div className="mb-6">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Sparkles className="w-5 h-5 text-primary" />
-                        <h3 className="font-semibold text-textPrimary">Highlights</h3>
-                      </div>
-                      <ul className="space-y-2">
-                        {entry.highlights.map((item, i) => (
-                          <li key={i} className="flex items-start gap-3">
-                            <CheckCircle2 className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
-                            <span className="text-textSecondary">{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Added */}
-                  {entry.added &&
-                    entry.added.length > 0 &&
-                    (!selectedSection || selectedSection === 'added') && (
-                      <div className="mb-6">
-                        <div className="flex items-center gap-2 mb-3">
-                          <Package className="w-5 h-5 text-success" />
-                          <h3 className="font-semibold text-textPrimary">Added</h3>
+          {releases.length === 0 ? (
+            <NoResults thing={CHANGELOG_PAGE.noMatchThing} onClear={clear} />
+          ) : (
+            <ol className="flex flex-col gap-6">
+              {releases.map((release) => (
+                <li key={release.version}>
+                  <Panel>
+                    <article aria-labelledby={`release-${release.version}`} className="flex flex-col gap-6">
+                      <header className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                          <span className="text-label text-ink">{release.version}</span>
+                          <time dateTime={release.date} className="text-small text-ink-muted">
+                            {formatDate(release.date)}
+                          </time>
+                          <StatusPill status={release.network === 'main' ? 'networkMain' : 'networkTest'} size="sm" />
                         </div>
-                        <ul className="space-y-2">
-                          {entry.added.map((item, i) => (
-                            <li key={i} className="flex items-start gap-3">
-                              <span className="text-success mt-1">+</span>
-                              <span className="text-textSecondary">{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                  {/* Changed */}
-                  {entry.changed &&
-                    entry.changed.length > 0 &&
-                    (!selectedSection || selectedSection === 'changed') && (
-                      <div className="mb-6">
-                        <div className="flex items-center gap-2 mb-3">
-                          <Wrench className="w-5 h-5 text-warning" />
-                          <h3 className="font-semibold text-textPrimary">Changed</h3>
-                        </div>
-                        <ul className="space-y-2">
-                          {entry.changed.map((item, i) => (
-                            <li key={i} className="flex items-start gap-3">
-                              <span className="text-warning mt-1">~</span>
-                              <span className="text-textSecondary">{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                  {/* Fixed */}
-                  {entry.fixed &&
-                    entry.fixed.length > 0 &&
-                    (!selectedSection || selectedSection === 'fixed') && (
-                      <div className="mb-6">
-                        <div className="flex items-center gap-2 mb-3">
-                          <CheckCircle2 className="w-5 h-5 text-primary" />
-                          <h3 className="font-semibold text-textPrimary">Fixed</h3>
-                        </div>
-                        <ul className="space-y-2">
-                          {entry.fixed.map((item, i) => (
-                            <li key={i} className="flex items-start gap-3">
-                              <span className="text-primary mt-1">✓</span>
-                              <span className="text-textSecondary">{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                  {/* Security */}
-                  {entry.security && entry.security.length > 0 && (
-                    <div className="mb-6">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Shield className="w-5 h-5 text-error" />
-                        <h3 className="font-semibold text-textPrimary">Security</h3>
-                      </div>
-                      <ul className="space-y-2">
-                        {entry.security.map((item, i) => (
-                          <li key={i} className="flex items-start gap-3">
-                            <AlertCircle className="w-5 h-5 text-error mt-0.5 flex-shrink-0" />
-                            <span className="text-textSecondary">{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Migration Notes */}
-                  {entry.migration && (
-                    <div className="mb-6 p-4 bg-warning/5 border border-warning/20 rounded-lg">
-                      <div className="flex items-start gap-3">
-                        <AlertCircle className="w-5 h-5 text-warning mt-0.5 flex-shrink-0" />
-                        <div>
-                          <h4 className="font-semibold text-textPrimary mb-2">Migration Notes</h4>
-                          <p className="text-sm text-textSecondary">{entry.migration}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Links */}
-                  <div className="flex flex-wrap gap-3 pt-4 border-t border-border">
-                    {entry.links.repo && (
-                      <a
-                        href={entry.links.repo}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-primary hover:text-primaryHover"
-                      >
-                        View on GitHub →
-                      </a>
-                    )}
-                    {entry.links.docs && (
-                      <a
-                        href={entry.links.docs}
-                        className="text-sm text-primary hover:text-primaryHover"
-                      >
-                        Documentation →
-                      </a>
-                    )}
-                  </div>
-                </div>
+                        <Heading level="section" as="h2" id={`release-${release.version}`}>
+                          {release.title}
+                        </Heading>
+                      </header>
+                      {release.groups.map((group) => (
+                        <section key={group.kind} className="flex flex-col gap-2">
+                          <h3 className="flex">
+                            <StatusPill label={CHANGE_LABELS[group.kind]} tone={CHANGE_TONE[group.kind]} size="sm" />
+                          </h3>
+                          <ul className="flex list-disc flex-col gap-1 pl-5 text-body text-ink-secondary">
+                            {group.items.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </section>
+                      ))}
+                      {release.note ? (
+                        <Notice tone="info" title={CHANGELOG_PAGE.noteTitle}>
+                          {release.note}
+                        </Notice>
+                      ) : null}
+                    </article>
+                  </Panel>
+                </li>
               ))}
-            </div>
+            </ol>
+          )}
 
-            {filteredChangelog.length === 0 && (
-              <div className="text-center py-16">
-                <p className="text-textSecondary text-lg">
-                  No changelog entries found matching your search.
-                </p>
-              </div>
-            )}
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <ButtonLink variant="secondary" href={CHANGELOG_PAGE.githubHref} external>
+              {CHANGELOG_PAGE.githubLabel}
+            </ButtonLink>
+            <ButtonLink variant="secondary" href={CHANGELOG_PAGE.docsHref} external>
+              {CHANGELOG_PAGE.docsLabel}
+            </ButtonLink>
           </div>
-        </div>
-      </div>
-
-      <Footer />
-    </main>
+        </PageContainer>
+      </main>
+      <MarketingFooter />
+    </div>
   );
 }

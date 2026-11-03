@@ -1,545 +1,335 @@
-/**
- * AirdropsPage - Campaign-centric Explorer Listing
- * Rich card view with filters and quick campaign insights
- */
-
-import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Gift,
-  Plus,
-  Users,
-  DollarSign,
-  TrendingUp,
-  Search,
-  Calendar,
-  Clock,
-  Copy,
-  Check,
-  ArrowUpRight,
-  ExternalLink,
-} from 'lucide-react';
-import { useWallet } from '../hooks/useWallet';
-import { useWalletModal } from '../hooks/useWalletModal';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { PageContainer } from '../components/layout/PageContainer';
+import { ListToolbar } from '../components/layout/ListToolbar';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Stack } from '../components/layout/Stack';
+import { Amount } from '../components/ui/Amount';
 import { Button } from '../components/ui/Button';
-import { Card } from '../components/ui/Card';
-import { Input } from '../components/ui/Input';
-import { SkeletonTable } from '../components/ui/Skeleton';
-import { StatsCard } from '../components/shared/StatsCard';
-import { getExplorerTxUrl } from '../utils/blockchain';
-import { formatLogicalId } from '../utils/display';
-import { formatTokenAmount, tokenSymbol } from '../utils/tokenFormat';
+import { ButtonLink } from '../components/ui/ButtonLink';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { FilterChips } from '../components/ui/FilterChips';
+import { Gift, Plus } from '../components/ui/Icon';
+import { List, type Column, type ListState } from '../components/ui/List';
+import { NoResults } from '../components/ui/NoResults';
+import { Notice } from '../components/ui/Notice';
+import { SearchInput } from '../components/ui/SearchInput';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { StatRow } from '../components/ui/StatRow';
+import { StatTile } from '../components/ui/StatTile';
+import { StatusPill } from '../components/ui/StatusPill';
+import { useToast } from '../components/ui/Toast';
+import type { Asset } from '../components/ui/types';
+import { useWallet } from '../hooks/useWallet';
+import {
+  AIRDROPS_PAGE,
+  airdropPill,
+  airdropPoolEmpty,
+  airdropShareCount,
+  fromSender,
+  sharesClaimed,
+  tokenAirdropsLeftOut,
+} from '../copy/airdrops';
+import { TOASTS, showFinished } from '../copy/common';
+import { formatAddress, formatDate } from '../copy/format';
+import { STATUS, type StatusKey } from '../copy/status';
+import { getCachedTokenMeta } from '../utils/tokenMeta';
 
-type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'EXPIRED';
-type CampaignType = 'AIRDROP' | 'BOUNTY' | 'REWARD' | 'GRANT';
+type View = 'sent' | 'toClaim';
+type StatusFilter = 'all' | 'notFunded' | 'scheduled' | 'openForClaims' | 'paused' | 'closed' | 'expired' | 'cancelled';
 
-interface AirdropCampaign {
+interface AirdropRow {
   id: string;
-  campaign_id: string;
   creator: string;
   title: string;
-  description?: string;
-  campaign_type: CampaignType;
-  token_type: 'BCH' | 'CASHTOKENS';
-  token_category?: string;
+  token_type: string;
+  token_category?: string | null;
+  token_decimals?: number | null;
   total_amount: number;
   amount_per_claim: number;
   total_recipients: number;
   claimed_count: number;
-  remaining_claims: number;
-  claim_link: string;
+  claim_link?: string | null;
   start_date: number;
-  end_date?: number;
-  status: CampaignStatus;
-  require_kyc: boolean;
-  max_claims_per_address?: number;
-  created_at: number;
-  latest_event?: {
-    event_type: string;
-    status?: string | null;
-    tx_hash?: string | null;
-    created_at: number;
-  } | null;
+  end_date?: number | null;
+  status: string;
+}
+
+const BCH: Asset = { kind: 'bch' };
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'sent', label: AIRDROPS_PAGE.views.sent },
+  { value: 'toClaim', label: AIRDROPS_PAGE.views.toClaim },
+];
+
+const FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: AIRDROPS_PAGE.filterAll },
+  { value: 'notFunded', label: STATUS.notFunded.word },
+  { value: 'scheduled', label: STATUS.scheduled.word },
+  { value: 'openForClaims', label: STATUS.openForClaims.word },
+  { value: 'paused', label: STATUS.paused.word },
+  { value: 'closed', label: STATUS.closed.word },
+  { value: 'expired', label: STATUS.expired.word },
+  { value: 'cancelled', label: STATUS.cancelled.word },
+];
+
+function readView(value: string | null): View {
+  return value === 'toClaim' ? 'toClaim' : 'sent';
+}
+
+function readStatus(value: string | null): StatusFilter {
+  return FILTERS.some((filter) => filter.value === value) ? (value as StatusFilter) : 'all';
+}
+
+function airdropAsset(row: AirdropRow): Asset {
+  if (row.token_type === 'BCH' || !row.token_category) return BCH;
+  const meta = getCachedTokenMeta(row.token_category);
+  return { kind: 'token', tokenId: row.token_category, symbol: meta?.symbol, decimals: row.token_decimals ?? meta?.decimals ?? 0 };
+}
+
+function isDone(status: StatusKey): boolean {
+  return status === 'closed' || status === 'expired' || status === 'cancelled';
+}
+
+async function fetchAirdrops(view: View, address: string): Promise<AirdropRow[]> {
+  const url =
+    view === 'sent'
+      ? `/api/airdrops?creator=${encodeURIComponent(address)}`
+      : `/api/airdrops/claimable?address=${encodeURIComponent(address)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Airdrops request failed with ${response.status}`);
+  const data: { campaigns?: AirdropRow[] } = await response.json();
+  return data.campaigns ?? [];
 }
 
 export default function AirdropsPage() {
   const wallet = useWallet();
-  const { openModal } = useWalletModal();
-  const navigate = useNavigate();
-  const [campaigns, setCampaigns] = useState<AirdropCampaign[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'created' | 'claimable'>('created');
-  const [statusFilter, setStatusFilter] = useState<'all' | CampaignStatus>('all');
-  const [typeFilter, setTypeFilter] = useState<'all' | CampaignType>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [copiedCampaignId, setCopiedCampaignId] = useState<string | null>(null);
-  const network = import.meta.env.VITE_BCH_NETWORK === 'mainnet' ? 'mainnet' : 'chipnet';
+  const { toast } = useToast();
+  const [params, setParams] = useSearchParams();
+  const view = readView(params.get('view'));
+  const status = readStatus(params.get('status'));
+  const query = params.get('q') ?? '';
+  const [rows, setRows] = useState<AirdropRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  const load = useCallback(async () => {
+    if (!wallet.address) return;
+    setFailed(false);
+    setRows(null);
+    try {
+      const loaded = await fetchAirdrops(view, wallet.address);
+      setRows(view === 'toClaim' ? loaded.filter((row) => !airdropPoolEmpty(row)) : loaded);
+    } catch (error) {
+      console.error('Airdrops did not load', error);
+      setFailed(true);
+    }
+  }, [view, wallet.address]);
 
   useEffect(() => {
-    if (!wallet.address) {
-      setLoading(false);
-      return;
+    void load();
+  }, [load]);
+
+  const update = (next: Record<string, string | null>) => {
+    const merged = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null || value === '' || value === 'all' || (key === 'view' && value === 'sent')) merged.delete(key);
+      else merged.set(key, value);
     }
+    setParams(merged, { replace: true });
+  };
 
-    const fetchCampaigns = async () => {
-      try {
-        setLoading(true);
-        const endpoint =
-          viewMode === 'created'
-            ? `/api/airdrops?creator=${wallet.address}`
-            : `/api/airdrops/claimable?address=${wallet.address}`;
+  const all = useMemo(() => rows ?? [], [rows]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return all.filter((row) => {
+      if (status !== 'all' && airdropPill(row, nowSeconds) !== status) return false;
+      return !needle || row.title.toLowerCase().includes(needle);
+    });
+  }, [all, nowSeconds, query, status]);
 
-        const response = await fetch(endpoint);
-        const data = await response.json();
-        setCampaigns(data.campaigns || []);
-      } catch (error) {
-        console.error('Failed to fetch campaigns:', error);
-        setCampaigns([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const open = status === 'all' ? filtered.filter((row) => !isDone(airdropPill(row, nowSeconds))) : filtered;
+  const done = status === 'all' ? filtered.filter((row) => isDone(airdropPill(row, nowSeconds))) : [];
+  const filtering = status !== 'all' || query.trim() !== '';
+  const state: ListState = failed
+    ? 'error'
+    : rows === null
+      ? 'loading'
+      : filtered.length > 0
+        ? 'ready'
+        : all.length > 0 && filtering
+          ? 'no-results'
+          : 'empty';
 
-    fetchCampaigns();
-  }, [wallet.address, viewMode]);
+  const bchRows = all.filter((row) => airdropAsset(row).kind === 'bch');
+  const tokenCount = all.length - bchRows.length;
+  const openCount = all.filter((row) => airdropPill(row, nowSeconds) === 'openForClaims').length;
+  const sharesTaken = all.reduce((sum, row) => sum + Number(row.claimed_count || 0), 0);
+  const claimedBch = bchRows.reduce((sum, row) => sum + Number(row.claimed_count || 0) * Number(row.amount_per_claim || 0), 0);
+  const showStats = view === 'sent' && !failed && (rows === null || all.length > 0);
+  const tileState = rows === null ? 'loading' : 'ready';
 
-  // Calculate stats. BCH-denominated totals must exclude CashToken campaigns:
-  // their amounts are in token units, not BCH, so summing them mixes units.
-  const activeCampaigns = campaigns.filter((c) => c.status === 'ACTIVE');
-  const bchCampaigns = campaigns.filter((c) => (c.token_type ?? 'BCH') === 'BCH');
-  const totalDistributed = bchCampaigns.reduce(
-    (sum, c) => sum + c.claimed_count * c.amount_per_claim,
-    0
+  const copyLink = async (row: AirdropRow) => {
+    if (!row.claim_link) return;
+    try {
+      await navigator.clipboard.writeText(row.claim_link);
+      toast({ tone: 'success', title: TOASTS.linkCopied });
+    } catch (error) {
+      console.warn('Clipboard write was refused', error);
+      toast({ tone: 'danger', title: TOASTS.copyFailed });
+    }
+  };
+
+  const columns: Column<AirdropRow>[] = [
+    {
+      key: 'airdrop',
+      header: AIRDROPS_PAGE.columns.airdrop,
+      primary: true,
+      cell: (row) => (
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-title-item text-ink">{row.title}</span>
+          <span className="text-small text-ink-muted">
+            {view === 'toClaim' ? fromSender(formatAddress(row.creator)) : sharesClaimed(Number(row.claimed_count) || 0, airdropShareCount(row))}
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: 'status',
+      header: AIRDROPS_PAGE.columns.status,
+      mobile: 'top',
+      cell: (row) => <StatusPill status={airdropPill(row, nowSeconds)} />,
+    },
+    {
+      key: 'share',
+      header: AIRDROPS_PAGE.columns.share,
+      align: 'end',
+      mobile: 'bottom-start',
+      cell: (row) => <Amount value={row.amount_per_claim} asset={airdropAsset(row)} precision="list" />,
+    },
+    {
+      key: 'closes',
+      header: AIRDROPS_PAGE.columns.closes,
+      mobile: 'bottom-end',
+      cell: (row) => {
+        const date = formatDate(row.end_date, { dropSameYear: true, now: nowSeconds * 1000 });
+        if (!date) return AIRDROPS_PAGE.noClose;
+        return (
+          <>
+            <span className="md:hidden">{AIRDROPS_PAGE.closesOn} </span>
+            {date}
+          </>
+        );
+      },
+    },
+  ];
+
+  const canShare = (row: AirdropRow) => view === 'sent' && Boolean(row.claim_link) && airdropPill(row, nowSeconds) === 'openForClaims';
+
+  const createButton = (
+    <ButtonLink variant="primary" leadingIcon={Plus} to="/airdrops/create">
+      {AIRDROPS_PAGE.create}
+    </ButtonLink>
   );
-  const totalRecipients = campaigns.reduce((sum, c) => sum + c.claimed_count, 0);
-  const totalValue = bchCampaigns.reduce((sum, c) => sum + c.total_amount, 0);
 
-  const filteredCampaigns = useMemo(() => {
-    return campaigns.filter((campaign) => {
-      if (statusFilter !== 'all' && campaign.status !== statusFilter) return false;
-      if (typeFilter !== 'all' && campaign.campaign_type !== typeFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        const haystack = [
-          campaign.title,
-          campaign.description || '',
-          campaign.campaign_id,
-          campaign.creator,
-          campaign.status,
-          campaign.campaign_type,
-        ]
-          .join(' ')
-          .toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [campaigns, searchQuery, statusFilter, typeFilter]);
-
-  const formatDate = (timestamp: number) =>
-    new Date(timestamp * 1000).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: '2-digit',
-    });
-
-  const formatShortAddress = (value: string) =>
-    `${value.slice(0, 14)}...${value.slice(-10)}`;
-
-  const formatEventLabel = (eventType: string) => {
-    switch (eventType) {
-      case 'created':
-        return 'Campaign Created';
-      case 'funded':
-        return 'Campaign Funded';
-      case 'claim':
-        return 'Claim Processed';
-      case 'paused':
-        return 'Campaign Paused';
-      case 'resumed':
-        return 'Campaign Resumed';
-      case 'cancelled':
-        return 'Campaign Cancelled';
-      default:
-        return eventType
-          .split('_')
-          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-          .join(' ');
-    }
-  };
-
-  const getProgress = (campaign: AirdropCampaign) => {
-    if (campaign.total_recipients <= 0) return 0;
-    return Math.min(100, (campaign.claimed_count / campaign.total_recipients) * 100);
-  };
-
-  const getCampaignTypeClasses = (campaignType: CampaignType) => {
-    switch (campaignType) {
-      case 'AIRDROP':
-        return 'bg-primary/10 text-primary border-primary/30';
-      case 'BOUNTY':
-        return 'bg-accent/10 text-accent border-accent/30';
-      case 'REWARD':
-        return 'bg-secondary/15 text-textPrimary border-secondary/30';
-      default:
-        return 'bg-surfaceAlt text-textMuted border-border';
-    }
-  };
-
-  const getStatusClasses = (status: CampaignStatus) => {
-    switch (status) {
-      case 'ACTIVE':
-        return 'bg-accent/10 text-accent border-accent/30';
-      case 'PAUSED':
-        return 'bg-secondary/15 text-textPrimary border-secondary/40';
-      case 'COMPLETED':
-        return 'bg-primary/10 text-primary border-primary/30';
-      default:
-        return 'bg-surfaceAlt text-textMuted border-border';
-    }
-  };
-
-  const copyClaimLink = async (campaign: AirdropCampaign) => {
-    if (!campaign.claim_link) return;
-    await navigator.clipboard.writeText(campaign.claim_link);
-    setCopiedCampaignId(campaign.id);
-    window.setTimeout(() => setCopiedCampaignId(null), 1800);
-  };
-
-  if (!wallet.isConnected) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center max-w-md">
-          <Gift className="w-16 h-16 text-textMuted mx-auto mb-4" />
-          <h2 className="text-2xl font-display font-bold text-textPrimary mb-2">
-            Connect Your Wallet
-          </h2>
-          <p className="text-textMuted font-sans mb-6">
-            Please connect your wallet to view and manage airdrop campaigns.
-          </p>
-          <Button onClick={openModal}>Connect Wallet</Button>
-        </div>
-      </div>
+  const empty =
+    view === 'toClaim' ? (
+      <EmptyState
+        icon={Gift}
+        title={AIRDROPS_PAGE.empty.toClaim.title}
+        description={AIRDROPS_PAGE.empty.toClaim.description}
+        learnMore={{ label: AIRDROPS_PAGE.howItWorks, to: '/help#claim-an-airdrop' }}
+      />
+    ) : (
+      <EmptyState
+        icon={Gift}
+        title={AIRDROPS_PAGE.empty.sent.title}
+        description={AIRDROPS_PAGE.empty.sent.description}
+        example={AIRDROPS_PAGE.empty.sent.example}
+        action={createButton}
+        learnMore={{ label: AIRDROPS_PAGE.howItWorks, to: '/use-cases#send-to-many' }}
+      />
     );
-  }
 
   return (
-    <div className="min-h-screen pb-20 bg-background">
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-        {/* Header */}
-        <div className="mb-6 md:mb-8">
-          <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 md:gap-6 mb-6 md:mb-8">
-            <div>
-              <h1 className="font-display font-medium text-3xl md:text-5xl lg:text-6xl text-textPrimary mb-3 md:mb-4">
-                Airdrops
-              </h1>
-              <p className="font-sans text-textMuted max-w-2xl text-sm leading-relaxed">
-                {viewMode === 'created'
-                  ? 'Manage mass distribution campaigns and track claim progress'
-                  : 'Discover and claim available airdrops'}
-              </p>
-            </div>
-            {viewMode === 'created' && (
-              <Button
-                size="lg"
-                onClick={() => navigate('/airdrops/create')}
-                className="shadow-lg"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Create Campaign
-              </Button>
-            )}
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-            <StatsCard
-              label="Active Campaigns"
-              value={activeCampaigns.length}
-              subtitle={`${campaigns.length} total`}
-              icon={Gift}
-              color="primary"
+    <PageContainer>
+      <PageHeader title={AIRDROPS_PAGE.title} description={AIRDROPS_PAGE.description} primaryAction={createButton} />
+      <Stack>
+        <ListToolbar
+          segments={
+            <SegmentedControl
+              label={AIRDROPS_PAGE.viewLabel}
+              options={VIEWS}
+              value={view}
+              onChange={(next) => update({ view: next, status: null })}
             />
-            <StatsCard
-              label="Total Distributed"
-              value={`${totalDistributed.toFixed(4)} BCH`}
-              subtitle="Across all campaigns"
-              icon={DollarSign}
-              color="accent"
-              progress={{
-                percentage: totalValue > 0 ? (totalDistributed / totalValue) * 100 : 0,
-                label: 'Distributed',
-              }}
+          }
+          search={
+            <SearchInput
+              label={AIRDROPS_PAGE.searchLabel}
+              placeholder={AIRDROPS_PAGE.searchPlaceholder}
+              value={query}
+              onChange={(next) => update({ q: next })}
+              className="w-full"
             />
-            <StatsCard
-              label="Total Claimants"
-              value={totalRecipients}
-              subtitle="Unique claims"
-              icon={Users}
-              color="secondary"
-            />
-            <StatsCard
-              label="Total Value"
-              value={`${totalValue.toFixed(4)} BCH`}
-              subtitle="All campaigns"
-              icon={TrendingUp}
-              color="muted"
-            />
-          </div>
-
-          {/* View Mode Toggle */}
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <Button
-              variant={viewMode === 'created' ? 'primary' : 'outline'}
-              onClick={() => setViewMode('created')}
-              className="flex items-center gap-2"
-            >
-              <TrendingUp className="w-4 h-4" />
-              Created
-            </Button>
-            <Button
-              variant={viewMode === 'claimable' ? 'primary' : 'outline'}
-              onClick={() => setViewMode('claimable')}
-              className="flex items-center gap-2"
-            >
-              <Gift className="w-4 h-4" />
-              Claimable
-            </Button>
-          </div>
-
-          {/* Search + Filters */}
-          <Card className="p-4 md:p-5">
-            <div className="flex flex-col lg:flex-row gap-4 lg:items-center">
-              <div className="flex-1 relative">
-                <Search className="w-4 h-4 text-textMuted absolute left-3 top-1/2 -translate-y-1/2" />
-                <Input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by title, campaign ID, creator, status..."
-                  className="pl-10"
+          }
+          chips={
+            view === 'sent' ? (
+              <FilterChips
+                label={AIRDROPS_PAGE.filterLabel}
+                options={FILTERS}
+                selected={[status]}
+                onChange={(next) => update({ status: next[0] ?? null })}
+              />
+            ) : view === 'toClaim' ? (
+              <Notice tone="info" title={AIRDROPS_PAGE.toClaimLine} />
+            ) : null
+          }
+          stats={
+            showStats ? (
+              <StatRow>
+                <StatTile label={AIRDROPS_PAGE.stats.open} value={openCount} state={tileState} />
+                <StatTile label={AIRDROPS_PAGE.stats.shares} value={sharesTaken} state={tileState} />
+                <StatTile
+                  label={AIRDROPS_PAGE.stats.claimedBch}
+                  value={<Amount value={claimedBch} asset={BCH} size="lg" precision="list" />}
+                  sub={tokenCount > 0 ? tokenAirdropsLeftOut(tokenCount) : undefined}
+                  state={tileState}
                 />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(['all', 'ACTIVE', 'PAUSED', 'COMPLETED', 'EXPIRED'] as const).map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => setStatusFilter(status)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-sans font-medium transition-colors ${
-                      statusFilter === status
-                        ? 'bg-primary text-white shadow-sm'
-                        : 'bg-surface text-textSecondary hover:bg-surfaceAlt border border-border'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(['all', 'AIRDROP', 'BOUNTY', 'REWARD', 'GRANT'] as const).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setTypeFilter(type)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-sans font-medium transition-colors ${
-                      typeFilter === type
-                        ? 'bg-accent text-white shadow-sm'
-                        : 'bg-surface text-textSecondary hover:bg-surfaceAlt border border-border'
-                    }`}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Card>
-        </div>
+              </StatRow>
+            ) : null
+          }
+        />
 
-        {/* Campaign Cards */}
-        {loading ? (
-          <div className="text-center py-12">
-            <SkeletonTable rows={6} columns={5} />
-          </div>
-        ) : filteredCampaigns.length === 0 ? (
-          <Card padding="xl" className="text-center">
-            <Gift className="w-12 h-12 text-textMuted mx-auto mb-4" />
-            <p className="font-display text-lg text-textPrimary mb-2">No campaigns found</p>
-            <p className="text-sm font-sans text-textMuted">
-              Adjust filters or create a new campaign to populate this view.
-            </p>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
-            {filteredCampaigns.map((campaign) => {
-              const progress = getProgress(campaign);
-              const distributed = campaign.claimed_count * campaign.amount_per_claim;
-
-              return (
-                <Card
-                  key={campaign.id}
-                  padding="lg"
-                  hover
-                  className="group"
-                >
-                  <div className="flex items-start justify-between gap-4 mb-4">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-2">
-                        <span className={`px-2.5 py-1 rounded-full border text-xs font-sans font-semibold ${getCampaignTypeClasses(campaign.campaign_type)}`}>
-                          {campaign.campaign_type}
-                        </span>
-                        <span className={`px-2.5 py-1 rounded-full border text-xs font-sans font-semibold ${getStatusClasses(campaign.status)}`}>
-                          {campaign.status}
-                        </span>
-                      </div>
-                      <h3 className="font-display font-bold text-xl md:text-2xl text-textPrimary truncate">
-                        {campaign.title}
-                      </h3>
-                      <p className="font-mono text-xs text-textMuted mt-1 truncate">
-                        {formatLogicalId(campaign.campaign_id)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => navigate(`/airdrops/${campaign.id}`)}
-                      className="shrink-0 w-10 h-10 rounded-lg border border-border flex items-center justify-center text-textSecondary group-hover:text-primary group-hover:border-primary transition-colors"
-                      aria-label="View campaign details"
-                    >
-                      <ArrowUpRight className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {campaign.description && (
-                    <p className="text-sm font-sans text-textMuted line-clamp-2 mb-4">
-                      {campaign.description}
-                    </p>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="rounded-lg border border-border bg-surfaceAlt p-3">
-                      <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Total Pool</p>
-                      <p className="font-display font-bold text-textPrimary">
-                        {formatTokenAmount(campaign.total_amount, campaign.token_type, campaign.token_category, { noSuffix: true })} {tokenSymbol(campaign.token_type, campaign.token_category)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-surfaceAlt p-3">
-                      <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Per Claim</p>
-                      <p className="font-display font-bold text-textPrimary">
-                        {formatTokenAmount(campaign.amount_per_claim, campaign.token_type, campaign.token_category, { noSuffix: true })} {tokenSymbol(campaign.token_type, campaign.token_category)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-surfaceAlt p-3">
-                      <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Claimed</p>
-                      <p className="font-display font-bold text-accent">
-                        {formatTokenAmount(distributed, campaign.token_type, campaign.token_category, { noSuffix: true })} {tokenSymbol(campaign.token_type, campaign.token_category)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-surfaceAlt p-3">
-                      <p className="text-[11px] font-mono uppercase text-textMuted mb-1">Recipients</p>
-                      <p className="font-display font-bold text-textPrimary">
-                        {campaign.claimed_count} / {campaign.total_recipients}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between text-xs font-mono text-textMuted mb-2">
-                      <span>Claim Progress</span>
-                      <span>{progress.toFixed(1)}%</span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-surfaceAlt overflow-hidden border border-border">
-                      <div
-                        className="h-full bg-accent transition-all duration-500"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-textMuted mb-4">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5" />
-                      Creator: {formatShortAddress(campaign.creator)}
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5" />
-                      Created: {formatDate(campaign.created_at)}
-                    </span>
-                    {campaign.end_date ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        Ends: {formatDate(campaign.end_date)}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        No expiry
-                      </span>
-                    )}
-                  </div>
-
-                  {campaign.latest_event && (
-                    <div className="rounded-lg border border-border bg-surfaceAlt/60 p-3 mb-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[11px] uppercase tracking-wide text-textMuted font-mono mb-1">
-                            Latest Activity
-                          </p>
-                          <p className="text-sm font-sans text-textPrimary truncate">
-                            {formatEventLabel(campaign.latest_event.event_type)}
-                          </p>
-                          <p className="text-xs text-textMuted font-mono">
-                            {formatDate(campaign.latest_event.created_at)}
-                          </p>
-                        </div>
-                        {campaign.latest_event.tx_hash && (
-                          <a
-                            href={getExplorerTxUrl(campaign.latest_event.tx_hash, network)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(event) => event.stopPropagation()}
-                            className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primaryHover"
-                          >
-                            View Tx
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap gap-2">
+        <List
+          label={AIRDROPS_PAGE.listLabel}
+          columns={columns}
+          rows={open}
+          rowKey={(row) => row.id}
+          rowHref={(row) => `/airdrops/${row.id}`}
+          rowAction={
+            view === 'sent'
+              ? (row) =>
+                  canShare(row) ? (
                     <Button
-                      variant="outline"
+                      variant="secondary"
                       size="sm"
-                      onClick={() => navigate(`/airdrops/${campaign.id}`)}
-                      className="flex items-center gap-1.5"
+                      aria-label={AIRDROPS_PAGE.copyLinkFor(row.title)}
+                      onClick={() => void copyLink(row)}
                     >
-                      View Details
-                      <ArrowUpRight className="w-3.5 h-3.5" />
+                      {AIRDROPS_PAGE.copyLink}
                     </Button>
-                    {viewMode === 'created' && campaign.claim_link && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyClaimLink(campaign)}
-                        className="flex items-center gap-1.5"
-                      >
-                        {copiedCampaignId === campaign.id ? (
-                          <>
-                            <Check className="w-3.5 h-3.5" />
-                            Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            Copy Link
-                          </>
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+                  ) : null
+              : undefined
+          }
+          state={state}
+          collapsed={done.length > 0 ? { label: showFinished(done.length), rows: done } : undefined}
+          empty={empty}
+          noResults={<NoResults thing={AIRDROPS_PAGE.noResultsThing} onClear={() => update({ status: null, q: null })} />}
+          error={<ErrorState title={AIRDROPS_PAGE.error.title} reason={AIRDROPS_PAGE.error.reason} onRetry={load} />}
+        />
+      </Stack>
+    </PageContainer>
   );
 }

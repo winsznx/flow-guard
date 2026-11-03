@@ -3,11 +3,23 @@
  * Handles wallet signing and transaction broadcasting
  */
 
-import { binToHex, decodeTransaction, hexToBin } from '@bitauth/libauth';
+import { binToHex, decodeTransaction, hashTransaction, hexToBin, isHex } from '@bitauth/libauth';
 import { broadcastTransaction, getDepositInfo } from './api';
 import { authFetch } from './auth';
 import type { Transaction, SignedTransaction, CashScriptSignOptions, CashScriptSignResponse, SourceOutput } from '../types/wallet';
 import { emitTransactionNotice, normalizeWalletNetwork } from './txNotice';
+import {
+  CodedError,
+  apiFailure,
+  asFlowError,
+  classifyWalletError,
+  flowFailure,
+  rawErrorText,
+  type ErrorCode,
+  type SyncedOutcome,
+} from '../copy/errors';
+import { TX_NOTICES } from '../copy/wallets';
+import { AIRDROP_CLAIM_PATTERNS, WALLET_STALE_COINS_PATTERN } from './walletErrorPatterns';
 
 export interface SignTransactionRequest {
   txHex: string;
@@ -85,7 +97,11 @@ interface StreamCancelBuildPayload {
 
 interface RunLifecycleActionOptions<TPayload = Record<string, unknown>> {
   wallet: WalletInterface;
+  /** Toast title once the transaction is sent, from TX_NOTICES in copy/wallets.ts. */
   actionLabel: string;
+  /** Names the outcome when the transaction went out but FlowGuard's update didn't. */
+  syncedOutcome?: SyncedOutcome;
+  /** Log context only. Never shown. */
   signContext: string;
   metadata?: {
     txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout';
@@ -165,17 +181,64 @@ async function parseJsonSafe(response: Response): Promise<any> {
   }
 }
 
+async function confirmWithRetries<TPayload>(
+  options: RunLifecycleActionOptions<TPayload>,
+  txHash: string,
+  signerAddress: string,
+  buildPayload: TPayload,
+  confirmResult: LifecycleConfirmResult,
+  mapNextStatus: (payload: any) => string | undefined,
+): Promise<void> {
+  if (!options.confirm) return;
+  const maxAttempts = Math.max(1, options.retries ?? 6);
+  const backoffFactor = Math.max(1, options.retryBackoffFactor ?? 1.2);
+  let delay = Math.max(250, options.retryDelayMs ?? 1500);
+  let lastRetryableMessage = '';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await options.confirm({ txHash, signerAddress, buildPayload });
+    const payload = await parseJsonSafe(response);
+    const message = getApiErrorMessage(payload, '');
+
+    if (response.ok) {
+      const serverState = String(payload?.state || '').toLowerCase();
+      confirmResult.state = serverState === 'pending' ? 'pending' : 'confirmed';
+      confirmResult.retryable = payload?.retryable === true || confirmResult.state === 'pending';
+      confirmResult.message = message || undefined;
+      confirmResult.nextStatus = mapNextStatus(payload);
+      return;
+    }
+
+    const retryable = isRetryableLifecycleFailure(response.status, payload, message);
+    if (!retryable) {
+      throw apiFailure(payload, response.status, 'SENT_NOT_SYNCED');
+    }
+
+    lastRetryableMessage = message;
+    if (attempt < maxAttempts) {
+      await sleep(delay);
+      delay = Math.round(delay * backoffFactor);
+      continue;
+    }
+
+    confirmResult.state = 'pending';
+    confirmResult.retryable = true;
+    confirmResult.message = lastRetryableMessage || message || undefined;
+    confirmResult.nextStatus = mapNextStatus(payload);
+  }
+}
+
 export async function runLifecycleAction<TPayload = Record<string, unknown>>(
   options: RunLifecycleActionOptions<TPayload>
 ): Promise<{ build: LifecycleBuildResult<TPayload>; confirm: LifecycleConfirmResult }> {
   const signerAddress = await resolveWalletAddress(options.wallet);
   if (!options.wallet.signCashScriptTransaction) {
-    throw new Error('Connected wallet does not support CashScript transactions');
+    throw flowFailure('WALLET_UNSUPPORTED');
   }
 
   const buildResult = await options.build(signerAddress);
   if (!buildResult?.wcTransaction) {
-    throw new Error('Backend did not return a WalletConnect transaction');
+    throw flowFailure('SERVER_PREPARE_FAILED', { details: `${options.signContext}: no transaction to sign.` });
   }
 
   const signOptions = {
@@ -202,45 +265,17 @@ export async function runLifecycleAction<TPayload = Record<string, unknown>>(
   };
 
   if (options.confirm) {
-    const maxAttempts = Math.max(1, options.retries ?? 6);
-    const backoffFactor = Math.max(1, options.retryBackoffFactor ?? 1.2);
-    let delay = Math.max(250, options.retryDelayMs ?? 1500);
-    let lastRetryableMessage = '';
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const response = await options.confirm({
-        txHash,
-        signerAddress,
-        buildPayload: buildResult.payload,
+    try {
+      await confirmWithRetries(options, txHash, signerAddress, buildResult.payload, confirmResult, mapNextStatus);
+    } catch (error) {
+      // The transaction is already on the network. Only FlowGuard's own update failed,
+      // so this is never reported as a failure.
+      publishTransactionNotice(txHash, options.wallet, options.actionLabel);
+      throw flowFailure('SENT_NOT_SYNCED', {
+        params: options.syncedOutcome ? { outcome: options.syncedOutcome } : {},
+        txid: txHash,
+        details: rawErrorText(error),
       });
-      const payload = await parseJsonSafe(response);
-      const message = getApiErrorMessage(payload, 'Failed to confirm transaction');
-
-      if (response.ok) {
-        const serverState = String(payload?.state || '').toLowerCase();
-        confirmResult.state = serverState === 'pending' ? 'pending' : 'confirmed';
-        confirmResult.retryable = payload?.retryable === true || confirmResult.state === 'pending';
-        confirmResult.message = message;
-        confirmResult.nextStatus = mapNextStatus(payload);
-        break;
-      }
-
-      const retryable = isRetryableLifecycleFailure(response.status, payload, message);
-      if (!retryable) {
-        throw new Error(message);
-      }
-
-      lastRetryableMessage = message;
-      if (attempt < maxAttempts) {
-        await sleep(delay);
-        delay = Math.round(delay * backoffFactor);
-        continue;
-      }
-
-      confirmResult.state = 'pending';
-      confirmResult.retryable = true;
-      confirmResult.message = lastRetryableMessage || message;
-      confirmResult.nextStatus = mapNextStatus(payload);
     }
   }
 
@@ -264,9 +299,10 @@ export async function signAndBroadcastWcTransaction(
     txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout';
     fromAddress?: string;
   },
+  notice: { label: string; step?: NoticeStep } = { label: TX_NOTICES.sent },
 ): Promise<string> {
   if (!wallet.signCashScriptTransaction) {
-    throw new Error('Connected wallet does not support CashScript transactions');
+    throw flowFailure('WALLET_UNSUPPORTED');
   }
   const signOptions = {
     ...deserializeWcSignOptions(serialized),
@@ -274,12 +310,12 @@ export async function signAndBroadcastWcTransaction(
   };
   const signResult = await wallet.signCashScriptTransaction(signOptions);
   const txHash = await resolveTxHashFromSignResult(signResult, signOptions, context, wallet, metadata);
-  return publishTransactionNotice(txHash, wallet, context);
+  return publishTransactionNotice(txHash, wallet, notice.label, notice.step);
 }
 
 function requireSignedTransactionHex(signResult: CashScriptSignResponse, context: string): string {
   if (!signResult?.signedTransaction || typeof signResult.signedTransaction !== 'string') {
-    throw new Error(`${context}: wallet did not return signed transaction hex`);
+    throw flowFailure('WALLET_INCOMPLETE_SIGNATURE', { details: `${context}: the wallet returned no signed transaction.` });
   }
   return signResult.signedTransaction;
 }
@@ -322,72 +358,112 @@ export async function resolveTxHashFromSignResult(
   const unsignedPlaceholderInputs = inspectUnsignedPlaceholderInputs(signedTxHex);
   if (unsignedPlaceholderInputs.length > 0) {
     const oneBasedInputs = unsignedPlaceholderInputs.map((index) => index + 1).join(', ');
-    throw new Error(
-      `${context}: wallet did not sign all required inputs (placeholder left in input(s): ${oneBasedInputs}).`
-    );
+    throw flowFailure('WALLET_INCOMPLETE_SIGNATURE', {
+      details: `${context}: placeholder left unsigned in input(s) ${oneBasedInputs}.`,
+    });
   }
   const walletBroadcasts = signOptions.broadcast ?? true;
 
   if (walletBroadcasts) {
-    if (!signResult.signedTransactionHash) {
-      throw new Error(`${context}: wallet did not return transaction hash after broadcast`);
+    if (signResult.signedTransactionHash) return signResult.signedTransactionHash;
+    // The wallet signed but didn't say it sent it, so send it here before treating it
+    // as on the network. A copy the wallet did relay comes back as already known.
+    const localTxid = txidFromHex(signedTxHex);
+    try {
+      const broadcastResult = await broadcastTransaction(signedTxHex, wallet, metadata);
+      return broadcastResult.txid;
+    } catch (error) {
+      if (localTxid && networkAlreadyHasIt(error)) return localTxid;
+      throw error;
     }
-    return signResult.signedTransactionHash;
   }
 
   const broadcastResult = await broadcastTransaction(signedTxHex, wallet, metadata);
   return signResult.signedTransactionHash || broadcastResult.txid;
 }
 
+const ALREADY_KNOWN = /already (?:in|known)|txn-already|transaction already in block chain/i;
+
+function networkAlreadyHasIt(error: unknown): boolean {
+  const failure = asFlowError(error);
+  return ALREADY_KNOWN.test(`${failure.details ?? ''} ${error instanceof Error ? error.message : ''}`);
+}
+
+function txidFromHex(hex: string | undefined): string | null {
+  if (!hex || !isHex(hex)) return null;
+  const encoded = hexToBin(hex);
+  return typeof decodeTransaction(encoded) === 'string' ? null : hashTransaction(encoded);
+}
+
+/** The server's own wording, for logs and pending notes. Never joined with a status phrase. */
 function getApiErrorMessage(error: any, fallback: string): string {
   if (!error || typeof error !== 'object') {
     return fallback;
   }
-  const user = typeof error.userMessage === 'string' ? error.userMessage.trim() : '';
-  const generic = typeof error.error === 'string' ? error.error.trim() : '';
-  const detail = typeof error.message === 'string' ? error.message.trim() : '';
   const diagnostics = error?.debug?.diagnostics ?? error?.diagnostics;
-  const primary = user || detail || generic || fallback;
-
-  let message = primary;
-  if (!user && generic && detail && generic !== detail) {
-    message = `${generic}: ${detail}`;
-  }
-
   if (diagnostics) {
     console.debug('[blockchain] API error diagnostics:', diagnostics);
   }
-
-  return message;
+  const pick = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+  return pick(error.userMessage) || pick(error.message) || pick(error.error) || fallback;
 }
 
-function publishTransactionNotice(txHash: string, wallet: WalletInterface, label: string): string {
+type NoticeStep = { index: number; of: number };
+
+/** Step 1 of a two-step action: the toast asks for the next approval instead of saying it's pending. */
+const FIRST_OF_TWO: NoticeStep = { index: 1, of: 2 };
+
+function publishTransactionNotice(txHash: string, wallet: WalletInterface, label: string, step?: NoticeStep): string {
   emitTransactionNotice({
     txHash,
     network: normalizeWalletNetwork(wallet.network),
     label,
+    ...(step ? { step } : {}),
   });
   return txHash;
 }
 
-function getNoticeLabelFromTxType(
-  txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout'
-): string {
-  switch (txType) {
-    case 'create':
-      return 'Transaction created';
-    case 'unlock':
-      return 'Cycle unlocked';
-    case 'proposal':
-      return 'Proposal transaction';
-    case 'approve':
-      return 'Proposal approval';
-    case 'payout':
-      return 'Payout executed';
-    default:
-      return 'Transaction broadcast';
-  }
+/** Throws from an action's prepare step when the server answered with an error. */
+function prepareFailed(
+  response: Response,
+  payload: unknown,
+  messages?: ReadonlyArray<readonly [RegExp, ErrorCode]>,
+): CodedError {
+  return apiFailure(payload, response.status, 'SERVER_PREPARE_FAILED', messages);
 }
+
+/** Throws when the server answered without the transaction to sign. */
+function nothingToSign(details: string): CodedError {
+  return flowFailure('SERVER_PREPARE_FAILED', { details });
+}
+
+/** Logs an action's failure and keeps its catalog code. Raw text from elsewhere is classified once. */
+function actionFailure(error: unknown, context: string): CodedError {
+  console.error(`[FlowGuard] ${context}:`, error);
+  return error instanceof CodedError ? error : flowFailure(classifyWalletError(error), { cause: error });
+}
+
+/** Step 2 failures that mean the wallet or server hasn't seen the coins step 1 created yet. */
+function isStaleAfterStepOne(failure: CodedError): boolean {
+  if (failure.code === 'BROADCAST_SPENT_INPUTS' || failure.code === 'SERVER_PREPARE_FAILED') return true;
+  return failure.code === 'UNKNOWN' && WALLET_STALE_COINS_PATTERN.test(failure.details ?? '');
+}
+
+/**
+ * After step 1 of 2 went out, a step 2 failure keeps its own code and carries the
+ * step 1 transaction. Waiting only helps while the new coins aren't seen yet, and a
+ * decline is told as "step 1 is done" because step 1 did go out.
+ */
+function afterPreparationFailure(error: unknown, preparationTxId: string | null, context: string): CodedError {
+  const failure = actionFailure(error, context);
+  if (!preparationTxId || failure.code === 'SENT_NOT_SYNCED' || failure.code === 'SIGN_IN_REJECTED') return failure;
+  const details = failure.details ?? failure.message;
+  if (failure.code === 'WALLET_REJECTED' || isStaleAfterStepOne(failure)) {
+    return flowFailure('STEP_PENDING', { txid: preparationTxId, details });
+  }
+  return flowFailure(failure.code, { txid: failure.txid ?? preparationTxId, details });
+}
+
 
 async function resolveWalletAddress(wallet: WalletInterface): Promise<string> {
   if (wallet.getAddress) {
@@ -403,7 +479,7 @@ async function resolveWalletAddress(wallet: WalletInterface): Promise<string> {
     return wallet.address;
   }
 
-  throw new Error('Wallet not connected');
+  throw flowFailure('NOT_CONNECTED');
 }
 
 /**
@@ -413,7 +489,7 @@ async function resolveWalletAddress(wallet: WalletInterface): Promise<string> {
 export function deserializeWcSignOptions(serialized: SerializedWcTransaction): CashScriptSignOptions {
   const decoded = decodeTransaction(hexToBin(serialized.transaction));
   if (typeof decoded === 'string') {
-    throw new Error(`Failed to decode serialized transaction: ${decoded}`);
+    throw flowFailure('SERVER_PREPARE_FAILED', { details: `Couldn't decode the transaction to sign: ${decoded}` });
   }
 
   const sourceOutputs: SourceOutput[] = serialized.sourceOutputs.map(so => {
@@ -474,173 +550,6 @@ export function deserializeWcSignOptions(serialized: SerializedWcTransaction): C
 }
 
 /**
- * Sign a raw transaction hex using the connected wallet
- * For BCH covenant transactions, we need to sign raw transaction hex
- * @param wallet The wallet hook return value with signTransaction method
- * @param txHex The transaction hex to sign
- * @returns Signed transaction hex
- */
-export async function signTransaction(
-  wallet: WalletInterface,
-  txHex: string
-): Promise<string> {
-  try {
-    // Check if wallet has a method to sign raw hex directly
-    if (wallet && wallet.signRawTransaction && typeof wallet.signRawTransaction === 'function') {
-      try {
-        const signedHex = await wallet.signRawTransaction(txHex);
-        console.log('Successfully signed transaction with wallet signRawTransaction method');
-        return signedHex;
-      } catch (signError: any) {
-        console.warn('Raw transaction signing failed, trying alternative method:', signError);
-        // Fall through to alternative method
-      }
-    }
-
-
-    // Alternative: Try using signTransaction with hex in data field
-    // Some wallets might support this
-    try {
-      const dummyTx: Transaction = {
-        to: wallet.address || '',
-        amount: 0,
-        data: txHex,
-      };
-
-      if (wallet && typeof wallet.signTransaction === 'function') {
-        const signedTx = await wallet.signTransaction(dummyTx);
-        if (signedTx.hex && signedTx.hex.length > 0) {
-          return signedTx.hex;
-        }
-      }
-    } catch (altError) {
-      console.warn('Alternative signing method failed:', altError);
-    }
-
-    throw new Error(
-      'Wallet does not support transaction signing for this operation. ' +
-      'Please use a CashScript-compatible wallet (e.g. Paytaca).'
-    );
-  } catch (error: any) {
-    console.error('Failed to sign transaction:', error);
-    throw new Error(`Signing failed: ${error.message || 'Unknown error'}`);
-  }
-}
-
-/**
- * Sign and broadcast a transaction
- * For BCH covenant transactions, the backend builds transactions with SignatureTemplate
- * which signs automatically if private keys are available. For browser wallets,
- * we need to handle signing differently.
- * @param wallet The wallet hook return value
- * @param txHex The transaction hex to sign
- * @param metadata Optional metadata for transaction tracking
- * @returns Transaction ID after successful broadcast
- */
-export async function signAndBroadcast(
-  wallet: WalletInterface,
-  txHex: string,
-  metadata?: {
-    txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout';
-    vaultId?: string;
-    proposalId?: string;
-    amount?: number;
-    fromAddress?: string;
-    toAddress?: string;
-  }
-): Promise<string> {
-  try {
-    // Try to sign the transaction first
-    let signedTxHex = txHex;
-
-    // Use signRawTransaction if available
-    if (wallet.signRawTransaction && typeof wallet.signRawTransaction === 'function') {
-      try {
-        console.log('Using wallet signRawTransaction method...');
-        signedTxHex = await wallet.signRawTransaction(txHex);
-        console.log('Transaction signed successfully with signRawTransaction');
-      } catch (signError: any) {
-        console.warn('signRawTransaction failed, trying alternative:', signError);
-        // Fall through to alternative method
-      }
-    }
-
-    // Alternative: Try signTransaction with hex in data field
-    if (signedTxHex === txHex) {
-      try {
-        signedTxHex = await signTransaction(wallet, txHex);
-        console.log('Transaction signed successfully with signTransaction');
-      } catch (signError) {
-        console.warn('Could not sign transaction with wallet, using as-is:', signError);
-        // Continue with unsigned hex - backend may handle it or transaction may be pre-signed
-      }
-    }
-
-    // Broadcast the (potentially signed) transaction with metadata
-    const result = await broadcastTransaction(signedTxHex, wallet, metadata);
-    return publishTransactionNotice(result.txid, wallet, 'Transaction broadcast');
-  } catch (error: any) {
-    console.error('Failed to sign and broadcast transaction:', error);
-    throw new Error(`Transaction failed: ${error.message || 'Unknown error'}`);
-  }
-}
-
-async function signFromBackendPayload(
-  wallet: WalletInterface,
-  payload: any,
-  metadata?: {
-    txType?: 'create' | 'unlock' | 'proposal' | 'approve' | 'payout';
-    vaultId?: string;
-    proposalId?: string;
-    amount?: number;
-    fromAddress?: string;
-    toAddress?: string;
-  }
-): Promise<string> {
-  if (payload?.wcTransaction) {
-    if (!wallet.signCashScriptTransaction) {
-      throw new Error('Connected wallet does not support CashScript transactions');
-    }
-    const signOptions = deserializeWcSignOptions(payload.wcTransaction);
-    // Keep legacy payload signing aligned with the standardized lifecycle contract.
-    signOptions.broadcast = false;
-    const tx = signOptions.transaction as { inputs?: Array<{ unlockingBytecode?: Uint8Array }>; outputs?: unknown[] };
-    const contractInputCount = signOptions.sourceOutputs.filter((so: any) => so.contract != null).length;
-
-    console.log('[FlowGuard][WC] Prepared transaction before signing', {
-      inputCount: tx.inputs?.length ?? 0,
-      outputCount: tx.outputs?.length ?? 0,
-      sourceOutputCount: signOptions.sourceOutputs.length,
-      contractInputCount,
-      userInputCount: signOptions.sourceOutputs.length - contractInputCount,
-    });
-
-    const signResult = await wallet.signCashScriptTransaction(
-      signOptions
-    );
-    const txHash = await resolveTxHashFromSignResult(signResult, signOptions, 'WalletConnect signing failed', wallet, metadata);
-    return publishTransactionNotice(txHash, wallet, getNoticeLabelFromTxType(metadata?.txType));
-  }
-
-  if (payload?.transaction?.txHex) {
-    return signAndBroadcast(wallet, payload.transaction.txHex, metadata);
-  }
-
-  if (payload?.txHex) {
-    return signAndBroadcast(wallet, payload.txHex, metadata);
-  }
-
-  if (payload?.transaction?.type && payload?.transaction?.contractType) {
-    throw new Error(
-      'Backend returned a descriptor-only transaction. ' +
-      'This on-chain flow is not fully wired for wallet signing yet.'
-    );
-  }
-
-  throw new Error('Backend did not return a signable transaction payload');
-}
-
-/**
  * Create, sign, and broadcast an on-chain proposal
  * @param wallet The wallet hook return value
  * @param proposalId The proposal ID
@@ -656,7 +565,7 @@ export async function createProposalOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Proposal created',
+    actionLabel: TX_NOTICES.requestCreated,
     signContext: 'Proposal create signing failed',
     metadata: {
       txType: 'proposal',
@@ -676,11 +585,11 @@ export async function createProposalOnChain(
 
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to create proposal transaction'));
+        throw prepareFailed(response, payload);
       }
 
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return proposal creation transaction');
+        throw nothingToSign('Backend did not return proposal creation transaction');
       }
 
       return {
@@ -702,9 +611,6 @@ export async function createProposalOnChain(
     }),
   });
 
-  if (confirm.state === 'failed') {
-    throw new Error(confirm.message || 'Failed to confirm proposal creation');
-  }
 
   return confirm.txHash;
 }
@@ -725,7 +631,7 @@ export async function approveProposalOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Proposal approved',
+    actionLabel: TX_NOTICES.requestApproved,
     signContext: 'Proposal approval signing failed',
     metadata: {
       txType: 'approve',
@@ -745,11 +651,11 @@ export async function approveProposalOnChain(
 
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to create approval transaction'));
+        throw prepareFailed(response, payload);
       }
 
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return proposal approval transaction');
+        throw nothingToSign('Backend did not return proposal approval transaction');
       }
 
       return {
@@ -771,9 +677,6 @@ export async function approveProposalOnChain(
     }),
   });
 
-  if (confirm.state === 'failed') {
-    throw new Error(confirm.message || 'Failed to confirm proposal approval');
-  }
 
   return confirm.txHash;
 }
@@ -797,10 +700,10 @@ export async function executePayoutOnChain(
   remainingSigners?: string[];
 }> {
   if (!wallet.signCashScriptTransaction) {
-    throw new Error('Connected wallet does not support CashScript transaction signing');
+    throw flowFailure('WALLET_UNSUPPORTED');
   }
   if (!wallet.address) {
-    throw new Error('Wallet not connected');
+    throw flowFailure('NOT_CONNECTED');
   }
 
   const apiUrl = '/api';
@@ -816,29 +719,18 @@ export async function executePayoutOnChain(
 
   const payload = await parseJsonSafe(response);
   if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload, 'Failed to create payout transaction'));
+    throw prepareFailed(response, payload);
   }
   if (!payload?.wcTransaction || !payload?.sessionId) {
-    throw new Error('Backend did not return execute signing session data');
+    throw nothingToSign('Backend did not return execute signing session data');
   }
 
   const signOptions = deserializeWcSignOptions(payload.wcTransaction as SerializedWcTransaction);
   signOptions.broadcast = false;
   const signResult = await wallet.signCashScriptTransaction(signOptions);
-  const signedTxHash = await resolveTxHashFromSignResult(
-    signResult,
-    signOptions,
-    'Proposal execute signing failed',
-    wallet,
-    {
-      txType: 'payout',
-      proposalId,
-      vaultId: metadata?.vaultId,
-      amount: metadata?.amount,
-      fromAddress: wallet.address || undefined,
-      toAddress: metadata?.toAddress,
-    },
-  );
+  // Each signer's copy carries only that signer's signature and isn't valid on its own,
+  // so it goes to the server, which combines the copies and broadcasts once.
+  const signedTransaction = requireSignedTransactionHex(signResult, 'Proposal execute signing failed');
 
   const submitResponse = await authFetch(`${apiUrl}/proposals/${proposalId}/execute-signature`, {
     wallet,
@@ -849,13 +741,13 @@ export async function executePayoutOnChain(
     },
     body: JSON.stringify({
       sessionId: payload.sessionId,
-      signedTransaction: signResult.signedTransaction,
+      signedTransaction,
     }),
   });
 
   const submitResult = await parseJsonSafe(submitResponse);
   if (!submitResponse.ok) {
-    throw new Error(getApiErrorMessage(submitResult, 'Failed to submit execute signature'));
+    throw prepareFailed(submitResponse, submitResult);
   }
 
   if (submitResult.pending || submitResult.state === 'pending') {
@@ -874,86 +766,13 @@ export async function executePayoutOnChain(
     signaturesCollected: submitResult.signaturesCollected ?? 2,
     requiredSignatures: submitResult.requiredSignatures ?? 2,
     txid: publishTransactionNotice(
-      submitResult.txid || submitResult.txHash || signedTxHash,
+      submitResult.txid || submitResult.txHash,
       wallet,
-      'Payout executed',
+      TX_NOTICES.paymentSent,
     ),
   };
 }
 
-/**
- * Unlock a cycle on-chain
- * @param wallet The wallet hook return value
- * @param vaultId The vault ID
- * @param cycleNumber The cycle number to unlock
- * @param userPublicKey The user's public key (hex)
- * @returns Transaction ID
- */
-export async function unlockCycleOnChain(
-  wallet: WalletInterface,
-  vaultId: string,
-  cycleNumber: number,
-  _userPublicKey: string,
-  metadata?: { vaultId?: string; amount?: number }
-): Promise<string> {
-  if (!wallet.address) {
-    throw new Error('Wallet not connected');
-  }
-
-  const apiUrl = '/api';
-  const response = await authFetch(`${apiUrl}/vaults/${vaultId}/unlock-onchain`, {
-    wallet,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-address': wallet.address,
-    },
-    body: JSON.stringify({ cycleNumber }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Failed to create unlock transaction');
-  }
-
-  const payload = await response.json();
-  if (payload?.onChain === false || payload?.executionMode === 'policy') {
-    // v2 vault cycle unlock updates policy state; no covenant tx exists to sign.
-    return `policy-unlock:${vaultId}:${cycleNumber}:${Date.now()}`;
-  }
-
-  if (!payload?.wcTransaction) {
-    throw new Error('Backend did not return cycle unlock transaction');
-  }
-
-  const initialPayload = payload as { wcTransaction: SerializedWcTransaction };
-  const { confirm } = await runLifecycleAction({
-    wallet,
-    actionLabel: 'Cycle unlocked',
-    signContext: 'Cycle unlock signing failed',
-    metadata: {
-      txType: 'unlock',
-      vaultId,
-      ...metadata,
-      fromAddress: wallet.address || undefined,
-    },
-    build: async () => ({
-      wcTransaction: initialPayload.wcTransaction,
-      payload: initialPayload,
-    }),
-    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/vaults/${vaultId}/confirm-unlock-onchain`, {
-      wallet,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-address': signerAddress,
-      },
-      body: JSON.stringify({ cycleNumber, txHash }),
-    }),
-  });
-
-  return confirm.txHash;
-}
 
 /**
  * Deposit BCH to a vault contract
@@ -973,11 +792,11 @@ export async function depositToVault(
 ): Promise<string> {
   try {
     if (!wallet.address) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     if (amountBCH <= 0) {
-      throw new Error('Deposit amount must be greater than 0');
+      throw flowFailure('UNKNOWN', { details: 'Deposit amount must be greater than 0.' });
     }
 
     // Convert BCH to satoshis
@@ -986,7 +805,25 @@ export async function depositToVault(
     // Preferred path: backend-built WC transaction that initializes vault state NFT.
     if (vaultId) {
       try {
-        const depositInfo = await getDepositInfo(vaultId, wallet.address);
+        let depositInfo = await getDepositInfo(vaultId, wallet.address);
+        // The first deposit creates the vault's state token from a coin at output index 0.
+        // When the wallet has none, the server returns a self-send that makes one first.
+        if (depositInfo?.requiresPreparation && depositInfo?.preparationTransaction) {
+          await signAndBroadcastWcTransaction(
+            wallet,
+            depositInfo.preparationTransaction as SerializedWcTransaction,
+            'Vault funding preparation',
+            { txType: 'create', fromAddress: wallet.address || undefined },
+            { label: TX_NOTICES.walletReady, step: FIRST_OF_TWO },
+          );
+          for (let attempt = 0; attempt < 15 && !depositInfo?.wcTransaction; attempt += 1) {
+            await sleep(2500);
+            depositInfo = await getDepositInfo(vaultId, wallet.address);
+          }
+          if (!depositInfo?.wcTransaction) {
+            throw flowFailure('STEP_PENDING', { details: 'The vault deposit still needs its preparation step.' });
+          }
+        }
         if (depositInfo?.wcTransaction && wallet.signCashScriptTransaction) {
           const signOptions = deserializeWcSignOptions(depositInfo.wcTransaction as SerializedWcTransaction);
           signOptions.broadcast = false;
@@ -1004,21 +841,15 @@ export async function depositToVault(
               toAddress: contractAddress,
             },
           );
-          return publishTransactionNotice(txHash, wallet, 'Vault funded');
+          return publishTransactionNotice(txHash, wallet, TX_NOTICES.vaultDeposit);
         }
 
         const isInitialFunding = Number(depositInfo?.currentBalance || 0) <= 0 && Number(depositInfo?.amountToDeposit || 0) > 0;
         if (isInitialFunding) {
           if (!wallet.signCashScriptTransaction) {
-            throw new Error(
-              'This wallet cannot initialize a vault state NFT. ' +
-              'Use a WalletConnect/CashScript-compatible wallet to fund new vaults.',
-            );
+            throw flowFailure('WALLET_UNSUPPORTED', { details: 'This wallet cannot sign the first vault deposit.' });
           }
-          throw new Error(
-            depositInfo?.warning ||
-            'Vault state-NFT bootstrap transaction could not be built for this wallet/address.',
-          );
+          throw nothingToSign(depositInfo?.warning || 'The first vault deposit could not be built for this wallet.');
         }
       } catch (fundingError) {
         console.warn('[FlowGuard][VaultFunding] Failed to build state-NFT funding tx:', fundingError);
@@ -1029,7 +860,7 @@ export async function depositToVault(
     // For mainnet.cash wallets, show confirmation dialog if callback provided
     if (onConfirm && wallet.walletType === 'mainnet') {
       // Get network from wallet state (it's part of WalletState)
-      const network = ((wallet as any).network || 'chipnet') as 'mainnet' | 'testnet' | 'chipnet';
+      const network = wallet.network || 'chipnet';
       const confirmed = await onConfirm({
         amount: amountBCH,
         recipient: contractAddress,
@@ -1037,7 +868,7 @@ export async function depositToVault(
       });
 
       if (!confirmed) {
-        throw new Error('Transaction cancelled by user');
+        throw flowFailure('WALLET_REJECTED');
       }
     }
 
@@ -1049,25 +880,15 @@ export async function depositToVault(
     };
 
     const signedTx = await wallet.signTransaction(transaction);
+    const depositTxId = signedTx.txId || txidFromHex(signedTx.hex);
 
-    if (!signedTx.txId) {
-      throw new Error('Transaction ID not returned from wallet');
+    if (!depositTxId) {
+      throw flowFailure('SEND_UNCONFIRMED', { details: 'The wallet returned no transaction ID for the deposit.' });
     }
 
-    return publishTransactionNotice(signedTx.txId, wallet, 'Vault funded');
-  } catch (error: any) {
-    console.error('Failed to deposit to vault:', error);
-
-    // Provide more specific error messages
-    if (error.message.includes('insufficient') || error.message.includes('balance')) {
-      throw new Error('Insufficient balance in wallet. Please ensure you have enough BCH to cover the deposit and transaction fees.');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Deposit failed: ${error.message || 'Unknown error'}`);
+    return publishTransactionNotice(depositTxId, wallet, TX_NOTICES.vaultDeposit);
+  } catch (error) {
+    throw actionFailure(error, 'Failed to deposit to vault');
   }
 }
 
@@ -1113,7 +934,7 @@ async function fetchFundingInfo(wallet: WalletInterface, streamId: string): Prom
   });
   const payload = await parseJsonSafe(response);
   if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload, 'Failed to get funding info'));
+    throw prepareFailed(response, payload);
   }
   return payload;
 }
@@ -1131,8 +952,9 @@ async function ensureFundingAnchor(wallet: WalletInterface, streamId: string): P
   await signAndBroadcastWcTransaction(
     wallet,
     payload.wcTransaction as SerializedWcTransaction,
-    'Prepare wallet for token stream',
+    'Stream funding preparation',
     { txType: 'create', fromAddress: wallet.address || undefined },
+    { label: TX_NOTICES.walletReady, step: FIRST_OF_TWO },
   );
 
   for (let attempt = 0; attempt < 15; attempt += 1) {
@@ -1140,9 +962,7 @@ async function ensureFundingAnchor(wallet: WalletInterface, streamId: string): P
     payload = await fetchFundingInfo(wallet, streamId);
     if (!payload?.needsAnchor) return;
   }
-  throw new Error(
-    'Your wallet is still registering the funding anchor. Give it a few seconds and press Fund Stream again.',
-  );
+  throw flowFailure('STEP_PENDING', { details: 'The funding-info route still reports needsAnchor.' });
 }
 
 export async function fundStreamContract(
@@ -1154,7 +974,7 @@ export async function fundStreamContract(
     await ensureFundingAnchor(wallet, streamId);
     const { confirm } = await runLifecycleAction({
       wallet,
-      actionLabel: 'Stream funded',
+      actionLabel: TX_NOTICES.streamFunded,
       signContext: 'Stream funding signing failed',
       metadata: {
         txType: 'create',
@@ -1164,16 +984,12 @@ export async function fundStreamContract(
         const payload = await fetchFundingInfo(wallet, streamId);
 
         if (payload?.needsAnchor) {
-          throw new Error(
-            'Your wallet is still registering the funding anchor. Give it a few seconds and press Fund Stream again.',
-          );
+          throw flowFailure('STEP_PENDING', { details: 'The funding-info route still reports needsAnchor.' });
         }
 
         const { wcTransaction } = payload;
         if (!wcTransaction) {
-          throw new Error(
-            'Stream funding requires a CashScript-compatible wallet transaction object from backend.'
-          );
+          throw nothingToSign('Stream funding requires a CashScript-compatible wallet transaction object from backend.');
         }
 
         return {
@@ -1198,14 +1014,8 @@ export async function fundStreamContract(
     }
 
     return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to fund stream:', error);
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw error;
+  } catch (error) {
+    throw actionFailure(error, 'Failed to fund stream');
   }
 }
 
@@ -1216,6 +1026,7 @@ export async function fundBatchStreamContracts(
     senderAddress: string;
     tokenType: 'BCH' | 'FUNGIBLE_TOKEN';
     tokenCategory?: string;
+    tokenDecimals?: number;
     launchContext?: {
       source: string;
       title?: string;
@@ -1230,6 +1041,7 @@ export async function fundBatchStreamContracts(
       endTime?: number;
       cliffTimestamp?: number | null;
       cancelable: boolean;
+      transferable?: boolean;
       refillable?: boolean;
       description?: string | null;
       intervalSeconds?: number;
@@ -1250,7 +1062,7 @@ export async function fundBatchStreamContracts(
       wcTransaction: SerializedWcTransaction;
     }>({
       wallet,
-      actionLabel: 'Batch streams funded',
+      actionLabel: TX_NOTICES.streamsFunded,
       signContext: 'Batch stream funding signing failed',
       build: async () => {
         const response = await authFetch(`/api/treasuries/${vaultId}/batch-create`, {
@@ -1264,11 +1076,11 @@ export async function fundBatchStreamContracts(
 
         const data = await parseJsonSafe(response);
         if (!response.ok) {
-          throw new Error(data.message || data.error || 'Failed to build batch stream transaction');
+          throw prepareFailed(response, data);
         }
 
         if (!data.wcTransaction) {
-          throw new Error('Batch stream funding requires a CashScript-compatible wallet');
+          throw nothingToSign('Batch stream funding requires a CashScript-compatible wallet');
         }
 
         return {
@@ -1304,14 +1116,8 @@ export async function fundBatchStreamContracts(
     }
 
     return { txId: confirm.txHash, streamIds };
-  } catch (error: any) {
-    console.error('Failed to fund batch stream contracts:', error);
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw error;
+  } catch (error) {
+    throw actionFailure(error, 'Failed to fund batch stream contracts');
   }
 }
 
@@ -1332,7 +1138,8 @@ export async function claimStreamFunds(
       wcTransaction: SerializedWcTransaction;
     }>({
       wallet,
-      actionLabel: 'Stream claim',
+      actionLabel: TX_NOTICES.streamClaimed,
+      syncedOutcome: 'claim',
       signContext: 'Stream claim signing failed',
       build: async (signerAddress) => {
         const response = await authFetch(`${apiUrl}/streams/${streamId}/claim`, {
@@ -1349,15 +1156,15 @@ export async function claimStreamFunds(
 
         const payload = await parseJsonSafe(response);
         if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to build claim transaction'));
+          throw prepareFailed(response, payload);
         }
 
         const { claimableAmount, wcTransaction } = payload;
         if (!Number.isFinite(claimableAmount) || claimableAmount <= 0) {
-          throw new Error('No funds available to claim at this time');
+          throw flowFailure('NOTHING_TO_CLAIM', { details: `Claimable amount: ${String(claimableAmount)}` });
         }
         if (!wcTransaction) {
-          throw new Error('No transaction returned from backend');
+          throw nothingToSign('No transaction returned from backend');
         }
 
         return {
@@ -1386,18 +1193,8 @@ export async function claimStreamFunds(
     }
 
     return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to claim stream:', error);
-
-    if (error.message.includes('No funds available')) {
-      throw new Error('No funds available to claim yet. Please wait for vesting schedule.');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Claim failed: ${error.message || 'Unknown error'}`);
+  } catch (error) {
+    throw actionFailure(error, 'Failed to claim stream');
   }
 }
 
@@ -1411,7 +1208,8 @@ export async function cancelStreamOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction<StreamCancelBuildPayload>({
     wallet,
-    actionLabel: 'Stream cancelled',
+    actionLabel: TX_NOTICES.streamCancelled,
+    syncedOutcome: 'streamCancelled',
     signContext: 'Stream cancel signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/streams/${streamId}/cancel`, {
@@ -1425,10 +1223,10 @@ export async function cancelStreamOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return cancel transaction');
+        throw nothingToSign('Backend did not return cancel transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1471,7 +1269,8 @@ export async function pauseStreamOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Stream paused',
+    actionLabel: TX_NOTICES.streamPaused,
+    syncedOutcome: 'streamPaused',
     signContext: 'Stream pause signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/streams/${streamId}/pause`, {
@@ -1484,10 +1283,10 @@ export async function pauseStreamOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return pause transaction');
+        throw nothingToSign('Backend did not return pause transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1518,7 +1317,7 @@ export async function resumeStreamOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Stream resumed',
+    actionLabel: TX_NOTICES.streamResumed,
     signContext: 'Stream resume signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/streams/${streamId}/resume`, {
@@ -1531,10 +1330,10 @@ export async function resumeStreamOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build resume transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return resume transaction');
+        throw nothingToSign('Backend did not return resume transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1564,14 +1363,14 @@ export async function refillStreamOnChain(
   refillAmount: number,
 ): Promise<string> {
   if (!Number.isFinite(refillAmount) || refillAmount <= 0) {
-    throw new Error('Refill amount must be greater than zero');
+    throw flowFailure('UNKNOWN', { details: 'Amount to add must be greater than 0.' });
   }
 
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Stream refilled',
-    signContext: 'Stream refill signing failed',
+    actionLabel: TX_NOTICES.streamFundsAdded,
+    signContext: 'Stream add funds signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/streams/${streamId}/refill`, {
         wallet,
@@ -1584,10 +1383,10 @@ export async function refillStreamOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build refill transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return refill transaction');
+        throw nothingToSign('Backend did not return refill transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1621,8 +1420,8 @@ export async function transferStreamOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Stream transferred',
-    signContext: 'Stream transfer signing failed',
+    actionLabel: TX_NOTICES.streamRecipientChanged,
+    signContext: 'Stream recipient change signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/streams/${streamId}/transfer`, {
         wallet,
@@ -1635,10 +1434,10 @@ export async function transferStreamOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build transfer transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return transfer transaction');
+        throw nothingToSign('Backend did not return transfer transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1672,7 +1471,7 @@ export async function fundPaymentContract(
   let preparationTxId: string | null = null;
   try {
     if (!wallet.address) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     const apiUrl = '/api';
@@ -1685,8 +1484,7 @@ export async function fundPaymentContract(
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to get funding info');
+        throw prepareFailed(response, await parseJsonSafe(response));
       }
 
       return response.json();
@@ -1704,7 +1502,7 @@ export async function fundPaymentContract(
       const prepResult = await wallet.signCashScriptTransaction!(prepOptions);
       preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
       console.log('[FlowGuard] Consolidation tx broadcast:', preparationTxId);
-      publishTransactionNotice(preparationTxId, wallet, 'Token preparation');
+      publishTransactionNotice(preparationTxId, wallet, TX_NOTICES.walletReady, FIRST_OF_TWO);
 
       await new Promise(resolve => setTimeout(resolve, 8000));
       data = await fetchFundingInfo();
@@ -1712,7 +1510,7 @@ export async function fundPaymentContract(
 
     const { confirm } = await runLifecycleAction({
       wallet,
-      actionLabel: 'Payment funded',
+      actionLabel: TX_NOTICES.paymentFunded,
       signContext: 'Payment funding signing failed',
       metadata: {
         txType: 'create',
@@ -1721,9 +1519,7 @@ export async function fundPaymentContract(
       build: async () => {
         const { wcTransaction } = data;
         if (!wcTransaction) {
-          throw new Error(
-            'Payment funding requires a CashScript-compatible wallet transaction object from backend.'
-          );
+          throw nothingToSign('Payment funding requires a CashScript-compatible wallet transaction object from backend.');
         }
 
         return {
@@ -1744,24 +1540,8 @@ export async function fundPaymentContract(
       confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending',
       detail: confirm.message || null,
     };
-  } catch (error: any) {
-    console.error('Failed to fund payment:', error);
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    const details = error?.message || 'Unknown error';
-    if (preparationTxId && /transaction signing failed: internal error/i.test(details)) {
-      throw new Error(
-        `Preparation transaction broadcast (${preparationTxId}), but the wallet has not indexed the new UTXO yet. ` +
-        'Wait 15-30 seconds, refresh, then click Fund again.'
-      );
-    }
-    if (preparationTxId) {
-      throw new Error(`${details}. Preparation tx broadcast: ${preparationTxId}`);
-    }
-    throw error;
+  } catch (error) {
+    throw afterPreparationFailure(error, preparationTxId, 'Failed to fund payment');
   }
 }
 
@@ -1783,7 +1563,8 @@ export async function claimPaymentFunds(
       wcTransaction: SerializedWcTransaction;
     }>({
       wallet,
-      actionLabel: 'Payment claim',
+      actionLabel: TX_NOTICES.paymentClaimed,
+      syncedOutcome: 'claim',
       signContext: 'Payment claim signing failed',
       build: async (signerAddress) => {
         const response = await authFetch(`${apiUrl}/payments/${paymentId}/claim`, {
@@ -1800,15 +1581,15 @@ export async function claimPaymentFunds(
 
         const payload = await parseJsonSafe(response);
         if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to build claim transaction'));
+          throw prepareFailed(response, payload);
         }
 
         const { claimableAmount, intervalsClaimable, wcTransaction } = payload;
         if (!Number.isFinite(claimableAmount) || claimableAmount <= 0) {
-          throw new Error('No payment intervals available to claim at this time');
+          throw flowFailure('NOTHING_TO_CLAIM', { details: `Claimable amount: ${String(claimableAmount)}` });
         }
         if (!wcTransaction) {
-          throw new Error('No WalletConnect-compatible claim transaction returned from backend');
+          throw nothingToSign('No WalletConnect-compatible claim transaction returned from backend');
         }
 
         return {
@@ -1835,18 +1616,8 @@ export async function claimPaymentFunds(
     });
 
     return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to claim payment:', error);
-
-    if (error.message.includes('No payment intervals available')) {
-      throw new Error('No payment intervals available to claim yet. Please wait for next payment date.');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Claim failed: ${error.message || 'Unknown error'}`);
+  } catch (error) {
+    throw actionFailure(error, 'Failed to claim payment');
   }
 }
 
@@ -1860,7 +1631,8 @@ export async function pausePaymentOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Payment paused',
+    actionLabel: TX_NOTICES.paymentPaused,
+    syncedOutcome: 'paymentPaused',
     signContext: 'Payment pause signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/payments/${paymentId}/pause`, {
@@ -1873,10 +1645,10 @@ export async function pausePaymentOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return pause transaction');
+        throw nothingToSign('Backend did not return pause transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1904,7 +1676,7 @@ export async function resumePaymentOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Payment resumed',
+    actionLabel: TX_NOTICES.paymentResumed,
     signContext: 'Payment resume signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/payments/${paymentId}/resume`, {
@@ -1917,10 +1689,10 @@ export async function resumePaymentOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build resume transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return resume transaction');
+        throw nothingToSign('Backend did not return resume transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1948,7 +1720,8 @@ export async function cancelPaymentOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Payment cancelled',
+    actionLabel: TX_NOTICES.paymentCancelled,
+    syncedOutcome: 'paymentCancelled',
     signContext: 'Payment cancel signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/payments/${paymentId}/cancel`, {
@@ -1961,10 +1734,10 @@ export async function cancelPaymentOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return cancel transaction');
+        throw nothingToSign('Backend did not return cancel transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -1983,53 +1756,6 @@ export async function cancelPaymentOnChain(
 }
 
 /**
- * Pause an airdrop campaign on-chain.
- */
-export async function pauseAirdropOnChain(
-  wallet: WalletInterface,
-  airdropId: string
-): Promise<string> {
-  const apiUrl = '/api';
-  const { confirm } = await runLifecycleAction({
-    wallet,
-    actionLabel: 'Airdrop paused',
-    signContext: 'Airdrop pause signing failed',
-    build: async (signerAddress) => {
-      const response = await authFetch(`${apiUrl}/airdrops/${airdropId}/pause`, {
-        wallet,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-address': signerAddress,
-        },
-      });
-      const payload = await parseJsonSafe(response);
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
-      }
-      if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return pause transaction');
-      }
-      return {
-        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
-        payload,
-      };
-    },
-    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/airdrops/${airdropId}/confirm-pause`, {
-      wallet,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-address': signerAddress,
-      },
-      body: JSON.stringify({ txHash }),
-    }),
-  });
-
-  return confirm.txHash;
-}
-
-/**
  * Cancel an airdrop campaign on-chain.
  */
 export async function cancelAirdropOnChain(
@@ -2040,7 +1766,7 @@ export async function cancelAirdropOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Airdrop cancelled',
+    actionLabel: TX_NOTICES.airdropCancelled,
     signContext: 'Airdrop cancel signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/airdrops/${airdropId}/cancel`, {
@@ -2056,10 +1782,10 @@ export async function cancelAirdropOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return cancel transaction');
+        throw nothingToSign('Backend did not return cancel transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -2093,7 +1819,7 @@ export async function fundAirdropContract(
   let preparationTxId: string | null = null;
   try {
     if (!wallet.address) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     const apiUrl = '/api';
@@ -2106,8 +1832,7 @@ export async function fundAirdropContract(
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to get funding info');
+        throw prepareFailed(response, await parseJsonSafe(response));
       }
 
       return response.json();
@@ -2125,7 +1850,7 @@ export async function fundAirdropContract(
       const prepResult = await wallet.signCashScriptTransaction!(prepOptions);
       preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
       console.log('[FlowGuard] Consolidation tx broadcast:', preparationTxId);
-      publishTransactionNotice(preparationTxId, wallet, 'Token preparation');
+      publishTransactionNotice(preparationTxId, wallet, TX_NOTICES.walletReady, FIRST_OF_TWO);
 
       await new Promise(resolve => setTimeout(resolve, 8000));
       data = await fetchFundingInfo();
@@ -2133,7 +1858,8 @@ export async function fundAirdropContract(
 
     const { confirm } = await runLifecycleAction({
       wallet,
-      actionLabel: 'Airdrop funded',
+      actionLabel: TX_NOTICES.airdropFunded,
+      syncedOutcome: 'airdropFunded',
       signContext: 'Airdrop funding signing failed',
       metadata: {
         txType: 'create',
@@ -2142,9 +1868,7 @@ export async function fundAirdropContract(
       build: async () => {
         const { wcTransaction } = data;
         if (!wcTransaction) {
-          throw new Error(
-            'Airdrop funding requires a CashScript-compatible wallet transaction object from backend.'
-          );
+          throw nothingToSign('Airdrop funding requires a CashScript-compatible wallet transaction object from backend.');
         }
         return {
           wcTransaction: wcTransaction as SerializedWcTransaction,
@@ -2164,28 +1888,8 @@ export async function fundAirdropContract(
       confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending',
       detail: confirm.message || null,
     };
-  } catch (error: any) {
-    console.error('Failed to fund airdrop:', error);
-
-    if (error.message.includes('insufficient') || error.message.includes('balance')) {
-      throw new Error('Insufficient balance in wallet');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    const details = error.message || 'Unknown error';
-    if (preparationTxId && /transaction signing failed: internal error/i.test(details)) {
-      throw new Error(
-        `Preparation transaction broadcast (${preparationTxId}), but the wallet has not indexed the new UTXO yet. ` +
-        'Wait 15-30 seconds, refresh, then click Fund again.'
-      );
-    }
-    if (preparationTxId) {
-      throw new Error(`Funding failed: ${details}. Preparation tx broadcast: ${preparationTxId}`);
-    }
-    throw new Error(`Funding failed: ${details}`);
+  } catch (error) {
+    throw afterPreparationFailure(error, preparationTxId, 'Failed to fund airdrop');
   }
 }
 
@@ -2208,7 +1912,8 @@ export async function claimAirdropFunds(
       wcTransaction: SerializedWcTransaction;
     }>({
       wallet,
-      actionLabel: 'Airdrop claim',
+      actionLabel: TX_NOTICES.airdropClaimed,
+      syncedOutcome: 'claim',
       signContext: 'Airdrop claim signing failed',
       build: async (signerAddress) => {
         const claimerAddress = claimerAddressOverride || signerAddress;
@@ -2227,15 +1932,15 @@ export async function claimAirdropFunds(
 
         const payload = await parseJsonSafe(response);
         if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to build claim transaction'));
+          throw prepareFailed(response, payload, AIRDROP_CLAIM_PATTERNS);
         }
 
         const { claimAmount, wcTransaction } = payload;
         if (!Number.isFinite(claimAmount) || claimAmount <= 0) {
-          throw new Error('No airdrop allocation available for this address');
+          throw nothingToSign(`The claim route returned claim amount ${String(claimAmount)}.`);
         }
         if (!wcTransaction) {
-          throw new Error('No WalletConnect-compatible claim transaction returned from backend');
+          throw nothingToSign('No WalletConnect-compatible claim transaction returned from backend');
         }
 
         return {
@@ -2262,201 +1967,8 @@ export async function claimAirdropFunds(
     });
 
     return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to claim airdrop:', error);
-
-    if (error.message.includes('No airdrop allocation')) {
-      throw new Error('This address is not eligible for this airdrop');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Claim failed: ${error.message || 'Unknown error'}`);
-  }
-}
-
-/**
- * Lock tokens to vote on a governance proposal
- * @param wallet The wallet hook return value
- * @param proposalId The proposal ID to vote on
- * @param voteChoice Vote choice: 'FOR', 'AGAINST', or 'ABSTAIN'
- * @param stakeAmount Amount of tokens to stake (in satoshis for BCH)
- * @param tokenCategory Optional token category for governance tokens
- * @returns Transaction ID
- */
-export async function lockTokensToVote(
-  wallet: WalletInterface,
-  proposalId: string,
-  voteChoice: 'FOR' | 'AGAINST' | 'ABSTAIN',
-  stakeAmount: number,
-  tokenCategory?: string
-): Promise<string> {
-  try {
-    if (stakeAmount <= 0) {
-      throw new Error('Stake amount must be greater than 0');
-    }
-
-    const apiUrl = '/api';
-    const { confirm } = await runLifecycleAction<{
-      deployment: {
-        contractAddress: string;
-        voteId: string;
-        constructorParams: string;
-        initialCommitment: string;
-      };
-      voterAddress: string;
-    }>({
-      wallet,
-      actionLabel: 'Vote locked',
-      signContext: 'Governance lock signing failed',
-      build: async (signerAddress) => {
-        const response = await authFetch(`${apiUrl}/governance/${proposalId}/lock`, {
-          wallet,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            voterAddress: signerAddress,
-            voteChoice,
-            stakeAmount,
-            tokenCategory,
-          }),
-        });
-
-        const payload = await parseJsonSafe(response);
-        if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to build lock transaction'));
-        }
-
-        if (!payload?.wcTransaction) {
-          throw new Error('No lock transaction returned from backend');
-        }
-
-        return {
-          wcTransaction: payload.wcTransaction as SerializedWcTransaction,
-          payload: {
-            deployment: payload.deployment,
-            voterAddress: signerAddress,
-          },
-        };
-      },
-      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/governance/${proposalId}/confirm-lock`, {
-        wallet,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          voterAddress: buildPayload.voterAddress,
-          voteChoice,
-          weight: stakeAmount,
-          txHash,
-          contractAddress: buildPayload.deployment.contractAddress,
-          voteId: buildPayload.deployment.voteId,
-          constructorParams: buildPayload.deployment.constructorParams,
-          nftCommitment: buildPayload.deployment.initialCommitment,
-        }),
-      }),
-    });
-
-    return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to lock tokens:', error);
-
-    if (error.message.includes('insufficient') || error.message.includes('balance')) {
-      throw new Error('Insufficient balance to lock tokens');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Lock failed: ${error.message || 'Unknown error'}`);
-  }
-}
-
-/**
- * Unlock staked tokens after voting period ends
- * @param wallet The wallet hook return value
- * @param proposalId The proposal ID to unlock from
- * @param contractAddress The vote lock contract address
- * @param stakeAmount Amount that was staked
- * @param tokenCategory Optional token category
- * @returns Transaction ID
- */
-export async function unlockVotingTokens(
-  wallet: WalletInterface,
-  proposalId: string,
-  contractAddress: string,
-  stakeAmount: number,
-  tokenCategory?: string
-): Promise<string> {
-  try {
-    const apiUrl = '/api';
-    const { confirm } = await runLifecycleAction({
-      wallet,
-      actionLabel: 'Vote unlocked',
-      signContext: 'Governance unlock signing failed',
-      build: async (signerAddress) => {
-        const response = await authFetch(`${apiUrl}/governance/${proposalId}/unlock`, {
-          wallet,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            voterAddress: signerAddress,
-            contractAddress,
-            stakeAmount,
-            tokenCategory,
-          }),
-        });
-
-        const payload = await parseJsonSafe(response);
-        if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to build unlock transaction'));
-        }
-
-        if (!payload?.unlockTransaction?.wcTransaction) {
-          throw new Error('No unlock transaction returned from backend');
-        }
-
-        return {
-          wcTransaction: payload.unlockTransaction.wcTransaction as SerializedWcTransaction,
-          payload: {
-            voterAddress: signerAddress,
-          },
-        };
-      },
-      confirm: ({ txHash, buildPayload }) => authFetch(`${apiUrl}/governance/${proposalId}/confirm-unlock`, {
-        wallet,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          voterAddress: buildPayload.voterAddress,
-          txHash,
-        }),
-      }),
-    });
-
-    return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to unlock tokens:', error);
-
-    if (error.message.includes('Voting period') || error.message.includes('not ended')) {
-      throw new Error('Voting period has not ended yet. Please wait until voting completes.');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Unlock failed: ${error.message || 'Unknown error'}`);
+  } catch (error) {
+    throw actionFailure(error, 'Failed to claim airdrop');
   }
 }
 
@@ -2470,11 +1982,42 @@ export async function fundBudgetPlan(
   wallet: WalletInterface,
   budgetId: string
 ): Promise<string> {
+  let preparationTxId: string | null = null;
   try {
     const apiUrl = '/api';
+    const fetchBudgetFundingInfo = async () => {
+      const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/funding-info`, {
+        wallet,
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'x-user-address': wallet.address || '' },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) throw prepareFailed(response, payload);
+      return payload;
+    };
+    // The plan's state token comes from a coin at output index 0. When the wallet has none,
+    // the server returns a self-send that makes one, and funding waits until it's seen.
+    let info = await fetchBudgetFundingInfo();
+    if (info?.requiresPreparation && info?.preparationTransaction) {
+      preparationTxId = await signAndBroadcastWcTransaction(
+        wallet,
+        info.preparationTransaction as SerializedWcTransaction,
+        'Budget funding preparation',
+        { txType: 'create', fromAddress: wallet.address || undefined },
+        { label: TX_NOTICES.walletReady, step: FIRST_OF_TWO },
+      );
+      for (let attempt = 0; attempt < 15 && info?.requiresPreparation; attempt += 1) {
+        await sleep(2500);
+        info = await fetchBudgetFundingInfo();
+      }
+      if (info?.requiresPreparation) {
+        throw flowFailure('STEP_PENDING', { txid: preparationTxId, details: 'The funding-info route still reports requiresPreparation.' });
+      }
+    }
     const { confirm } = await runLifecycleAction({
       wallet,
-      actionLabel: 'Budget funded',
+      actionLabel: TX_NOTICES.budgetFunded,
+      syncedOutcome: 'budgetFunded',
       signContext: 'Budget funding signing failed',
       build: async (signerAddress) => {
         const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/funding-info`, {
@@ -2487,10 +2030,10 @@ export async function fundBudgetPlan(
         });
         const payload = await parseJsonSafe(response);
         if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to get funding info'));
+          throw prepareFailed(response, payload);
         }
         if (!payload?.wcTransaction) {
-          throw new Error('Budget funding requires a CashScript-compatible wallet transaction object from backend.');
+          throw nothingToSign('Budget funding requires a CashScript-compatible wallet transaction object from backend.');
         }
         return {
           wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -2510,18 +2053,8 @@ export async function fundBudgetPlan(
     });
 
     return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to fund budget plan:', error);
-
-    if (error.message.includes('insufficient') || error.message.includes('balance')) {
-      throw new Error('Insufficient balance in wallet');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Funding failed: ${error.message || 'Unknown error'}`);
+  } catch (error) {
+    throw afterPreparationFailure(error, preparationTxId, 'Failed to fund budget plan');
   }
 }
 
@@ -2542,7 +2075,8 @@ export async function releaseMilestone(
       wcTransaction: SerializedWcTransaction;
     }>({
       wallet,
-      actionLabel: 'Milestone released',
+      actionLabel: TX_NOTICES.budgetReleased,
+      syncedOutcome: 'milestoneReleased',
       signContext: 'Budget release signing failed',
       build: async (signerAddress) => {
         const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/release`, {
@@ -2559,18 +2093,15 @@ export async function releaseMilestone(
 
         const payload = await parseJsonSafe(response);
         if (!response.ok) {
-          throw new Error(getApiErrorMessage(payload, 'Failed to build release transaction'));
+          throw prepareFailed(response, payload);
         }
 
         const { releasableAmount, wcTransaction } = payload;
         if (!Number.isFinite(releasableAmount) || releasableAmount <= 0) {
-          throw new Error('No milestones available to release yet');
+          throw flowFailure('MILESTONE_NOT_READY');
         }
         if (!wcTransaction) {
-          throw new Error(
-            'Milestone release signing is not wired for this wallet yet. ' +
-            'Backend must return a WalletConnect-compatible transaction object.'
-          );
+          throw nothingToSign('The release route returned no transaction to sign.');
         }
 
         return {
@@ -2595,66 +2126,9 @@ export async function releaseMilestone(
     });
 
     return confirm.txHash;
-  } catch (error: any) {
-    console.error('Failed to release milestone:', error);
-
-    if (error.message.includes('No milestones available')) {
-      throw new Error('No milestones available to release yet. Please wait for milestone unlock time.');
-    }
-
-    if (error.message.includes('user') || error.message.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    throw new Error(`Release failed: ${error.message || 'Unknown error'}`);
+  } catch (error) {
+    throw actionFailure(error, 'Failed to release milestone');
   }
-}
-
-/**
- * Pause a budget plan on-chain.
- */
-export async function pauseBudgetPlanOnChain(
-  wallet: WalletInterface,
-  budgetId: string
-): Promise<string> {
-  const apiUrl = '/api';
-  const { confirm } = await runLifecycleAction({
-    wallet,
-    actionLabel: 'Budget paused',
-    signContext: 'Budget pause signing failed',
-    build: async (signerAddress) => {
-      const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/pause`, {
-        wallet,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-address': signerAddress,
-        },
-      });
-      const payload = await parseJsonSafe(response);
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
-      }
-      if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return pause transaction');
-      }
-      return {
-        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
-        payload,
-      };
-    },
-    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/budget-plans/${budgetId}/confirm-pause`, {
-      wallet,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-address': signerAddress,
-      },
-      body: JSON.stringify({ txHash }),
-    }),
-  });
-
-  return confirm.txHash;
 }
 
 /**
@@ -2668,7 +2142,7 @@ export async function cancelBudgetPlanOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Budget cancelled',
+    actionLabel: TX_NOTICES.budgetCancelled,
     signContext: 'Budget cancel signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/budget-plans/${budgetId}/cancel`, {
@@ -2684,10 +2158,10 @@ export async function cancelBudgetPlanOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return cancel transaction');
+        throw nothingToSign('Backend did not return cancel transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -2723,27 +2197,52 @@ export async function fundRewardContract(
   rewardId: string,
 ): Promise<{ txHash: string; confirmation: 'confirmed' | 'pending'; detail?: string | null }> {
   if (!wallet.address) {
-    throw new Error('Wallet not connected');
+    throw flowFailure('NOT_CONNECTED');
   }
 
   const apiUrl = '/api';
 
-  const fundingInfoResponse = await authFetch(`${apiUrl}/rewards/${rewardId}/funding-info`, {
-    wallet,
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const fundingInfo = await parseJsonSafe(fundingInfoResponse);
-  if (!fundingInfoResponse.ok) {
-    throw new Error(getApiErrorMessage(fundingInfo, 'Failed to get reward funding info'));
+  const fetchFundingInfo = async () => {
+    const fundingInfoResponse = await authFetch(`${apiUrl}/rewards/${rewardId}/funding-info`, {
+      wallet,
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const payload = await parseJsonSafe(fundingInfoResponse);
+    if (!fundingInfoResponse.ok) {
+      throw prepareFailed(fundingInfoResponse, payload);
+    }
+    return payload;
+  };
+
+  let fundingInfo = await fetchFundingInfo();
+
+  if (fundingInfo?.requiresPreparation && fundingInfo.preparationTransaction) {
+    if (!wallet.signCashScriptTransaction) {
+      throw flowFailure('WALLET_UNSUPPORTED');
+    }
+    const prepOptions = {
+      ...deserializeWcSignOptions(fundingInfo.preparationTransaction as SerializedWcTransaction),
+      // Wallet-side broadcast can fail/hang on some BCH WC wallets.
+      broadcast: false,
+    };
+    const prepResult = await wallet.signCashScriptTransaction(prepOptions);
+    const preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
+    publishTransactionNotice(preparationTxId, wallet, TX_NOTICES.walletReady, FIRST_OF_TWO);
+
+    await new Promise(resolve => setTimeout(resolve, 8000));
+    fundingInfo = await fetchFundingInfo();
+    if (fundingInfo?.requiresPreparation) {
+      throw flowFailure('STEP_PENDING', { txid: preparationTxId, details: 'The funding-info route still reports requiresPreparation.' });
+    }
   }
   if (!fundingInfo?.wcTransaction) {
-    throw new Error('Backend did not return reward funding transaction');
+    throw nothingToSign('Backend did not return reward funding transaction');
   }
 
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Reward funded',
+    actionLabel: TX_NOTICES.rewardFunded,
     signContext: 'Reward funding signing failed',
     metadata: { txType: 'create', fromAddress: wallet.address || undefined },
     build: async () => ({
@@ -2773,7 +2272,7 @@ export async function distributeRewardOnChain(
   rewardId: string,
   recipientAddress: string,
   amount: number,
-): Promise<string> {
+): Promise<{ txHash: string; confirmation: 'confirmed' | 'pending' }> {
   const apiUrl = '/api';
 
   const { confirm } = await runLifecycleAction<{
@@ -2781,8 +2280,9 @@ export async function distributeRewardOnChain(
     wcTransaction: SerializedWcTransaction;
   }>({
     wallet,
-    actionLabel: 'Reward distributed',
-    signContext: 'Reward distribution signing failed',
+    actionLabel: TX_NOTICES.rewardSent,
+    syncedOutcome: 'payment',
+    signContext: 'Reward send signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/rewards/${rewardId}/distribute`, {
         wallet,
@@ -2799,10 +2299,10 @@ export async function distributeRewardOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build distribute transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return distribute transaction');
+        throw nothingToSign('Backend did not return distribute transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -2823,54 +2323,7 @@ export async function distributeRewardOnChain(
     }),
   });
 
-  return confirm.txHash;
-}
-
-/**
- * Pause an active reward campaign.
- */
-export async function pauseRewardOnChain(
-  wallet: WalletInterface,
-  rewardId: string,
-): Promise<string> {
-  const apiUrl = '/api';
-  const { confirm } = await runLifecycleAction({
-    wallet,
-    actionLabel: 'Reward paused',
-    signContext: 'Reward pause signing failed',
-    build: async (signerAddress) => {
-      const response = await authFetch(`${apiUrl}/rewards/${rewardId}/pause`, {
-        wallet,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-address': signerAddress,
-        },
-      });
-      const payload = await parseJsonSafe(response);
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
-      }
-      if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return pause transaction');
-      }
-      return {
-        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
-        payload,
-      };
-    },
-    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/rewards/${rewardId}/confirm-pause`, {
-      wallet,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-address': signerAddress,
-      },
-      body: JSON.stringify({ txHash }),
-    }),
-  });
-
-  return confirm.txHash;
+  return { txHash: confirm.txHash, confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending' };
 }
 
 /**
@@ -2879,7 +2332,13 @@ export async function pauseRewardOnChain(
 export async function cancelRewardOnChain(
   wallet: WalletInterface,
   rewardId: string,
-): Promise<{ txHash: string; warning?: string; cancelReturnAddress?: string; signerMatchesReturn?: boolean }> {
+): Promise<{
+  txHash: string;
+  confirmation: 'confirmed' | 'pending';
+  warning?: string;
+  cancelReturnAddress?: string;
+  signerMatchesReturn?: boolean;
+}> {
   const apiUrl = '/api';
   let warning: string | undefined;
   let cancelReturnAddress: string | undefined;
@@ -2887,7 +2346,8 @@ export async function cancelRewardOnChain(
 
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Reward cancelled',
+    actionLabel: TX_NOTICES.rewardCancelled,
+    syncedOutcome: 'rewardCancelled',
     signContext: 'Reward cancel signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/rewards/${rewardId}/cancel`, {
@@ -2900,10 +2360,10 @@ export async function cancelRewardOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return cancel transaction');
+        throw nothingToSign('Backend did not return cancel transaction');
       }
       warning = typeof payload.warning === 'string' ? payload.warning : undefined;
       cancelReturnAddress = typeof payload.cancelReturnAddress === 'string' ? payload.cancelReturnAddress : undefined;
@@ -2924,7 +2384,13 @@ export async function cancelRewardOnChain(
     }),
   });
 
-  return { txHash: confirm.txHash, warning, cancelReturnAddress, signerMatchesReturn };
+  return {
+    txHash: confirm.txHash,
+    confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending',
+    warning,
+    cancelReturnAddress,
+    signerMatchesReturn,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -2943,7 +2409,7 @@ export async function fundGrantContract(
   let preparationTxId: string | null = null;
   try {
     if (!wallet.address) {
-      throw new Error('Wallet not connected');
+      throw flowFailure('NOT_CONNECTED');
     }
 
     const apiUrl = '/api';
@@ -2956,7 +2422,7 @@ export async function fundGrantContract(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to get funding info'));
+        throw prepareFailed(response, payload);
       }
       return payload;
     };
@@ -2971,7 +2437,7 @@ export async function fundGrantContract(
       };
       const prepResult = await wallet.signCashScriptTransaction!(prepOptions);
       preparationTxId = await resolveTxHashFromSignResult(prepResult, prepOptions, 'Preparation signing failed', wallet);
-      publishTransactionNotice(preparationTxId, wallet, 'Grant token preparation');
+      publishTransactionNotice(preparationTxId, wallet, TX_NOTICES.walletReady, FIRST_OF_TWO);
 
       await new Promise((resolve) => setTimeout(resolve, 8000));
       data = await fetchFundingInfo();
@@ -2979,7 +2445,7 @@ export async function fundGrantContract(
 
     const { confirm } = await runLifecycleAction({
       wallet,
-      actionLabel: 'Grant funded',
+      actionLabel: TX_NOTICES.grantFunded,
       signContext: 'Grant funding signing failed',
       metadata: {
         txType: 'create',
@@ -2988,9 +2454,7 @@ export async function fundGrantContract(
       build: async () => {
         const { wcTransaction } = data;
         if (!wcTransaction) {
-          throw new Error(
-            'Grant funding requires a CashScript-compatible wallet transaction object from backend.',
-          );
+          throw nothingToSign('Grant funding requires a CashScript-compatible wallet transaction object from backend.');
         }
         return {
           wcTransaction: wcTransaction as SerializedWcTransaction,
@@ -3010,28 +2474,8 @@ export async function fundGrantContract(
       confirmation: confirm.state === 'confirmed' ? 'confirmed' : 'pending',
       detail: confirm.message || null,
     };
-  } catch (error: any) {
-    console.error('Failed to fund grant:', error);
-
-    if (error.message?.includes('insufficient') || error.message?.includes('balance')) {
-      throw new Error('Insufficient balance in wallet');
-    }
-
-    if (error.message?.includes('user') || error.message?.includes('cancel')) {
-      throw new Error('Transaction cancelled by user');
-    }
-
-    const details = error.message || 'Unknown error';
-    if (preparationTxId && /transaction signing failed: internal error/i.test(details)) {
-      throw new Error(
-        `Preparation transaction broadcast (${preparationTxId}), but the wallet has not indexed the new UTXO yet. ` +
-        'Wait 15-30 seconds, refresh, then click Fund again.',
-      );
-    }
-    if (preparationTxId) {
-      throw new Error(`Funding failed: ${details}. Preparation tx broadcast: ${preparationTxId}`);
-    }
-    throw new Error(`Funding failed: ${details}`);
+  } catch (error) {
+    throw afterPreparationFailure(error, preparationTxId, 'Failed to fund grant');
   }
 }
 
@@ -3052,7 +2496,8 @@ export async function releaseGrantMilestone(
     wcTransaction: SerializedWcTransaction;
   }>({
     wallet,
-    actionLabel: 'Grant milestone released',
+    actionLabel: TX_NOTICES.grantMilestoneReleased,
+    syncedOutcome: 'milestoneReleased',
     signContext: 'Grant release signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/grants/${grantId}/release`, {
@@ -3067,20 +2512,20 @@ export async function releaseGrantMilestone(
 
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build release transaction'));
+        throw prepareFailed(response, payload);
       }
 
       const releaseAmount = Number(payload?.releaseAmount);
       const milestoneNumber = Number(payload?.milestoneNumber);
       const { wcTransaction } = payload;
       if (!Number.isFinite(releaseAmount) || releaseAmount <= 0) {
-        throw new Error('No milestone available to release yet');
+        throw flowFailure('MILESTONE_NOT_READY');
       }
       if (!Number.isFinite(milestoneNumber) || milestoneNumber <= 0) {
-        throw new Error('Backend did not return a milestone number');
+        throw nothingToSign('Backend did not return a milestone number');
       }
       if (!wcTransaction) {
-        throw new Error('Backend did not return release transaction');
+        throw nothingToSign('Backend did not return release transaction');
       }
 
       return {
@@ -3111,6 +2556,65 @@ export async function releaseGrantMilestone(
   };
 }
 
+export type PausableKind = 'airdrops' | 'bounties' | 'rewards' | 'budget-plans';
+
+const PAUSE_NOTICES: Record<PausableKind, Record<'pause' | 'resume', string>> = {
+  airdrops: { pause: TX_NOTICES.airdropPaused, resume: TX_NOTICES.airdropResumed },
+  bounties: { pause: TX_NOTICES.bountyPaused, resume: TX_NOTICES.bountyResumed },
+  rewards: { pause: TX_NOTICES.rewardPaused, resume: TX_NOTICES.rewardResumed },
+  'budget-plans': { pause: TX_NOTICES.budgetPaused, resume: TX_NOTICES.budgetResumed },
+};
+
+/**
+ * Pause an ACTIVE airdrop, bounty, reward program or budget plan, or resume a PAUSED one.
+ * Creator only. The server builds it at POST /api/{kind}/:id/{action} and records it at
+ * confirm-{action}.
+ */
+export async function setPausedOnChain(
+  wallet: WalletInterface,
+  kind: PausableKind,
+  id: string,
+  action: 'pause' | 'resume',
+): Promise<string> {
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: PAUSE_NOTICES[kind][action],
+    signContext: `${kind} ${action} signing failed`,
+    build: async (signerAddress) => {
+      const response = await authFetch(`/api/${kind}/${id}/${action}`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw prepareFailed(response, payload);
+      }
+      if (!payload?.wcTransaction) {
+        throw nothingToSign(`Backend did not return ${action} transaction`);
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`/api/${kind}/${id}/confirm-${action}`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return confirm.txHash;
+}
+
 /**
  * Pause an ACTIVE grant. Requires the creator wallet AND the `cancelable`
  * flag bit0 set in the original commitment.
@@ -3122,7 +2626,7 @@ export async function pauseGrantOnChain(
   const apiUrl = '/api';
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Grant paused',
+    actionLabel: TX_NOTICES.grantPaused,
     signContext: 'Grant pause signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/grants/${grantId}/pause`, {
@@ -3135,10 +2639,10 @@ export async function pauseGrantOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build pause transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return pause transaction');
+        throw nothingToSign('Backend did not return pause transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
@@ -3146,6 +2650,54 @@ export async function pauseGrantOnChain(
       };
     },
     confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-pause`, {
+      wallet,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-address': signerAddress,
+      },
+      body: JSON.stringify({ txHash }),
+    }),
+  });
+
+  return confirm.txHash;
+}
+
+/**
+ * Resume a PAUSED grant. Creator only. The server builds the transaction at
+ * POST /api/grants/:id/resume and records it at POST /api/grants/:id/confirm-resume.
+ */
+export async function resumeGrantOnChain(
+  wallet: WalletInterface,
+  grantId: string,
+): Promise<string> {
+  const apiUrl = '/api';
+  const { confirm } = await runLifecycleAction({
+    wallet,
+    actionLabel: TX_NOTICES.grantResumed,
+    signContext: 'Grant resume signing failed',
+    build: async (signerAddress) => {
+      const response = await authFetch(`${apiUrl}/grants/${grantId}/resume`, {
+        wallet,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-address': signerAddress,
+        },
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) {
+        throw prepareFailed(response, payload);
+      }
+      if (!payload?.wcTransaction) {
+        throw nothingToSign('Backend did not return resume transaction');
+      }
+      return {
+        wcTransaction: payload.wcTransaction as SerializedWcTransaction,
+        payload,
+      };
+    },
+    confirm: ({ txHash, signerAddress }) => authFetch(`${apiUrl}/grants/${grantId}/confirm-resume`, {
       wallet,
       method: 'POST',
       headers: {
@@ -3182,7 +2734,7 @@ export async function cancelGrantOnChain(
 
   const { confirm } = await runLifecycleAction({
     wallet,
-    actionLabel: 'Grant cancelled',
+    actionLabel: TX_NOTICES.grantCancelled,
     signContext: 'Grant cancel signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/grants/${grantId}/cancel`, {
@@ -3196,10 +2748,10 @@ export async function cancelGrantOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build cancel transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return cancel transaction');
+        throw nothingToSign('Backend did not return cancel transaction');
       }
       warning = typeof payload.warning === 'string' ? payload.warning : undefined;
       cancelReturnAddress = typeof payload.cancelReturnAddress === 'string' ? payload.cancelReturnAddress : undefined;
@@ -3242,8 +2794,8 @@ export async function transferGrantOnChain(
   const apiUrl = '/api';
   const { confirm, build } = await runLifecycleAction<{ newRecipientAddress: string }>({
     wallet,
-    actionLabel: 'Grant transferred',
-    signContext: 'Grant transfer signing failed',
+    actionLabel: TX_NOTICES.grantRecipientChanged,
+    signContext: 'Grant recipient change signing failed',
     build: async (signerAddress) => {
       const response = await authFetch(`${apiUrl}/grants/${grantId}/transfer`, {
         wallet,
@@ -3256,10 +2808,10 @@ export async function transferGrantOnChain(
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, 'Failed to build transfer transaction'));
+        throw prepareFailed(response, payload);
       }
       if (!payload?.wcTransaction) {
-        throw new Error('Backend did not return transfer transaction');
+        throw nothingToSign('Backend did not return transfer transaction');
       }
       return {
         wcTransaction: payload.wcTransaction as SerializedWcTransaction,
