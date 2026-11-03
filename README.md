@@ -1,16 +1,18 @@
 # FlowGuard
 
-A BCH-native covenant operating layer for treasuries, streams, payments, distributions, and governance.
+A BCH-native covenant operating layer for treasuries, streams, payments, and distributions.
 
 FlowGuard combines CashScript covenants, wallet-driven signing, backend transaction builders, and indexed activity views. Teams can run treasury logic on chain without giving custody to an application server.
 
 ## What ships today
 
-- Multi-member treasury vaults with policy controls, proposal workflows, and activity tracking.
+- Multi-member treasury vaults with spending requests: signers approve each payment, then two signers send it.
 - Contract-backed stream families: linear, cliffed linear, hybrid, recurring, refillable recurring, milestone, and tranche schedules.
 - One-time payments and recurring payout flows.
 - Airdrops, rewards, bounties, and grants backed by on-chain contract logic.
-- Governance proposals and vote-lock infrastructure tied to treasury operations.
+- BCH or fungible CashTokens in every product, including batches and recurring payments.
+- Pause and resume for streams, recurring payments, budget plans, airdrops, grants, bounties and rewards.
+- Recipients can move a stream to a new wallet unless the sender turns that off.
 - Personal and organization workspace surfaces in the frontend.
 
 ## Stream families
@@ -31,7 +33,7 @@ The frontend includes a shape gallery, schedule previews, row-level batch charts
 
 - `frontend/`: React + Vite application for the public site, personal workspace, and organization workspace.
 - `backend/`: Express + TypeScript API for transaction building, app state, indexing hooks, and execution services.
-- `contracts/`: CashScript covenant source and compiled artifacts for treasury, streaming, distribution, and governance modules.
+- `contracts/`: CashScript covenant source and compiled artifacts for treasury, streaming, and distribution modules. A V2 of eight covenants fixes token payouts and fee handling, and new contracts use it.
 - `sdk/`: `@flowguardlabs/sdk`, the TypeScript client for building on FlowGuard from your own frontend or backend.
 - `docs/`: Mintlify documentation (concepts, guides, API reference, app guide).
 - `deploy/`: production topology for the VPS — Docker Compose, Caddy, and what `backend/.env` must contain.
@@ -153,7 +155,7 @@ FlowGuard is live on BCH Mainnet. Contracts were reviewed internally before laun
 
 ## Status
 
-FlowGuard is on BCH Mainnet. The core contract-backed flows — treasury, streaming, distributions, and governance — are live. FT (CashToken) mode is implemented and written end to end; testing on mainnet with a real token category is the next step before treating it as stable.
+FlowGuard is on BCH Mainnet. Treasury, streaming and distribution flows are live in BCH and CashTokens. Every product was run end to end on chipnet in both in November 2026, including pause, resume, cancel, transfers and batches. Votes are no longer offered in the app.
 
 ## License
 

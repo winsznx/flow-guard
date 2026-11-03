@@ -32,6 +32,16 @@ sequenceDiagram
 - **Mutable state**: values like `total_released`, `cursor`, `status` are stored in the CashTokens NFT commitment. They update with every transaction.
 - **No trusted executor**: the contract enforces the rules. No FlowGuard server can override a valid spending path or block a valid claim.
 
+### Covenant versions
+
+Eight covenants have a V2: `VestingCovenantV2`, `HybridVestingCovenantV2`, `TrancheVestingCovenantV2`, `RecurringPaymentCovenantV2`, `AirdropCovenantV2`, `BountyCovenantV2`, `RewardCovenantV2` and `GrantCovenantV2`. They keep the same constructor parameters and commitment layout, and change only what V1 got wrong:
+
+- **Token payouts.** A payout output holds fungible tokens only, so V2 compares its category with the first 32 bytes of the input's category. The input carries the state NFT, whose category also includes the capability byte, so V1's full comparison never matched and token payouts on these covenants could not be claimed.
+- **Recurring top-ups.** `RecurringPaymentCovenantV2.refill()` tells a token stream from a BCH one by the `usesTokens` flag. V1 used `tokenCategory != 0x`, which the state NFT always satisfies, so BCH top-ups failed.
+- **Unused fee reserve.** Distribution covenants return what's left of the fee reserve to the authority on cancel, and vesting cancels can send it back to the sender on a third output. The reserve can therefore be sized for every claim and control spend, so airdrop claimers need no BCH of their own.
+
+Every new contract deploys the V2 version. Contracts already on chain keep the version their address was derived from, and the backend picks the matching artifact by re-deriving the address, so existing streams, payments and campaigns keep working.
+
 ## CashTokens NFT Commitments
 
 Every FlowGuard covenant holds a **mutable NFT** with a commitment field of up to **40 bytes**. This commitment is the entire mutable state of the contract.

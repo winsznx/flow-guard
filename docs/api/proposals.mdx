@@ -70,11 +70,21 @@ These routes collect proposal approval state on-chain.
 ## Execute Treasury Payout
 
 ```http
-POST /api/:id/execute
-POST /api/:id/execute-signature
+POST /api/proposals/:id/execute
+POST /api/proposals/:id/execute-signature
 ```
 
-Execution uses a session-based signature collection flow. Once the required signatures are collected, the backend broadcasts the payout transaction and marks the proposal executed.
+Both need a wallet sign-in. The first call starts a signing session for two of the vault's signers and returns the payout transaction; later calls by either signer return the same session.
+
+Each signer signs that transaction in their wallet and posts it to `execute-signature` with the `sessionId`. A wallet fills every signature slot with its own signature, so neither copy is valid on its own. When the second copy arrives, the backend takes each slot's signature from the copy signed by that slot's key, broadcasts the combined transaction once, and marks the proposal executed. If the network rejects it, the session is closed (`EXECUTION_BROADCAST_FAILED`, retryable) and the signers start a new one.
+
+## Abandon a Pending Request
+
+```http
+DELETE /api/proposals/:id
+```
+
+Creator only, with a wallet sign-in. Removes a pending request that never got its on-chain create or any approval, for example after the wallet signature was declined. Refused while coins sit at the request's covenant.
 
 ## Low-Level Broadcast
 

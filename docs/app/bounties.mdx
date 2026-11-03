@@ -1,30 +1,32 @@
 ---
-title: "Bounties"
-description: "Fund a task with conditional release ,  pay out when the work is verified."
+title: 'Bounties'
+description: 'Lock a prize, then pay each winner you pick.'
 icon: "trophy"
 ---
 
-Bounties are milestone-based budget plans scoped to a single deliverable. The funder locks BCH or tokens in a covenant. The bounty hunter completes the task and claims the release once the time lock elapses and the funder confirms the work.
+A bounty holds prize money for a piece of work, like translating a guide or fixing a bug. You lock the full prize up front in a `BountyCovenant`, people send you their work outside FlowGuard, and you pay each winner you pick from the bounty. FlowGuard's server also approves each payment, so a bounty can never pay more winners or more money than you set.
 
-## Creating a Bounty
+## Creating a bounty
 
-Navigate to **Bounties → New Bounty** and specify:
+Go to **Bounties → Create a bounty** and fill in:
 
-| Field | Description |
-|-------|-------------|
-| Title | What needs to be built or done |
-| Recipient | BCH address of the bounty hunter |
-| Vault | Funding vault |
-| Amount | Total payout in BCH or tokens |
-| Duration | How many seconds after funding the payout unlocks |
-| Cancelable | Whether the funder can cancel if work is unacceptable |
+| Field | What it does |
+| --- | --- |
+| Title | What people see when you share the bounty |
+| How to take part | What to do, how to send you the work, and how you pick winners |
+| Pay winners in | BCH, or a token your wallet has permission to create |
+| Prize per winner | Every winner gets this amount. It can't change later |
+| Number of winners | How many prizes the bounty pays |
+| Start and end date | You can pay winners from the start date. After the end date you can only cancel |
 
-The bounty becomes a single-milestone budget plan under the hood. The recipient can release the full amount after the duration elapses.
+Then fund it from your wallet. Your wallet may need one setup step first, so you might approve two requests.
 
-## Claiming a Bounty
+## Paying a winner
 
-When the lock period elapses, the bounty hunter navigates to the bounty and clicks **Release**. No intermediary is involved ,  the covenant enforces the time condition directly.
+Open the bounty, paste the winner's address and a link or note about the winning work, and choose **Pay winner**. FlowGuard turns the link or note into a proof code and records only the code with the payment. The network fee comes from the contract.
 
-## Cancelling
+## Pausing, resuming and cancelling
 
-If the funder set `cancelable: true` and the work was not completed satisfactorily, they can cancel before the recipient releases. Cancelled funds return to the vault controller address.
+Under **Manage** you can pause the bounty, which stops payouts until you resume it. Cancelling sends the prize money that hasn't been paid back to your wallet. Winners already paid keep their prizes. Bounties created from November 2026 also return the unused fee BCH when cancelled.
+
+See [Create a bounty](/guides/bounties/create) for the full guide.

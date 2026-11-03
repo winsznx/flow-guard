@@ -1,6 +1,6 @@
 ---
 title: "Rewards API"
-description: "Endpoints for variable-amount reward campaigns: create, fund, distribute, pause, cancel."
+description: "Endpoints for variable-amount reward campaigns: create, fund, distribute, pause, resume, cancel."
 icon: "gift"
 ---
 
@@ -334,6 +334,16 @@ Authorization: Bearer <token>
 
 Verifies the broadcast transaction carries the expected covenant state output and sets the campaign `status` to `PAUSED`.
 
+## Resume
+
+```http
+POST /api/rewards/:id/resume
+POST /api/rewards/:id/confirm-resume
+Authorization: Bearer <token>
+```
+
+Creator-only, and the campaign must be `PAUSED`. Builds the covenant resume transaction so distributions are allowed again. Confirm with the broadcast `txHash`, which sets `status` back to `ACTIVE`. The responses match pause.
+
 ## Cancel
 
 ```http
@@ -382,7 +392,9 @@ The creator-only control routes are:
 
 - `pause`
 - `confirm-pause`
+- `resume`
+- `confirm-resume`
 - `cancel`
 - `confirm-cancel`
 
-All four require Bearer auth, and the verified user must match the campaign creator. There is no resume route - paused campaigns are reactivated by cancelling and redeploying.
+All of them require Bearer auth, and the verified user must match the campaign creator.

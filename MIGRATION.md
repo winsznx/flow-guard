@@ -1,5 +1,7 @@
 # Migration: frontend Vercel → Cloudflare Workers (2026-08-02)
 
+> The backend has since moved from Railway to the VPS. See [deploy/README.md](./deploy/README.md).
+
 The **`frontend/`** app (Vite SPA) was moved off Vercel (Hobby account soft-blocked for exceeding
 function-invocation fair-use limits) onto **Cloudflare Workers Static Assets** — free, since a Vite
 SPA is pure static output (no server/SSR).

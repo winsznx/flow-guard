@@ -41,7 +41,7 @@ All entrypoints spend proposal state from `tx.inputs[0]`.
 | `approve` | `tx.outputs[0]` updated proposal UTXO | Updates approvals and status transition logic. |
 | `execute` | No proposal continuation output required | Proposal NFT is consumed/burned by design. |
 | `cancel` | `tx.outputs[0]` updated proposal UTXO | Sets status to `CANCELLED`. |
-| `expire` | `tx.outputs[0]` updated proposal UTXO | Requires locktime >= voting deadline. |
+| `expire` | `tx.outputs[0]` updated proposal UTXO | Requires locktime >= approval deadline. |
 
 ## Functions
 

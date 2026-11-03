@@ -1,43 +1,29 @@
 ---
-title: "Issue Rewards"
-description: "How recipients see and claim their rewards in the FlowGuard app."
+title: "Send Rewards"
+description: "How the program creator sends rewards, and what people receive."
 icon: "hand-holding"
 ---
 
-## Viewing Outstanding Rewards
-
-When funded, a reward appears in the recipient's **Receiving** dashboard. Each card shows:
-
-- Who issued the reward
-- Amount and asset type
-- Whether it is immediately claimable or has a lock countdown
-
-## Claiming an Immediate Reward
+Rewards arrive in people's wallets. There's nothing for them to claim.
 
 <Steps>
-  <Step title="Open the reward">
-    Click the reward card in **Rewards → Receiving**.
+  <Step title="Open the program">
+    Open the reward program with the wallet that created it.
   </Step>
-  <Step title="Claim">
-    Click **Claim Reward**. The sign prompt appears in your wallet immediately ,  there is no waiting period for immediate rewards.
+  <Step title="Send a reward">
+    Enter the person's address and the amount, up to the limit per reward, and choose **Send**. The app calls `POST /api/rewards/:id/distribute`, FlowGuard's server approves it, and you approve it in your wallet.
   </Step>
   <Step title="Confirm">
-    After broadcasting, the reward is marked claimed and the amount appears in your on-chain balance.
+    `POST /api/rewards/:id/confirm-distribute` records the reward. The network fee comes from the contract.
   </Step>
 </Steps>
 
-## Claiming a Deferred Reward
-
-The claim button is disabled with a countdown timer until the `releaseAfter` timestamp is reached. Once unlocked, the same claim flow applies.
-
-## Multiple Outstanding Rewards
-
-Each reward is a separate covenant. Claim them individually. There is no batch-claim across different reward contracts.
+Under **Manage** you can pause the program so no rewards can be sent, resume it, or cancel it to get back what hasn't been sent.
 
 ## Reward vs. Stream vs. Airdrop
 
-| Product | Use case |
-|---------|----------|
-| Reward | One-time payout to one person |
-| Stream | Continuous vesting to one person over time |
-| Airdrop | Same amount to many people at once |
+| Product | Best for |
+| --- | --- |
+| Reward | Different amounts to people you pick, one at a time |
+| Stream | One person, paid bit by bit over time |
+| Airdrop | The same amount to many people, who each claim it |

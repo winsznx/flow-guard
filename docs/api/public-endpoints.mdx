@@ -187,7 +187,7 @@ The `components` array always includes these entries, in this order:
 | `executor` | `Workers` | Not currently operated. Recipients claim via UI. Will return `operational` when a hosted executor exists. |
 | `blockchain_monitor` | `Workers` | In-process vault balance refresher. Reported `unknown` until liveness instrumentation lands. |
 | `transaction_monitor` | `Workers` | On-chain transaction confirmation watcher. Reported `unknown` until liveness instrumentation lands. |
-| `cycle_unlock_scheduler` | `Workers` | Governance cycle unlock scheduler. Reported `unknown` until liveness instrumentation lands. |
+| `cycle_unlock_scheduler` | `Workers` | Vault cycle unlock scheduler. Reported `unknown` until liveness instrumentation lands. |
 
 Each `PublicComponent` has the shape:
 

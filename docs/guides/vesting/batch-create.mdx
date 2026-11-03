@@ -47,6 +47,10 @@ The treasury batch builder prepares multiple pending streams and returns one fun
   many stream deployments and funding them from one treasury action.
 </Note>
 
+## Paying in a token
+
+Set `tokenType` to `FUNGIBLE_TOKEN` and pass `tokenCategory` and `tokenDecimals`. Every stream in the batch pays the same token. A token batch has to be funded from the wallet with permission to create that token, usually the wallet that created it.
+
 ## Example Request
 
 ```json

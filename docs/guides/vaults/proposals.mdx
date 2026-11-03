@@ -54,10 +54,10 @@ Once approvals reach the required threshold, status transitions to `approved`.
 
 Execution uses a 2-signer session:
 
-- Start session: `POST /api/:id/execute`
-- Submit first/second signed tx: `POST /api/:id/execute-signature`
+- Start session: `POST /api/proposals/:id/execute`
+- Submit each signer's signed copy: `POST /api/proposals/:id/execute-signature`
 
-When enough signatures are collected, backend broadcasts the final transaction and marks proposal executed.
+In the app, an approved request shows **Send payment** to its signers. Two of them approve sending in their wallets. The first signer sees that the payment waits for the second; when the second signs, the backend combines both signatures into one transaction, broadcasts it, and marks the request executed.
 
 ## Current API Scope
 
@@ -67,10 +67,11 @@ Proposal covenant functions such as `cancel()` and `expire()` exist at contract 
 
 ```bash
 POST /api/vaults/:vaultId/proposals
-POST /api/:id/create-onchain
-POST /api/:id/confirm-create
-POST /api/:id/approve-onchain
-POST /api/:id/confirm-approval
-POST /api/:id/execute
-POST /api/:id/execute-signature
+POST /api/proposals/:id/create-onchain
+POST /api/proposals/:id/confirm-create
+POST /api/proposals/:id/approve-onchain
+POST /api/proposals/:id/confirm-approval
+POST /api/proposals/:id/execute
+POST /api/proposals/:id/execute-signature
+DELETE /api/proposals/:id
 ```

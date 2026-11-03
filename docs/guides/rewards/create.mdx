@@ -1,33 +1,22 @@
 ---
-title: "Create a Reward"
-description: "Issue an immediate or time-locked reward to a specific BCH address."
+title: "Create a Reward Program"
+description: "Lock a reward budget and fund it from your wallet."
 icon: "gift"
 ---
 
 <Steps>
-  <Step title="Navigate to Rewards">
-    Go to **Rewards → Issue Reward**.
+  <Step title="About the program">
+    Go to **Rewards → Create a reward program**. Add a title, a description and a type. The type only labels and filters your programs.
   </Step>
-  <Step title="Configure the reward">
-    | Field | Description |
-    |-------|-------------|
-    | Recipient | BCH P2PKH address |
-    | Amount | BCH or token amount |
-    | Token | BCH or CashToken (provide `tokenCategory`) |
-    | Release after | `0` for immediate, or future Unix timestamp |
-    | Vault | Funding source vault (optional) |
+  <Step title="Budget">
+    Pick BCH or a token, then set the total budget and the limit per reward. To pay in a token, use the wallet with permission to create that token. No single reward can be larger than the limit.
   </Step>
-  <Step title="Deploy and fund">
-    Click **Issue Reward**. For immediate rewards (`release after: 0`), the backend creates an open airdrop with `amountPerClaim` set to the reward amount and the recipient's address in the merkle tree. For deferred rewards, it creates a single-milestone budget plan.
-
-    Sign the funding `wcTransaction` in your wallet.
+  <Step title="Dates">
+    You can send rewards from the start date. The end date is optional.
   </Step>
-  <Step title="Confirm">
-    After broadcasting, confirm the transaction. The reward appears in the recipient's dashboard immediately.
+  <Step title="Create and fund">
+    The app calls `POST /api/rewards/create`, then `GET /api/rewards/:id/funding-info` returns the funding `wcTransaction`. Approve it in your wallet, and `POST /api/rewards/:id/confirm-funding` marks the program `ACTIVE`.
   </Step>
 </Steps>
 
-## Immediate vs. Deferred
-
-- **Immediate**: recipient can claim the moment the funding transaction is confirmed on-chain
-- **Deferred**: the covenant enforces a time lock; the recipient can claim after `releaseAfter` seconds have elapsed since funding
+See [Send Rewards](/guides/rewards/issue) for sending rewards from the program.

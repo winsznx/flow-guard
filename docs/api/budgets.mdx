@@ -134,6 +134,15 @@ x-user-address: bchtest:q...
 
 Controller-only (the address whose hash is stored in `constructor_params[1]`). Confirm with `POST /api/budget-plans/:id/confirm-pause`.
 
+## Resume
+
+```http
+POST /api/budget-plans/:id/resume
+x-user-address: bchtest:q...
+```
+
+Controller-only, and the plan must be `PAUSED`. Resuming moves the schedule cursor later by the time the plan was paused, the same as a stream. Confirm with `POST /api/budget-plans/:id/confirm-resume`, which sets `status` back to `ACTIVE`.
+
 ## Cancel
 
 ```http

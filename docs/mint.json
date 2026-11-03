@@ -117,12 +117,6 @@
             "concepts/rewards"
           ]
         },
-        {
-          "group": "Governance",
-          "pages": [
-            "concepts/governance"
-          ]
-        },
         "concepts/executor-network",
         "concepts/distribution"
       ]
@@ -190,14 +184,6 @@
             "guides/rewards/create",
             "guides/rewards/issue"
           ]
-        },
-        {
-          "group": "Governance",
-          "pages": [
-            "guides/governance/proposals",
-            "guides/governance/voting",
-            "guides/governance/reclaim"
-          ]
         }
       ]
     },
@@ -215,8 +201,7 @@
             "reference/contracts/bounty-covenant",
             "reference/contracts/reward-covenant",
             "reference/contracts/vault-covenant",
-            "reference/contracts/proposal-covenant",
-            "reference/contracts/vote-lock-covenant"
+            "reference/contracts/proposal-covenant"
           ]
         },
         "reference/shared-types",
@@ -246,7 +231,6 @@
         "api/rewards",
         "api/payments",
         "api/budgets",
-        "api/governance",
         "api/explorer",
         "api/indexer",
         "api/executor",
@@ -264,7 +248,6 @@
         "app/bounties",
         "app/rewards",
         "app/vaults",
-        "app/governance",
         "app/explorer",
         "app/status"
       ]

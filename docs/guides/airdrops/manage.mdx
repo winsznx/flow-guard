@@ -1,6 +1,6 @@
 ---
 title: 'Manage an Airdrop'
-description: 'Pause or cancel an active airdrop campaign and monitor claims.'
+description: 'Pause, resume or cancel an airdrop and monitor claims.'
 icon: 'sliders'
 ---
 
@@ -17,17 +17,17 @@ The claim list below shows each claimer address, amount, timestamp, and transact
 
 ## Pausing a Campaign
 
-Click **Pause** on the campaign detail page. The app calls `POST /api/airdrops/:id/pause` and returns a `wcTransaction`. Sign it in your wallet, then confirm with `POST /api/airdrops/:id/confirm-pause`.
+Choose **Pause airdrop** under Manage on the airdrop's page. The app calls `POST /api/airdrops/:id/pause` and returns a `wcTransaction`. Sign it in your wallet, then confirm with `POST /api/airdrops/:id/confirm-pause`.
 
 While paused, the `/claim` endpoint returns a `400` and the claim button is disabled in the UI.
 
-## Resume Availability
+## Resuming
 
-The covenant supports `resume()`, but the public HTTP layer exposes pause and cancel, not resume. Treat pause as a short-term safety switch and cancel as the terminal recovery path in the product today.
+Choose **Resume airdrop** under Manage. The app calls `POST /api/airdrops/:id/resume`, you sign the returned `wcTransaction`, and `POST /api/airdrops/:id/confirm-resume` moves the airdrop back to `ACTIVE`. Claims work again straight away. The network fee comes from the contract.
 
 ## Cancelling
 
-Click **Cancel**. The cancel transaction withdraws all remaining unclaimed funds back to the creator's address. Confirm it with `POST /api/airdrops/:id/confirm-cancel`. The campaign transitions to `CANCELLED` and is removed from public listings.
+Choose **Cancel airdrop**. The cancel transaction withdraws all remaining unclaimed funds back to the creator's address. Confirm it with `POST /api/airdrops/:id/confirm-cancel`. The campaign transitions to `CANCELLED` and is removed from public listings.
 
 <Warning>
   Once cancelled, the remaining funds return to your wallet. Already-confirmed claims are

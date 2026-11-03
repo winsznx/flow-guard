@@ -1,204 +1,68 @@
 ---
-title: "What FlowGuard Actually Is (And What It Isn’t)"
+title: "What FlowGuard is"
 date: "2026-02-18"
-summary: "FlowGuard isn't a wallet or a database. It's a set of six core covenant modules that enforce treasury rules directly on the Bitcoin Cash blockchain."
+summary: "Each part of FlowGuard in plain words, and who can move the money in each one."
 tags: ["Product", "Deep Dive", "Technology"]
 status: "published"
 author: "FlowGuard Team"
-readingTime: 6
+readingTime: 3
 featured: true
 ---
 
-# What FlowGuard Actually Is (And What It Isn’t)
+# What FlowGuard is
 
-## Introduction
+FlowGuard lets you pay people and keep shared money on Bitcoin Cash, with rules stored in contracts that anyone can check. You approve every payment in your own wallet. FlowGuard never holds your keys.
 
-In the previous post, we discussed the problem:
+This post goes through each part and says who can move the money. If you're new, the How it works page is the shortest way in.
 
-**Most BCH teams manage treasury with shared wallets and informal rules.**
+[How it works](/how-it-works)
 
-Today, we answer a simpler question:
+## Pay people
 
-**What exactly is FlowGuard?**
+### Streams
 
-FlowGuard is an on-chain treasury management system built on Bitcoin Cash.
+A stream pays one person bit by bit, or in steps, over a schedule you set. The person you pay claims each part from their own wallet. If you allowed it when you set it up, you can pause or cancel. When you cancel, they keep what's already released and the rest comes back to your wallet.
 
-- It is **not** a wallet.
-- It is **not** a custodial service.
-- It is **not** a database pretending to be on-chain.
+### Recurring payments
 
-It is a set of **covenant contracts** that enforce treasury rules directly on the blockchain.
+A recurring payment sends the same amount on a fixed schedule, counted in days, like every 7 or every 30 days. Every 30 days drifts from the same date each month. You add funds as you go, and the person you pay claims each payment.
 
-## The Core Modules
+### Pay many people
 
-FlowGuard is composed of six primary modules.
+Set up a stream for each person on your team in one go. Each person claims their own pay.
 
-Each one addresses a real treasury use case inside the BCH ecosystem.
+## Shared money
 
-### 1. Multisignature Vaults
+### Vaults
 
-Vaults are programmable treasuries.
+A vault holds shared money behind several approvals. It has 3 signers, and you choose whether 1 or 2 of them must approve each spending request. The signers are set when you create the vault and can't be changed later.
 
-They enforce:
+Signers can approve spending requests today. Sending approved payments from a vault isn't available yet, so money you deposit stays in the vault until it is.
 
-- M-of-N approval thresholds
-- Per-cycle spending caps
-- Time-based unlock windows
-- Optional recipient restrictions
+### Budget plans
 
-Signers must approve transactions — but approval alone is not enough.
+A budget plan releases money from your wallet on a schedule you set, and lists it under a vault. It doesn't use the vault's money.
 
-The contract still verifies:
+### Votes
 
-- Is this within the allowed cap?
-- Has the current cycle unlocked?
-- Does this payout violate treasury policy?
+A vote is a question about a vault. People answer by putting BCH behind their answer, and the BCH is held until voting ends. Then they can get it back.
 
-The rules are encoded in the contract itself.
+## Pay out from a pool
 
-### 2. Vesting Streams
+### Airdrops
 
-Streams handle structured payments over time.
+Put BCH or tokens in once. Anyone can claim one share, once per wallet. FlowGuard's server also approves each claim.
 
-Examples:
+### Grants
 
-- Contributor salaries
-- Team token vesting
-- Grant distributions
+Lock the full grant up front and release each milestone when the work is done. FlowGuard's server also approves each release.
 
-State is tracked using CashTokens NFT commitments.
+### Bounties and rewards
 
-Each stream stores:
+A bounty pays its prize to each winner you pick. A reward program pays rewards from one pool, and you send each reward. FlowGuard's server also approves each bounty payment and each reward.
 
-- Current status
-- Total released
-- Time cursor
-- Recipient identity
+## What FlowGuard doesn't do
 
-When a claim occurs, the NFT commitment updates.
+FlowGuard doesn't hold your keys or your money. The contracts on Bitcoin Cash decide when money can move. For airdrops, grants, bounties and rewards, FlowGuard's server also has to approve each payout, so those wait if the server is down. The money stays in the contract.
 
-The contract calculates what is vested.
-The chain enforces the release.
-
-### 3. Recurring Payments
-
-Recurring payments allow fixed-interval releases:
-
-- Daily
-- Weekly
-- Monthly
-
-Instead of manually sending payroll each period, the contract enforces:
-
-- Interval timing
-- Release amounts
-- Remaining balance
-
-No one needs to “remember” to execute payments.
-
-### 4. Merkle Airdrops
-
-FlowGuard supports structured distribution using:
-
-- A Merkle root embedded in the contract
-- Proof-based claiming
-- On-chain double-claim prevention
-
-Recipients submit cryptographic proof.
-
-The contract verifies eligibility.
-
-No manual distribution required.
-
-### 5. Governance Voting
-
-Governance is handled with:
-
-- Token locking
-- Vote recording
-- Tally commitments
-
-Votes are tied to locked tokens.
-
-The contract enforces:
-
-- Voting period
-- Eligibility
-- Execution rules
-
-There is no hidden counting process off-chain.
-
-### 6. Budget Plans
-
-Budget plans support milestone-based funding.
-
-Instead of releasing full funding upfront:
-
-- Funds unlock in steps
-- Milestones are enforced
-- Releases follow schedule rules
-
-This reduces risk in grant programs and development funding.
-
-## What FlowGuard Is Not
-
-It’s important to be precise.
-
-FlowGuard is **not**:
-
-- A custodial treasury manager
-- A centralized execution engine
-- A backend-controlled wallet
-
-The backend improves UX and indexing.
-
-It does not control funds.
-
-All treasury policies are enforced by covenant logic on Bitcoin Cash.
-
-**If a rule fails, the transaction fails on-chain.**
-
-## Why This Matters for the BCH Ecosystem
-
-Bitcoin Cash already enables:
-
-- Peer-to-peer payments
-- Fast settlement
-- Low fees
-
-FlowGuard extends BCH into:
-
-- DAO infrastructure
-- Grant distribution systems
-- Structured treasury control
-- On-chain organizational coordination
-
-It allows BCH to support not just transactions — but governance and capital management.
-
-That is a meaningful expansion of capability.
-
-## The Design Philosophy
-
-FlowGuard follows three principles:
-
-### Non-custodial
-Users sign transactions in their own wallets.
-
-### On-chain enforcement
-Treasury rules live inside covenant contracts.
-
-### Minimal trust
-No hidden admin keys.
-No override switches.
-
-If it isn’t enforced by script, it isn’t considered a rule.
-
-## Closing
-
-FlowGuard is not trying to replace wallets.
-
-It’s trying to move treasury logic from conversations to code.
-
-In the next post, we’ll break down how FlowGuard remains non-custodial — and why that matters for real BCH teams managing real capital.
-
-If you’re building on Bitcoin Cash and managing treasury, this is infrastructure worth understanding.
+The contracts were reviewed by our team. There's no outside review yet, so start with a small amount.

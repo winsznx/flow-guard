@@ -1,33 +1,31 @@
 ---
 title: 'Grants'
-description: 'Milestone-based budget disbursement for funded projects and contractors.'
+description: 'Lock a grant up front and release it one milestone at a time.'
 icon: 'chart-line'
 ---
 
-FlowGuard grants are milestone-based budget plans. They lock funding up front, then release it in scheduled stages to a recipient as each milestone window becomes claimable on-chain.
+A grant pays a project in steps. You lock the full amount in a `GrantCovenant` when you fund it, split into milestones of the same size, and release each milestone when the work is done. FlowGuard's server also approves each release, and the contract counts how many milestones have gone out, so nobody can release more than you planned.
 
-In the current product, grants share the budget-plan engine. That means the app presents them as treasury budget releases with milestone timing, release history, and recipient-side release actions.
+## Creating a grant
 
-## Creating a Grant
+Go to **Grants → Create a grant** and fill in:
 
-Navigate to **Grants → New Grant** and specify:
+| Field | What it does |
+| --- | --- |
+| Name | Shown on the grant's page to you and the recipient |
+| Recipient | The address that receives each milestone |
+| Pay with | BCH, or a token your wallet has permission to create |
+| Amount per milestone | Every milestone pays this amount. It can't change later |
+| Milestones | Names and notes for each step. FlowGuard keeps these, and the contract only counts them |
+| Pause and cancel | Whether you can pause or cancel later |
+| Recipient can change their address | Whether the recipient can move the rest of the grant to a new address |
 
-| Field      | Description                                         |
-| ---------- | --------------------------------------------------- |
-| Recipient  | BCH P2PKH address                                   |
-| Vault      | Treasury vault associated with the grant            |
-| Token      | BCH or CashToken                                    |
-| Milestones | Array of `{ amount, durationSeconds, description }` |
-| Cancelable | Whether unvested funds can be reclaimed             |
+## Releasing a milestone
 
-The entire grant amount is locked upfront in the budget covenant. Milestones unlock sequentially, so a later stage cannot be released before the earlier stage has already cleared.
+When a milestone is done, open the grant and choose **Release**. You approve it in your wallet, FlowGuard's server approves it, and the milestone goes to the recipient. The network fee comes from the contract.
 
-## Releasing a Milestone
+## Pausing, resuming and cancelling
 
-When a milestone period elapses, the recipient navigates to the grant and clicks **Release**. The app builds a release transaction and the wallet signs it. If more than one milestone is already due, the releasable amount can be bundled into one transaction.
+If you allowed it, you can pause the grant so nothing can be released, then resume it later. Cancelling ends the grant: released milestones stay paid and the rest comes back to your wallet.
 
-## Cancelling a Grant
-
-The grant controller can cancel according to the plan settings. Released milestones stay with the recipient. Unreleased milestone funds return through the contract recovery path to the configured controller side of the grant.
-
-See [Create a Grant](/guides/grants/create) for the complete guide.
+See [Create a grant](/guides/grants/create) for the full guide.

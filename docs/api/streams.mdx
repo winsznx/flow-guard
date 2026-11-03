@@ -115,6 +115,7 @@ x-user-address: bchtest:q...
   "startTime": 1761955200,
   "endTime": 1793491200,
   "cancelable": true,
+  "transferable": true,
   "description": "Contributor vesting lane",
   "vaultId": "optional-vault-id",
   "scheduleTemplate": "hybrid-upfront-linear",
@@ -128,6 +129,8 @@ x-user-address: bchtest:q...
   }
 }
 ```
+
+`cancelable` lets the sender pause and cancel later. `transferable` lets the recipient move the stream to a new address. It defaults to `true` and is always `false` for `RECURRING`. Neither can change after funding. For a token stream, send `tokenType: "FUNGIBLE_TOKEN"` with `tokenCategory` and `tokenDecimals`.
 
 ### Family-Specific Fields
 

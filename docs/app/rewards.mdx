@@ -1,28 +1,30 @@
 ---
-title: "Rewards"
-description: "Issue one-time or recurring BCH or token rewards to contributors and community members."
+title: 'Rewards'
+description: 'Fund a reward program once, then send rewards from it when people earn them.'
 icon: "gift"
 ---
 
-Rewards are immediate or scheduled lump-sum distributions to specific addresses. They use a single-claim airdrop or single-milestone budget plan, depending on whether the payout is immediate or deferred.
+A reward program is a fund for paying people for things they did, like referrals or contributions. You lock a total budget in a `RewardCovenant`, set a limit per reward, and send each reward from the program when someone earns it. Rewards arrive in people's wallets, so there's nothing for them to claim. FlowGuard's server also approves each reward.
 
-## Issuing a One-time Reward
+## Creating a reward program
 
-Navigate to **Rewards → Issue Reward**:
+Go to **Rewards → Create a reward program** and fill in:
 
-| Field | Description |
-|-------|-------------|
-| Recipient | BCH address |
-| Amount | BCH or token amount |
-| Asset | BCH or CashToken category |
-| Release after | 0 for immediate, or a future Unix timestamp |
+| Field | What it does |
+| --- | --- |
+| Title and description | Shown on the program's page |
+| Type | A label for filtering your programs |
+| Pay in | BCH, or a token your wallet has permission to create |
+| Total budget | What you lock when you fund the program |
+| Limit per reward | No single reward can be larger than this |
+| Start and end date | You can send rewards from the start date until the end date |
 
-If **Release after** is 0 or in the past, the recipient can claim immediately after funding is confirmed.
+## Sending a reward
 
-## Recurring Rewards
+Open the program, enter the person's address and the amount, and choose **Send**. The network fee comes from the contract.
 
-For ongoing rewards (e.g. monthly contributor stipends), use the **Recurring Payments** product instead and set a `MONTHLY` interval.
+## Pausing, resuming and cancelling
 
-## Claiming a Reward
+Under **Manage** you can pause the program, which stops rewards until you resume it. Cancelling sends what hasn't been sent back to your wallet. Programs created from November 2026 also return the unused fee BCH when cancelled.
 
-Recipients see outstanding rewards in their **Receiving** tab. A single tap (mobile) or click (desktop) signs and broadcasts the claim. No manual merkle proof required ,  open rewards need only the claimer's wallet signature.
+See [Send rewards](/guides/rewards/issue) for the full guide.

@@ -57,13 +57,6 @@ FlowGuard contracts enforce access control with BCH signature checks against con
 | `resume()`        | M-of-N vault signers    | ,                              |
 | `emergencyLock()` | all registered signers  | ,                              |
 
-## Governance Covenants
-
-| Function         | VoteLockCovenant                          |
-| ---------------- | ----------------------------------------- |
-| `reclaim()`      | voter after `unlockTimestamp`             |
-| `earlyReclaim()` | voter after final proposal state is known |
-
 ## What the Backend Cannot Do
 
 The backend API and indexer do not get special contract privileges. They cannot:

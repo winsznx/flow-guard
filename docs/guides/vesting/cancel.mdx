@@ -13,6 +13,17 @@ When a sender cancels a vesting stream, the covenant computes the vested amount 
 Cancel requires `FLAG_CANCELABLE` (`0x01`) to be set. If the stream was created without this flag, it cannot be cancelled by anyone.
 </Note>
 
+<Note>
+  A stream paid in a CashToken can be cancelled about 2 hours after it starts. The token
+  covenants measure vesting from `tx.locktime`, which has to sit 2 hours behind the clock, so
+  before then the cancel route returns `409` with `errorCode: "CANCEL_BEFORE_START"`.
+
+  For a BCH stream, when the recipient's unclaimed share is under 546 satoshis (too small to
+  send), the backend sets `tx.locktime` to the last second before that share started building
+  up. The cancel then sends the recipient nothing and returns the rest to the sender, so it
+  works right after a claim.
+</Note>
+
 ## Split Formula
 
 At cancellation time `T`:

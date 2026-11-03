@@ -25,6 +25,12 @@ claimable      = vestedTotal - totalReleased
 
 Where `cursor` begins at `startTimestamp` and is advanced by the cumulative pause duration each time the stream is resumed.
 
+## Why claims run about 2 hours behind
+
+A transaction's `tx.locktime` can't be later than the chain's median time past, which trails the clock by up to about an hour. FlowGuard builds every claim with `tx.locktime` set 2 hours before now so the network accepts it straight away. The contract measures vesting at `tx.locktime`, so what you can claim is what had vested 2 hours ago, and the first claim opens a little over 2 hours after a stream starts. The app's "ready to claim" amount uses the same 2-hour lag.
+
+A BCH claim also has to be at least 546 satoshis, the dust limit. Until that much has vested, the claim route returns `400` with `errorCode: "NOTHING_TO_CLAIM"` and `retryable: true`.
+
 ## Cliff
 
 If `cliffTimestamp > 0`, calling `claim()` before the cliff will fail at the contract level:

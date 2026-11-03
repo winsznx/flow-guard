@@ -29,8 +29,9 @@ After creation, the campaign must be funded before it becomes active.
 
 ## What Creators Can Do
 
-- pause an active campaign
-- cancel an active or paused campaign
+- pause an active airdrop
+- resume a paused airdrop
+- cancel an active or paused airdrop
 - generate a Merkle tree for restricted campaigns
 
 ## What Claimers Do
@@ -40,6 +41,6 @@ After creation, the campaign must be funded before it becomes active.
 - request the claim transaction
 - sign and broadcast the claim
 
-## Current Boundary
+## Pausing
 
-The covenant supports `resume()`, but the public HTTP layer currently exposes pause and cancel, not resume. Documented campaign controls should match the routes the product actually exposes.
+While an airdrop is paused nobody can claim. Resuming opens it for claims again. Pause, resume and cancel each pay their network fee from the contract.

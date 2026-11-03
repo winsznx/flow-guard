@@ -78,11 +78,3 @@ All FlowGuard API errors return a JSON body with an `"error"` field and optional
 | `At least two signer keys are required` | Only one signer available in the vault |
 | `Proposal creation transaction does not include the expected covenant NFT output` | ProposalCovenant not funded correctly |
 
-### Governance
-
-| Error | Cause |
-|-------|-------|
-| `Voting period has ended` | Vote lock attempted after `votingEndsAt` |
-| `Already voted on this proposal` | Duplicate off-chain vote from same address |
-| `Vote lock contract data not recorded` | Unlock attempted without a prior confirmed lock |
-| `Unlock transaction does not include expected voter token return output` | Wrong transaction submitted for unlock confirmation |

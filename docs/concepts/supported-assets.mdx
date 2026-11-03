@@ -29,6 +29,18 @@ When creating a CashToken stream, the covenant UTXO must hold both:
 2. The FT amount to be streamed under the same `tokenCategory` as the state NFT
 </Info>
 
+## Which wallet can fund in a token
+
+Most covenants keep their state NFT in the token's own category, so creating it needs the token's minting capability. Those products have to be funded from the wallet with permission to create the token, usually the wallet that created it:
+
+| Product | Funding wallet for a token |
+| --- | --- |
+| Streams released evenly or in equal steps (`LINEAR`, `STEP`) | Any wallet holding the token. `FtVestingCovenant` keeps its state NFT in a separate category |
+| Hybrid, tranche and recurring streams, batches, recurring payments, budget plans | The wallet with permission to create the token |
+| Airdrops, grants, bounties, rewards | The wallet with permission to create the token |
+
+Every token transaction still needs a little BCH for network fees.
+
 ## Supported Token Standards
 
 Any CashToken fungible token with a valid `tokenCategory` is supported. This includes:

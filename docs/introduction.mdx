@@ -1,6 +1,6 @@
 ---
 title: 'Introduction'
-description: 'A BCH-native covenant operating layer for treasuries, streams, distributions, and governance.'
+description: 'A BCH-native covenant operating layer for treasuries, streams, distributions, and group approvals.'
 icon: 'shield-halved'
 ---
 
@@ -28,8 +28,8 @@ FlowGuard turns Bitcoin Cash and CashTokens into programmable financial products
   <Card title="Vaults" icon="vault" href="/concepts/vaults">
     BCH and CashToken treasury control with signer thresholds, spending policy, and linked covenant workflows.
   </Card>
-  <Card title="Governance" icon="landmark" href="/concepts/governance">
-    Proposal execution and vote-lock decision flows tied to treasury operations.
+  <Card title="Spending requests" icon="landmark" href="/guides/vaults/proposals">
+    Payments from a vault that wait for enough signers to approve, then go out once two signers send them.
   </Card>
 </CardGroup>
 
@@ -52,7 +52,7 @@ Every FlowGuard product is a covenant-controlled UTXO. Immutable deployment rule
 | Bounties           | `BountyCovenant`                                                     | Open competitions with proof-verified prizes                                         |
 | Rewards            | `RewardCovenant`                                                     | Achievement, referral, and loyalty incentives                                        |
 | Vaults             | `VaultCovenant`                                                      | Multi-asset treasury management with signer policy and linked covenant actions       |
-| Governance         | `VoteLockCovenant`, `ProposalCovenant`                               | On-chain voting and treasury-linked proposal execution                               |
+| Spending requests  | `ProposalCovenant`, `VaultCovenant`                                  | Vault payments that need several signers to approve                                  |
 
 ## Shared workspaces
 
@@ -73,6 +73,6 @@ The UI changes the launch context and navigation. The underlying contract-backed
     Stream, refill, transfer, activity, and batch endpoints.
   </Card>
   <Card title="Architecture" icon="diagram-project" href="/reference/architecture">
-    See how vaults, streams, distributions, and governance fit together.
+    See how vaults, streams, distributions, and spending requests fit together.
   </Card>
 </CardGroup>

@@ -10,7 +10,7 @@ FlowGuard has three main layers:
 
 - On-chain covenant state on Bitcoin Cash.
 - Backend services that build, confirm, index, and monitor transactions.
-- Frontend product surfaces for treasury, streams, distributions, and governance.
+- Frontend product surfaces for treasury, streams, distributions, and spending requests.
 
 ```mermaid
 flowchart TD
@@ -25,11 +25,9 @@ flowchart TD
     VC -->|vault linkage| STREAMS
     VC -->|vault linkage| DIST
     VC -->|proposal funding| PC
-    PC -->|vote locks| VLC
 
     VC["VaultCovenant"]
     PC["ProposalCovenant"]
-    VLC["VoteLockCovenant"]
     STREAMS["Streaming Covenants"]
     DIST["Distribution Covenants"]
     IDX["Indexer"]
@@ -44,9 +42,8 @@ flowchart TD
 | Family       | Contracts                                                                                                 |
 | ------------ | --------------------------------------------------------------------------------------------------------- |
 | Treasury     | `VaultCovenant`, `ProposalCovenant`                                                                       |
-| Governance   | `VoteLockCovenant`                                                                                        |
-| Streaming    | `VestingCovenant`, `RecurringPaymentCovenant`, hybrid/tranche schedule variants built on the stream stack |
-| Distribution | `AirdropCovenant`, `GrantCovenant`, `BountyCovenant`, `RewardCovenant`                                    |
+| Streaming    | `VestingCovenant`, `FtVestingCovenant`, `RecurringPaymentCovenant`, hybrid/tranche schedule variants, and the V2 version of each except `FtVestingCovenant` |
+| Distribution | `AirdropCovenant`, `GrantCovenant`, `BountyCovenant`, `RewardCovenant`, and the V2 version of each       |
 
 ## Commitment Sizes
 
@@ -56,7 +53,6 @@ flowchart TD
 | Proposal state     | 64 bytes        |
 | Schedule state     | 48 bytes        |
 | Distribution state | 40 bytes        |
-| Vote lock state    | 32 bytes        |
 
 These sizes map to the shared encoding helpers and shared TypeScript state definitions.
 
@@ -123,9 +119,6 @@ sequenceDiagram
 | `BudgetControlService`      | pause, resume, and cancel budget-plan state            |
 | `VaultFundingService`       | build and confirm vault funding                        |
 | `ProposalService`           | proposal records, approvals, execution sessions        |
-| `VoteDeploymentService`     | deploy vote lock contracts                             |
-| `VoteLockService`           | build vote lock flows                                  |
-| `VoteUnlockService`         | build reclaim flows                                    |
 | `DeploymentRegistryService` | verify and report deployment records                   |
 | `TransactionMonitor`        | verify and track submitted transactions                |
 | `MerkleTreeService`         | generate Merkle trees for restricted airdrops          |

@@ -4,7 +4,7 @@ description: "Endpoints for creating, funding, paying winners, pausing, and canc
 icon: "trophy"
 ---
 
-A bounty in FlowGuard is a fixed-reward, fixed-winners campaign deployed as a `BountyCovenant` on Bitcoin Cash. The creator funds a pool sized to `rewardPerWinner * maxWinners`, the backend co-signs each claim with a stored claim authority, and the creator can pause or cancel the campaign at any time. Bounties pay in BCH or in a single CashToken category.
+A bounty in FlowGuard is a fixed-reward, fixed-winners campaign deployed as a `BountyCovenant` on Bitcoin Cash. The creator funds a pool sized to `rewardPerWinner * maxWinners`, the backend co-signs each claim with a stored claim authority, and the creator can pause, resume or cancel the campaign at any time. Bounties pay in BCH or in a single CashToken category.
 
 All mutating routes require `Authorization: Bearer <walletSession>` plus the canonical `x-user-address` header. The wallet session is verified by the `requireWalletAuth` middleware in `backend/src/api/bounties.ts`. Read routes (list and detail) are unauthenticated.
 
@@ -281,6 +281,16 @@ Authorization: Bearer <walletSession>
 }
 ```
 
+## Resume
+
+```http
+POST /api/bounties/:id/resume
+POST /api/bounties/:id/confirm-resume
+Authorization: Bearer <walletSession>
+```
+
+`POST /resume` is creator-only and requires the campaign to be `PAUSED`. It builds the covenant resume transaction, and `POST /confirm-resume` verifies the new state output and moves the row back to `ACTIVE`. The body and responses match pause, with `nextStatus` and `status` set to `ACTIVE`.
+
 ## Cancel
 
 ```http
@@ -332,5 +342,7 @@ Authorization: Bearer <walletSession>
 | `POST /api/bounties/:id/confirm-claim` | yes |
 | `POST /api/bounties/:id/pause` | yes |
 | `POST /api/bounties/:id/confirm-pause` | yes |
+| `POST /api/bounties/:id/resume` | yes |
+| `POST /api/bounties/:id/confirm-resume` | yes |
 | `POST /api/bounties/:id/cancel` | yes |
 | `POST /api/bounties/:id/confirm-cancel` | yes |

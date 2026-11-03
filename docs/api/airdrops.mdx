@@ -85,11 +85,13 @@ Returns the Merkle proof for a restricted campaign recipient.
 ```http
 POST /api/airdrops/:id/pause
 POST /api/airdrops/:id/confirm-pause
+POST /api/airdrops/:id/resume
+POST /api/airdrops/:id/confirm-resume
 POST /api/airdrops/:id/cancel
 POST /api/airdrops/:id/confirm-cancel
 ```
 
-These routes are creator-only and require `x-user-address`.
+These routes are creator-only and require `x-user-address`. `pause` needs an `ACTIVE` campaign and `resume` a `PAUSED` one. Both build a state-only transaction whose fee comes from the contract, and the matching `confirm-*` route checks the new state output and updates `status`.
 
 ## Public Control Surface
 
@@ -97,6 +99,8 @@ The public control routes currently exposed by the backend are:
 
 - `pause`
 - `confirm-pause`
+- `resume`
+- `confirm-resume`
 - `cancel`
 - `confirm-cancel`
 

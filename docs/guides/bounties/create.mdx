@@ -1,38 +1,22 @@
 ---
 title: "Create a Bounty"
-description: "Fund a task with a time-locked payout and optional cancellation window."
+description: "Lock a prize for a piece of work and fund it from your wallet."
 icon: "trophy"
 ---
 
 <Steps>
-  <Step title="Navigate to Bounties">
-    Go to **Bounties → New Bounty**.
+  <Step title="Describe the work">
+    Go to **Bounties → Create a bounty**. Add a title and explain how to take part: what to do, how to send you the work and how you'll pick winners. People send their work to you outside FlowGuard.
   </Step>
-  <Step title="Configure the bounty">
-    - **Title**: the task or deliverable
-    - **Recipient**: BCH address of the builder who will complete the work
-    - **Vault**: funding source (the vault's controller signs the covenant)
-    - **Amount**: total payout in BCH or tokens
-    - **Lock duration**: seconds from funding until the recipient can claim (e.g. `2592000` for 30 days)
-    - **Cancelable**: whether the funder can cancel before the recipient claims
+  <Step title="Set the prize">
+    Pick BCH or a token, then set the prize per winner and the number of winners. To pay in a token, use the wallet with permission to create that token, usually the wallet that created it. The prize per winner can't change later.
   </Step>
-  <Step title="Deploy and fund">
-    Click **Create Bounty**. The backend creates a single-milestone budget plan and returns the funding `wcTransaction`. Sign it in your wallet and confirm.
+  <Step title="Pick the dates">
+    You can pay winners from the start date. The end date is optional. After it you can't pay winners, but you can still cancel and get the rest back.
   </Step>
-  <Step title="Notify the recipient">
-    Share the bounty detail URL with the builder. They see the locked amount, the unlock date, and a countdown.
+  <Step title="Create and fund">
+    Choose **Create bounty**. The app calls `POST /api/bounties/create`, then `GET /api/bounties/:id/funding-info` returns the funding `wcTransaction`. Approve it in your wallet, and `POST /api/bounties/:id/confirm-funding` marks the bounty `ACTIVE`. Your wallet may need one setup step first, so you might approve two requests.
   </Step>
 </Steps>
 
-## Claim Flow (Recipient)
-
-When the lock duration elapses:
-
-1. The builder opens the bounty and clicks **Claim Bounty**
-2. The app checks that `current_time >= startTime + lockDuration`
-3. The claim `wcTransaction` is returned for the builder to sign
-4. After broadcasting, `confirm-release` is called and the funds arrive in the builder's wallet
-
-## Cancellation
-
-If `cancelable: true`, the funder can cancel the bounty at any time before the recipient claims. Funds return to the vault controller's address. After cancellation the bounty is permanently closed.
+Funding locks the whole prize, plus a little BCH the contract uses for later network fees. See [Pay a Winner](/guides/bounties/claim) for the payout flow.

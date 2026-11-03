@@ -20,15 +20,17 @@ All routes live under `/api`. Mutating routes require Bearer wallet auth and the
 
 ```http
 GET /api/grants?creator={address}&showDeprecated={bool}
+GET /api/grants?recipient={address}&showDeprecated={bool}
 ```
 
-Returns grants created by `creator`, newest first. Deprecated grants are hidden unless `showDeprecated=true`.
+Returns grants created by `creator`, or paid to `recipient`, newest first. Deprecated grants are hidden unless `showDeprecated=true`.
 
 ### Query parameters
 
 | Param             | Required | Meaning                                                  |
 | ----------------- | -------- | -------------------------------------------------------- |
-| `creator`         | yes      | Creator wallet address                                   |
+| `creator`         | one of   | Creator wallet address                                   |
+| `recipient`       | one of   | Recipient wallet address                                 |
 | `showDeprecated`  | no       | Include deprecated grants when `true`. Default `false`.  |
 
 ### Response
@@ -286,7 +288,17 @@ Authorization: Bearer <token>
 x-user-address: bchtest:qcreator...
 ```
 
-Creator-only. Pause builds an on-chain state transition that flips the covenant to `PAUSED`, blocking further releases until cancellation (the on-chain covenant does not currently expose resume).
+Creator-only. Pause builds an on-chain state transition that flips the covenant to `PAUSED`, blocking further releases until it's resumed or cancelled.
+
+## Resume
+
+```http
+POST /api/grants/:id/resume
+POST /api/grants/:id/confirm-resume
+Authorization: Bearer <token>
+```
+
+Creator-only, for a `PAUSED` grant. Returns `{ success, nextStatus: "ACTIVE", wcTransaction }`; confirm with `{ txHash }`.
 
 ### Pause response
 
