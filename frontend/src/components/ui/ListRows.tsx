@@ -8,8 +8,8 @@ type Zone = 'top' | 'bottom-start' | 'bottom-end';
 function MobileCell<Row>({ column, row }: { column: Column<Row>; row: Row }) {
   if (!column.mobileLabel) return <span>{column.cell(row)}</span>;
   return (
-    <span>
-      <span className="text-ink-muted">{column.mobileLabel} </span>
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+      <span className="text-ink-muted">{column.mobileLabel}</span>
       {column.cell(row)}
     </span>
   );

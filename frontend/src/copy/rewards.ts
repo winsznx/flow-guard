@@ -215,7 +215,6 @@ export const REWARD_DETAIL = {
     programId: 'Program ID',
     address: 'Program address',
     funding: 'Funding transaction',
-    tokenId: 'Token ID',
   },
   who: {
     title: 'Who can move the money',

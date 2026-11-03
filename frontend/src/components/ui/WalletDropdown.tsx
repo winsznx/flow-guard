@@ -2,6 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Address } from './Address';
 import { Amount } from './Amount';
+import { AssetIcon } from './AssetIcon';
 import { BUTTON_BASE, BUTTON_VARIANTS } from './Button';
 import { ArrowUpRight, ChevronDown, Copy, Icon, LogOut, Settings, Wallet, type LucideIcon } from './Icon';
 import { cx } from './cx';
@@ -184,7 +185,10 @@ export function WalletChip({ compact = false }: WalletChipProps) {
         <span className={cx('min-w-0 truncate', fit.address)}>
           <Address value={address} copy={false} />
         </span>
-        <span className={cx('whitespace-nowrap text-caption text-ink-muted', fit.balance)}>{chipBalance}</span>
+        <span className={cx('inline-flex items-center gap-1 whitespace-nowrap text-caption text-ink-muted', fit.balance)}>
+          {wallet.balance ? <AssetIcon asset={BCH} size="sm" /> : null}
+          {chipBalance}
+        </span>
         <span aria-hidden="true" className={cx('inline-flex shrink-0 text-ink-muted', fit.chevron)}>
           <Icon icon={ChevronDown} size={16} />
         </span>

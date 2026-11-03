@@ -306,7 +306,6 @@ export const STREAM_DETAIL = {
       'Release dates wait while the stream is paused. When it resumes, each one moves later by the time it was paused.',
     pausedSince: (date: string) =>
       `Paused since ${date}. When it resumes, each release date moves later by the time it was paused.`,
-    aboutWeekly: ABOUT_WEEKLY,
   },
   activityHeading: 'Activity',
   detailsHeading: 'Details',
@@ -314,8 +313,6 @@ export const STREAM_DETAIL = {
     from: 'From',
     to: 'To',
     paidIn: 'Paid in',
-    token: 'Token',
-    copyTokenId: 'Copy token ID',
     schedule: 'Schedule',
     howOften: 'How often',
     eachRelease: 'Each release',

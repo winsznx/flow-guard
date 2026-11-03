@@ -16,7 +16,7 @@ const TAG = {
 } as const;
 
 const LOOK = {
-  page: 'font-display text-title-page text-ink',
+  page: 'text-title-page text-ink',
   section: 'text-title-section text-ink',
   item: 'text-title-item text-ink',
 } as const;

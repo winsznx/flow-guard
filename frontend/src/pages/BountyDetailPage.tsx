@@ -10,11 +10,11 @@ import { ActivityList } from '../components/ui/ActivityList';
 import { Address } from '../components/ui/Address';
 import { AddressInput } from '../components/ui/AddressInput';
 import { Amount } from '../components/ui/Amount';
+import { AssetName } from '../components/ui/AssetName';
 import { Button } from '../components/ui/Button';
 import { ButtonLink } from '../components/ui/ButtonLink';
 import { Card } from '../components/ui/Card';
 import { Code } from '../components/ui/Code';
-import { CopyButton } from '../components/ui/CopyButton';
 import { DetailList } from '../components/ui/DetailList';
 import { ErrorState } from '../components/ui/ErrorState';
 import { ErrorSummary } from '../components/ui/ErrorSummary';
@@ -48,10 +48,9 @@ import {
   viewerWho,
   winnersPaid,
 } from '../copy/bounties';
-import { ACTIONS } from '../copy/common';
 import { apiFailure, asFlowError, flowFailure, type FlowError } from '../copy/errors';
 import { toEventKind, type ActivityEvent } from '../copy/events';
-import { formatAmount, formatDate, formatShortId } from '../copy/format';
+import { formatAmount, formatDate } from '../copy/format';
 import { TX_NOTICES } from '../copy/wallets';
 import {
   fetchBounty,
@@ -626,21 +625,8 @@ export default function BountyDetailPage() {
     { label: BOUNTY_DETAIL.details.sentBy, value: <Address value={bounty.creator} isYou={isSender} /> },
     {
       label: BOUNTY_DETAIL.details.paidIn,
-      value: asset.kind === 'bch' ? 'BCH' : asset.symbol || BOUNTY_DETAIL.details.tokenId,
+      value: <AssetName asset={asset} />,
     },
-    ...(asset.kind === 'token'
-      ? [
-          {
-            label: BOUNTY_DETAIL.details.tokenId,
-            value: (
-              <span className="inline-flex items-center gap-1">
-                <Code>{formatShortId(asset.tokenId)}</Code>
-                <CopyButton value={asset.tokenId} label={ACTIONS.copyId} />
-              </span>
-            ),
-          },
-        ]
-      : []),
     { label: BOUNTY_DETAIL.details.perWinner, value: <Amount value={prizeUnits} asset={asset} /> },
     { label: BOUNTY_DETAIL.details.winners, value: String(bounty.max_winners) },
     { label: BOUNTY_DETAIL.details.starts, value: startText },

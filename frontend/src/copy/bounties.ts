@@ -204,7 +204,6 @@ export const BOUNTY_DETAIL = {
     bountyId: 'Bounty ID',
     address: 'Bounty address',
     funding: 'Funding transaction',
-    tokenId: 'Token ID',
   },
   who: {
     title: 'Who can move the money',

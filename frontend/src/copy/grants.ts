@@ -35,12 +35,6 @@ export function grantAsset(grant: GrantAssetSource): Asset {
   return tokenAsset(grant.token_category, meta?.decimals === 0 ? 0 : null, meta?.symbol);
 }
 
-/** What the grant pays in, by name. */
-export function grantPaysIn(grant: GrantAssetSource): string {
-  if (grant.token_type === 'BCH' || !grant.token_category) return 'BCH';
-  return getCachedTokenMeta(grant.token_category)?.symbol?.trim() || GRANT_DETAILS_LABELS.aToken;
-}
-
 export type GrantSegment = 'all' | 'receiving' | 'sending';
 export type GrantRole = 'sender' | 'recipient' | 'viewer';
 
@@ -183,7 +177,6 @@ export const GRANT_DETAILS_LABELS = {
   yesBySender: 'Yes, by the sender',
   yesByRecipient: 'Yes, by the recipient',
   no: 'No',
-  aToken: 'A token',
 } as const;
 
 export function roleDescription(role: GrantRole, sender: GrantParty, recipient: GrantParty): string {

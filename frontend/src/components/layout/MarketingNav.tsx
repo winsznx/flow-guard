@@ -123,7 +123,7 @@ export function MarketingNav() {
       )}
     >
       <SkipToMain />
-      <div className="mx-auto flex h-full max-w-page items-center gap-4 px-4 sm:gap-8 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-full max-w-page items-center gap-3 px-4 sm:gap-8 sm:px-6 lg:px-8">
         <Link to="/" aria-label={SITE_NAME} className="inline-flex min-h-touch shrink-0 items-center rounded-control">
           <Logo />
         </Link>

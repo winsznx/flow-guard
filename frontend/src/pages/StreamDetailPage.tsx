@@ -6,6 +6,7 @@ import { TwoColumn } from '../components/layout/TwoColumn';
 import { ActivityList } from '../components/ui/ActivityList';
 import { AddressInput } from '../components/ui/AddressInput';
 import { Amount } from '../components/ui/Amount';
+import { AssetName } from '../components/ui/AssetName';
 import { AmountInput } from '../components/ui/AmountInput';
 import { Address } from '../components/ui/Address';
 import { BackLink } from '../components/ui/BackLink';
@@ -34,13 +35,12 @@ import {
   type TxStep,
 } from '../components/ui/TransactionReview';
 import type { Asset } from '../components/ui/types';
-import { LABELS, ROLE_LINES, TOASTS } from '../copy/common';
+import { ROLE_LINES, TOASTS } from '../copy/common';
 import { toEventKind, type ActivityEvent } from '../copy/events';
 import {
   formatAddress,
   formatAmount,
   formatDate,
-  formatShortId,
   formatDateTime,
   formatInterval,
 } from '../copy/format';
@@ -57,7 +57,8 @@ import {
   resumeStreamOnChain,
   transferStreamOnChain,
 } from '../utils/blockchain';
-import { getCachedTokenMeta, resolveTokenMeta, type TokenMeta } from '../utils/tokenMeta';
+import { type TokenMeta } from '../utils/tokenMeta';
+import { useTokenMeta } from '../hooks/useTokenMeta';
 
 const DAY_SECONDS = 86_400;
 const MAX_EVEN_BLOCKS = 52;
@@ -151,28 +152,6 @@ function sameAddress(a: string | null | undefined, b: string | null | undefined)
   return Boolean(a && b) && bare(a ?? '') === bare(b ?? '');
 }
 
-function useTokenMeta(category: string | null): TokenMeta | null {
-  const [resolved, setResolved] = useState<{ category: string; meta: TokenMeta | null } | null>(
-    null
-  );
-
-  useEffect(() => {
-    if (!category) return undefined;
-    let ignore = false;
-    resolveTokenMeta(category)
-      .then((meta) => {
-        if (!ignore) setResolved({ category, meta });
-      })
-      .catch((error: unknown) => console.warn('Token details did not load', error));
-    return () => {
-      ignore = true;
-    };
-  }, [category]);
-
-  if (!category) return null;
-  return resolved?.category === category ? resolved.meta : getCachedTokenMeta(category);
-}
-
 function streamAsset(stream: Stream, meta: TokenMeta | null): Asset {
   if (stream.token_type === 'BCH' || !stream.token_category) return { kind: 'bch' };
   return {
@@ -213,9 +192,17 @@ function hasWait(stream: Stream): boolean {
   return Boolean(stream.cliff_timestamp && stream.cliff_timestamp > stream.start_time);
 }
 
-function evenBlocks(from: number, to: number, amount: number): RawBlock[] {
+const BAR_SPANS: readonly number[] = [3_600, DAY_SECONDS, 7 * DAY_SECONDS, 30 * DAY_SECONDS];
+
+/** Bars of an hour, day, week or month: the smallest that draws the whole stream in at most MAX_EVEN_BLOCKS bars. */
+function barSpanOf(stream: Stream): number {
+  const length = Math.max(0, (stream.end_time ?? 0) - stream.start_time);
+  return BAR_SPANS.find((span) => length / span <= MAX_EVEN_BLOCKS) ?? BAR_SPANS[BAR_SPANS.length - 1];
+}
+
+function evenBlocks(from: number, to: number, amount: number, span: number): RawBlock[] {
   if (to <= from || amount <= 0) return [];
-  const count = Math.max(1, Math.min(MAX_EVEN_BLOCKS, Math.round((to - from) / (7 * DAY_SECONDS))));
+  const count = Math.max(1, Math.min(MAX_EVEN_BLOCKS, Math.round((to - from) / span)));
   return Array.from({ length: count }, (_, index) => ({
     at: from + ((to - from) * (index + 1)) / count,
     amount: amount / count,
@@ -226,6 +213,7 @@ function rawBlocks(stream: Stream): RawBlock[] {
   const start = stream.start_time;
   const end = stream.end_time ?? 0;
   const total = stream.total_amount;
+  const span = barSpanOf(stream);
 
   switch (stream.stream_type) {
     case 'RECURRING':
@@ -254,18 +242,18 @@ function rawBlocks(stream: Stream): RawBlock[] {
       return [
         { at: start, amount: 0, waiting: true },
         { at: unlock, amount: upfront },
-        ...evenBlocks(unlock, end, total - upfront),
+        ...evenBlocks(unlock, end, total - upfront, span),
       ];
     }
     case 'LINEAR': {
       if (!end || end <= start) return [];
-      if (!hasWait(stream)) return evenBlocks(start, end, total);
+      if (!hasWait(stream)) return evenBlocks(start, end, total, span);
       const cliff = stream.cliff_timestamp ?? start;
       const earned = (total * (cliff - start)) / (end - start);
       return [
         { at: start, amount: 0, waiting: true },
         { at: cliff, amount: earned },
-        ...evenBlocks(cliff, end, total - earned),
+        ...evenBlocks(cliff, end, total - earned, span),
       ];
     }
     default:
@@ -273,7 +261,7 @@ function rawBlocks(stream: Stream): RawBlock[] {
   }
 }
 
-/** Streams that release every second, drawn as approximate weekly blocks. */
+/** Streams that release every second, drawn as bars of about an hour, day, week or month. */
 function isContinuous(stream: Stream): boolean {
   return stream.stream_type === 'LINEAR' || stream.stream_type === 'HYBRID';
 }
@@ -702,18 +690,7 @@ export default function StreamDetailPage() {
     },
     {
       label: STREAM_DETAIL.details.paidIn,
-      value:
-        asset.kind === 'bch' ? (
-          'BCH'
-        ) : (
-          <span className="inline-flex flex-col items-start gap-1 sm:items-end">
-            <span>{asset.symbol?.trim() || STREAM_DETAIL.details.token}</span>
-            <span className="inline-flex items-center gap-1 text-small text-ink-muted">
-              {LABELS.tokenId} <Code>{formatShortId(asset.tokenId)}</Code>
-              <CopyButton value={asset.tokenId} label={STREAM_DETAIL.details.copyTokenId} />
-            </span>
-          </span>
-        ),
+      value: <AssetName asset={asset} />,
     },
     { label: STREAM_DETAIL.details.schedule, value: scheduleName(stream) },
     ...(interval && (isRecurring || stream.stream_type === 'STEP')
@@ -1050,12 +1027,7 @@ export default function StreamDetailPage() {
                 <p className="text-body text-ink-secondary">{pausedScheduleLine}</p>
               ) : blocks.length > 0 ? (
                 <>
-                  {isContinuous(stream) ? (
-                    <p className="text-small text-ink-muted">
-                      {STREAM_DETAIL.schedule.aboutWeekly}
-                    </p>
-                  ) : null}
-                  <ScheduleTimeline asset={asset} blocks={blocks} now={nowMs} />
+                  <ScheduleTimeline asset={asset} blocks={blocks} now={nowMs} continuous={isContinuous(stream)} />
                 </>
               ) : (
                 <p className="text-body text-ink-secondary">{STREAM_DETAIL.schedule.empty}</p>

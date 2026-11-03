@@ -1,4 +1,5 @@
 import React from 'react';
+import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
 import { FIELD_CONTROL, FIELD_HEIGHT, Field, type FieldBase } from './Field';
 import { cx } from './cx';
@@ -25,9 +26,9 @@ const BASE_UNIT_SUFFIX = 'smallest units';
 const BASE_UNIT_HELPER = "Enter the amount in the token's smallest unit. For a token with 2 decimals, 100 means 1.00.";
 const USE_MAX = 'Use max';
 
-function suffixPadding(suffix: string): string {
-  if (suffix.length <= 4) return 'pr-14';
-  if (suffix.length <= 8) return 'pr-20';
+function suffixPadding(suffix: string, withIcon: boolean): string {
+  if (suffix.length <= 4) return withIcon ? 'pr-20' : 'pr-14';
+  if (suffix.length <= 8) return withIcon ? 'pr-28' : 'pr-20';
   return 'pr-32';
 }
 
@@ -93,12 +94,13 @@ export function AmountInput({
               required={required}
               aria-describedby={[`${fieldId}-unit`, describedBy].filter(Boolean).join(' ')}
               aria-invalid={invalid || undefined}
-              className={cx(FIELD_CONTROL, FIELD_HEIGHT.regular, 'text-right', suffixPadding(suffix))}
+              className={cx(FIELD_CONTROL, FIELD_HEIGHT.regular, 'text-right', suffixPadding(suffix, !baseUnits))}
             />
             <span
               id={`${fieldId}-unit`}
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-body text-ink-muted"
+              className="pointer-events-none absolute right-3 top-1/2 inline-flex -translate-y-1/2 items-center gap-1.5 text-body text-ink-muted"
             >
+              {baseUnits ? null : <AssetIcon asset={asset} size="sm" />}
               {suffix}
             </span>
           </div>

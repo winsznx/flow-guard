@@ -7,6 +7,7 @@ import { ActivityList } from '../components/ui/ActivityList';
 import { Address } from '../components/ui/Address';
 import { AddressInput } from '../components/ui/AddressInput';
 import { Amount } from '../components/ui/Amount';
+import { AssetName } from '../components/ui/AssetName';
 import { Button } from '../components/ui/Button';
 import { ButtonLink } from '../components/ui/ButtonLink';
 import { Card } from '../components/ui/Card';
@@ -55,7 +56,6 @@ import {
   cancelConsequence,
   detailStateLine,
   grantAsset,
-  grantPaysIn,
   grantTo,
   milestonesPaid,
   nextMilestoneLine,
@@ -425,7 +425,7 @@ export default function GrantDetailPage() {
           { label: GRANT_DETAILS_LABELS.to, value: <Address value={grant.recipient} isYou={isRecipient} /> },
           {
             label: GRANT_DETAILS_LABELS.paysIn,
-            value: grantPaysIn(grant),
+            value: <AssetName asset={asset} />,
           },
           { label: GRANT_DETAILS_LABELS.perMilestone, value: <Amount value={perMilestoneText} asset={asset} /> },
           { label: GRANT_DETAILS_LABELS.total, value: <Amount value={grant.total_amount} asset={asset} /> },

@@ -6,11 +6,10 @@ import { TwoColumn } from '../components/layout/TwoColumn';
 import { ActivityList } from '../components/ui/ActivityList';
 import { Address } from '../components/ui/Address';
 import { Amount } from '../components/ui/Amount';
+import { AssetName } from '../components/ui/AssetName';
 import { Button } from '../components/ui/Button';
 import { ButtonLink } from '../components/ui/ButtonLink';
 import { Card } from '../components/ui/Card';
-import { Code } from '../components/ui/Code';
-import { CopyButton } from '../components/ui/CopyButton';
 import { CopyField } from '../components/ui/CopyField';
 import { DetailList } from '../components/ui/DetailList';
 import { ErrorState } from '../components/ui/ErrorState';
@@ -35,10 +34,10 @@ import {
   sharesClaimed,
 } from '../copy/airdrops';
 import { sameWallet } from '../utils/address';
-import { ACTIONS, LABELS, MOMENTS } from '../copy/common';
+import { LABELS, MOMENTS } from '../copy/common';
 import { errorMessage } from '../copy/errors';
 import { toEventKind, type ActivityEvent } from '../copy/events';
-import { assetDecimals, formatAddress, formatAmount, formatDate, formatShortId } from '../copy/format';
+import { assetDecimals, formatAddress, formatAmount, formatDate } from '../copy/format';
 import { cancelAirdropOnChain, fundAirdropContract, setPausedOnChain } from '../utils/blockchain';
 import { getCachedTokenMeta } from '../utils/tokenMeta';
 import { AirdropClaimAction, type AirdropClaim, type AirdropRecord } from './ClaimLinkPage';
@@ -93,16 +92,6 @@ function toActivity(events: StoredEvent[], viewer: string | null | undefined, as
     amount: event.amount !== null && event.amount !== undefined ? { value: event.amount, asset } : undefined,
     txid: event.tx_hash ?? undefined,
   }));
-}
-
-function TokenId({ id, symbol }: { id: string; symbol?: string }) {
-  return (
-    <span className="inline-flex flex-wrap items-center justify-end gap-1">
-      {symbol ? <span>{symbol}</span> : null}
-      <Code>{formatShortId(id)}</Code>
-      <CopyButton value={id} label={ACTIONS.copyId} />
-    </span>
-  );
 }
 
 async function fetchAirdrop(id: string): Promise<Load> {
@@ -297,7 +286,7 @@ export default function AirdropDetailPage() {
 
   const details = [
     { label: AIRDROP_DETAIL.detailLabels.from, value: <Address value={campaign.creator} isYou={isSender} /> },
-    { label: AIRDROP_DETAIL.detailLabels.token, value: asset.kind === 'bch' ? 'BCH' : <TokenId id={asset.tokenId} symbol={asset.symbol} /> },
+    { label: AIRDROP_DETAIL.detailLabels.token, value: <AssetName asset={asset} /> },
     { label: AIRDROP_DETAIL.detailLabels.share, value: shareText },
     { label: AIRDROP_DETAIL.detailLabels.pool, value: poolText },
     { label: AIRDROP_DETAIL.detailLabels.claimed, value: sharesClaimed(claimedCount, total) },

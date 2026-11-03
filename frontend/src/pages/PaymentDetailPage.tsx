@@ -6,11 +6,10 @@ import { TwoColumn } from '../components/layout/TwoColumn';
 import { ActivityList } from '../components/ui/ActivityList';
 import { Address } from '../components/ui/Address';
 import { Amount } from '../components/ui/Amount';
+import { AssetName } from '../components/ui/AssetName';
 import { Button } from '../components/ui/Button';
 import { ButtonLink } from '../components/ui/ButtonLink';
 import { Card } from '../components/ui/Card';
-import { Code } from '../components/ui/Code';
-import { CopyButton } from '../components/ui/CopyButton';
 import { CopyField } from '../components/ui/CopyField';
 import { DetailList } from '../components/ui/DetailList';
 import { ErrorState } from '../components/ui/ErrorState';
@@ -28,10 +27,10 @@ import type { Asset } from '../components/ui/types';
 import { useNetwork, type Network } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
 import { sameWallet } from '../utils/address';
-import { ACTIONS, LABELS, MOMENTS } from '../copy/common';
+import { LABELS, MOMENTS } from '../copy/common';
 import { errorMessage } from '../copy/errors';
 import { toEventKind, type ActivityEvent } from '../copy/events';
-import { assetDecimals, formatAddress, formatAmount, formatDate, formatShortId } from '../copy/format';
+import { assetDecimals, formatAddress, formatAmount, formatDate } from '../copy/format';
 import {
   CREATE_PAYMENT,
   INTERVAL_DAYS,
@@ -172,16 +171,6 @@ function toActivity(
     amount: event.amount !== null && event.amount !== undefined ? { value: event.amount, asset } : undefined,
     txid: event.tx_hash ?? undefined,
   }));
-}
-
-function TokenId({ id, symbol }: { id: string; symbol?: string }) {
-  return (
-    <span className="inline-flex flex-wrap items-center justify-end gap-1">
-      {symbol ? <span>{symbol}</span> : null}
-      <Code>{formatShortId(id)}</Code>
-      <CopyButton value={id} label={ACTIONS.copyId} />
-    </span>
-  );
 }
 
 async function fetchPayment(id: string): Promise<Load> {
@@ -479,7 +468,7 @@ export default function PaymentDetailPage() {
         />
       ),
     },
-    { label: PAYMENT_DETAIL.detailLabels.token, value: asset.kind === 'bch' ? 'BCH' : <TokenId id={asset.tokenId} symbol={asset.symbol} /> },
+    { label: PAYMENT_DETAIL.detailLabels.token, value: <AssetName asset={asset} /> },
     { label: PAYMENT_DETAIL.detailLabels.each, value: <Amount value={units(perPayment, asset)} asset={asset} /> },
     { label: PAYMENT_DETAIL.detailLabels.howOften, value: INTERVAL_WORD[payment.interval] },
     { label: PAYMENT_DETAIL.detailLabels.starts, value: formatDate(payment.start_date) },

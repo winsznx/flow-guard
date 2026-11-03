@@ -7,7 +7,7 @@ const FULL_SOURCE = '/assets/flow-green.png';
 const MARK_SOURCE = '/assets/flow-logo.png';
 
 const SIZE = {
-  full: 'h-7 w-auto',
+  full: 'h-6 w-auto sm:h-7',
   mark: 'h-8 w-auto',
 } as const;
 

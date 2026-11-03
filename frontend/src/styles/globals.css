@@ -103,6 +103,9 @@
   --color-brand-pressed: #224246;
   --color-marker: #E3EFA4;
 
+  /* Asset marks: the Bitcoin Cash logo green */
+  --color-bch: #0AC18E;
+
   /* Status: tint is a fill, ink is text, dot is a mark */
   --color-success-tint: #E4F2E8;
   --color-success-ink: #1C6A3B;
@@ -155,8 +158,8 @@
   --text-headline--font-weight: 400;
   --text-title-page: clamp(1.75rem, 1.5rem + 1vw, 2rem);
   --text-title-page--line-height: 1.15;
-  --text-title-page--letter-spacing: -0.015em;
-  --text-title-page--font-weight: 400;
+  --text-title-page--letter-spacing: -0.02em;
+  --text-title-page--font-weight: 600;
   --text-title-section: 1.25rem;
   --text-title-section--line-height: 1.4;
   --text-title-section--letter-spacing: -0.005em;

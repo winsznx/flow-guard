@@ -9,12 +9,12 @@ import { ActivityList } from '../components/ui/ActivityList';
 import { Address } from '../components/ui/Address';
 import { AddressInput } from '../components/ui/AddressInput';
 import { Amount } from '../components/ui/Amount';
+import { AssetName } from '../components/ui/AssetName';
 import { AmountInput } from '../components/ui/AmountInput';
 import { Button } from '../components/ui/Button';
 import { ButtonLink } from '../components/ui/ButtonLink';
 import { Card } from '../components/ui/Card';
 import { Code } from '../components/ui/Code';
-import { CopyButton } from '../components/ui/CopyButton';
 import { DetailList } from '../components/ui/DetailList';
 import { ErrorState } from '../components/ui/ErrorState';
 import { ErrorSummary } from '../components/ui/ErrorSummary';
@@ -32,10 +32,9 @@ import { TxLink } from '../components/ui/TxLink';
 import type { Asset } from '../components/ui/types';
 import { useNetwork } from '../hooks/useNetwork';
 import { useWallet } from '../hooks/useWallet';
-import { ACTIONS } from '../copy/common';
 import { asFlowError, type FlowError } from '../copy/errors';
 import { toEventKind, type ActivityEvent } from '../copy/events';
-import { formatAmount, formatDate, formatShortId } from '../copy/format';
+import { formatAmount, formatDate } from '../copy/format';
 import {
   REWARD_DETAIL,
   REWARD_TYPE,
@@ -449,21 +448,8 @@ export default function RewardDetailPage() {
     { label: REWARD_DETAIL.details.type, value: REWARD_TYPE[campaign.reward_category] ?? REWARD_TYPE.CUSTOM },
     {
       label: REWARD_DETAIL.details.paidIn,
-      value: asset.kind === 'bch' ? 'BCH' : asset.symbol || REWARD_DETAIL.details.tokenId,
+      value: <AssetName asset={asset} />,
     },
-    ...(asset.kind === 'token'
-      ? [
-          {
-            label: REWARD_DETAIL.details.tokenId,
-            value: (
-              <span className="inline-flex items-center gap-1">
-                <Code>{formatShortId(asset.tokenId)}</Code>
-                <CopyButton value={asset.tokenId} label={ACTIONS.copyId} />
-              </span>
-            ),
-          },
-        ]
-      : []),
     { label: REWARD_DETAIL.details.budget, value: <Amount value={budgetUnits} asset={asset} /> },
     { label: REWARD_DETAIL.details.limit, value: <Amount value={limitUnits} asset={asset} /> },
     { label: REWARD_DETAIL.details.starts, value: startText },
